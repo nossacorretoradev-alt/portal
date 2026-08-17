@@ -159,6 +159,13 @@ input,select,textarea{font-family:inherit;}
 .profile-avatar img{width:100%;height:100%;object-fit:cover;}
 .sidebar-footer .who{font-size:12.5px;font-weight:700;color:#fff;}
 .sidebar-footer .role{font-size:10.5px;color:#9db4d6;}
+.sf-logout-btn{
+  flex-shrink:0; width:30px; height:30px; border-radius:9px; background:rgba(255,255,255,.06); border:none;
+  color:#b9c8e0; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:.15s;
+}
+.sf-logout-btn svg{ width:15px; height:15px; }
+.sf-logout-btn:hover{ background:rgba(239,68,68,.18); color:#fca5a5; }
+.sidebar.collapsed .sf-logout-btn{ width:26px; height:26px; }
 .sidebar{transition:width .22s var(--ease), min-width .22s var(--ease);cursor:default;}
 .sidebar.collapsed{width:74px;min-width:74px;}
 .sidebar.collapsed .brand{justify-content:center;padding:4px 0 22px;}
@@ -1160,6 +1167,7 @@ const ICONS = {
   trash:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"/></svg>`,
   empty:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>`,
   caret:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>`,
+  logout:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>`,
 };
 
 /* =========================================================
@@ -1331,6 +1339,7 @@ function enterApp(){
   document.getElementById('loginScreen').style.display='none';
   document.getElementById('app').style.display='flex';
   renderSidebarBrand();
+  renderSidebarFooter();
   renderNav();
   renderTopbar();
   switchView(CURRENT_VIEW);
@@ -1343,21 +1352,23 @@ function renderSidebarBrand(){
       <div class="t2">CDL × Unimed</div>
     </div>`;
 }
+function renderSidebarFooter(){
+  document.getElementById('sidebarFooter').innerHTML = `
+    <div class="avatar-sm">${initials(CURRENT_USER.nome)}</div>
+    <div class="sf-info" style="min-width:0;flex:1;overflow:hidden;">
+      <div class="who" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${CURRENT_USER.nome}</div>
+      <div class="role">${CURRENT_USER.papel==='admin'?'Administrador':'Atendente'}</div>
+    </div>
+    <button class="sf-logout-btn" title="Sair" onclick="logout()">${ICONS.logout}</button>
+  `;
+}
 function toggleSidebar(){ document.getElementById('sidebarEl').classList.toggle('collapsed'); }
 
 function renderTopbar(){
   const titles = { inicio:'Início', leads:'Leads', clientes:'Clientes', empresas:'Empresas Filiadas', usuarios:'Usuários & Permissões' };
   document.getElementById('topbar').innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 26px;border-bottom:1px solid var(--border);">
+    <div style="display:flex;align-items:center;padding:16px 26px;border-bottom:1px solid var(--border);">
       <div class="page-title" style="font-size:16px;">${titles[CURRENT_VIEW]||''}</div>
-      <div style="display:flex;align-items:center;gap:12px;">
-        <div class="mh-avatar" style="width:32px;height:32px;font-size:11px;">${initials(CURRENT_USER.nome)}</div>
-        <div style="font-size:12.5px;">
-          <div style="font-weight:700;color:var(--text);">${CURRENT_USER.nome}</div>
-          <div style="color:var(--text-muted);font-size:10.5px;">${CURRENT_USER.papel==='admin'?'Administrador':'Atendente'}</div>
-        </div>
-        <button class="btn-ghost" style="padding:7px 12px;" onclick="logout()">Sair</button>
-      </div>
     </div>`;
 }
 
