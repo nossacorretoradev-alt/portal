@@ -1910,6 +1910,7 @@ async function doLogin(){
 function logout(){
   CURRENT_USER = null;
   localStorage.removeItem(SESSION_KEY);
+  if(window.__leadsPollInterval){ clearInterval(window.__leadsPollInterval); window.__leadsPollInterval = null; }
   document.getElementById('app').style.display='none';
   renderLogin();
 }
@@ -1931,6 +1932,14 @@ function enterApp(){
   if(isVendedor()) CURRENT_VIEW = 'minhacomissao';
   renderTopbar();
   switchView(CURRENT_VIEW);
+
+  // Importa automaticamente o que já chegou do site, sem precisar clicar em nada,
+  // e continua checando por leads novos enquanto o portal ficar aberto.
+  importarLeadsDoSite({silencioso:true}).catch(e=>console.warn('Importação automática falhou', e));
+  if(window.__leadsPollInterval) clearInterval(window.__leadsPollInterval);
+  window.__leadsPollInterval = setInterval(()=>{
+    importarLeadsDoSite({silencioso:true}).catch(e=>console.warn('Importação automática falhou', e));
+  }, 45000);
 }
 
 function renderSidebarBrand(){
@@ -2066,19 +2075,25 @@ function viewCRM(){
   </div>`;
 }
 
-async function importarLeadsDoSite(){
+function getPublicStorageUrl(path){
+  if(!path) return null;
+  return `${SUPABASE_URL}/storage/v1/object/public/internal-docs/${path}`;
+}
+async function importarLeadsDoSite(opts){
+  opts = opts || {};
+  const silencioso = !!opts.silencioso;
   let leads;
   try{
     leads = await loadLeadsFromSupabase();
   }catch(e){
-    toast('⚠️ Não foi possível buscar os leads agora.');
+    if(!silencioso) toast('⚠️ Não foi possível buscar os leads agora.');
     return;
   }
-  if(!leads.length){ toast('Nenhum lead encontrado no Supabase ainda.'); return; }
+  if(!leads.length){ if(!silencioso) toast('Nenhum lead encontrado no Supabase ainda.'); return; }
 
   const jaImportados = new Set(DB.clients.map(c=>c.leadOrigemId).filter(Boolean));
   const novosLeads = leads.filter(l=>!jaImportados.has(l.id));
-  if(!novosLeads.length){ toast('Nenhum lead novo — tudo que chegou do site já está no CRM.'); return; }
+  if(!novosLeads.length){ if(!silencioso) toast('Nenhum lead novo — tudo que chegou do site já está no CRM.'); return; }
 
   let criados = 0;
   for(const lead of novosLeads){
@@ -2086,6 +2101,13 @@ async function importarLeadsDoSite(){
     const celularLimpo = onlyDigits(lead.celular || '');
     const vidas = Array.isArray(lead.vidas) ? lead.vidas : [];
     const [primeiraVida, ...resto] = vidas;
+    const anexosTitular = [];
+    if(lead.internal_pdf_path){
+      anexosTitular.push({ id:uid('anx'), nome:'Contrato + carimbo de evidências.pdf', dataUrl: getPublicStorageUrl(lead.internal_pdf_path), criadoEm: lead.received_at||nowISO() });
+    }
+    if(lead.fatura_path){
+      anexosTitular.push({ id:uid('anx'), nome:'Fatura atual enviada pelo cliente', dataUrl: getPublicStorageUrl(lead.fatura_path), criadoEm: lead.received_at||nowISO() });
+    }
     const client = {
       id: uid('cli'), status:'ativo', origemSite: !!lead.novo_afiliado,
       etapaAdesao: lead.contrato_assinado ? 'documentacao' : 'nova',
@@ -2096,14 +2118,14 @@ async function importarLeadsDoSite(){
         cpf: onlyDigits((primeiraVida&&primeiraVida.cpf) || ''),
         dataNascimento: (primeiraVida&&primeiraVida.dataNascimento) || '',
         celular: celularLimpo, email: lead.email || '',
-        razaoSocial: lead.empresa || '', cnpj: cnpjLimpo, anexos:[],
+        razaoSocial: lead.empresa || '', cnpj: cnpjLimpo, anexos: anexosTitular,
       },
       dependentes: resto.map(v=>({ id:uid('dep'), nome:v.nome||'', cpf:onlyDigits(v.cpf||''), dataNascimento:v.dataNascimento||'', parentesco:'', anexos:[] })),
       planoEscolhido: lead.plano_escolhido || '',
+      qtdVidasInformada: lead.qtd_vidas || vidas.length || null,
+      vendedorCodigo: lead.vendedor_codigo || null,
       historico:[{ data:nowISO(), texto:'Importado automaticamente do simulador (site).' }],
       emailAdministradoraEnviadoEm:null, criadoEm: lead.received_at || nowISO(),
-      _leadInternalPdfPath: lead.internal_pdf_path || null,
-      _leadFaturaPath: lead.fatura_path || null,
       _leadAdministradoraAtual: lead.administradora_atual || null,
       _leadValorAtual: lead.valor_atual || null,
     };
@@ -2119,7 +2141,8 @@ async function importarLeadsDoSite(){
   }
   await persist();
   await loadCompaniesFromCdlBase();
-  switchView('crm');
+  if(!silencioso) switchView('crm');
+  else if(CURRENT_VIEW==='crm' || CURRENT_VIEW==='clientes' || CURRENT_VIEW==='inicio') switchView(CURRENT_VIEW); // atualiza a tela se a pessoa já estiver olhando pra ela
   toast(`${criados} novo(s) lead(s) do site importado(s) pro CRM.`);
 }
 
@@ -3636,6 +3659,17 @@ function openUserModal(id){
           <input type="checkbox" id="us_ativo" ${u.ativo?'checked':''}/> Usuário ativo
         </label>
 
+        ${u.papel==='vendedor' && id ? `
+        <div style="margin-top:16px;padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-alt);">
+          <div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;">Link pessoal deste vendedor</div>
+          <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:10px;">Quem entrar por esse link e simular vira uma venda já identificada com este vendedor no CRM.</p>
+          <div class="fg"><input id="vendedorLinkInput" value="${getVendedorLink(u)}" readonly onclick="this.select()"></div>
+          <div class="btn-row" style="margin-top:8px;">
+            <button type="button" class="btn-ghost" onclick="copiarVendedorLink()">${ICONS.upload} Copiar link</button>
+          </div>
+          <p style="font-size:11px;color:var(--text-faint);margin-top:8px;">Código deste vendedor: <b>${u.codigoVendedor || '(gerado ao salvar)'}</b></p>
+        </div>` : ''}
+
         <div id="permBlock" style="margin-top:18px;${u.papel!=='atendente'?'display:none;':''}">
           <div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;">Permissões (Atendente)</div>
           ${MODULOS.map(m=>`
@@ -3681,18 +3715,51 @@ async function saveUser(id){
       excluir: document.getElementById(`perm_${m}_excluir`).checked,
     };
   });
+  let userId = id;
+  let u;
   if(id){
-    const u = DB.users.find(x=>x.id===id);
+    u = DB.users.find(x=>x.id===id);
     Object.assign(u, { nome, email, papel, ativo, permissoes });
     if(senhaField) u.senha = senhaField;
   }else{
     if(!senhaField){ toast('Defina uma senha para o novo usuário.'); return; }
-    DB.users.push({ id:uid('usr'), nome, email, senha:senhaField, papel, ativo, permissoes, criadoEm:todayISO() });
+    u = { id:uid('usr'), nome, email, senha:senhaField, papel, ativo, permissoes, criadoEm:todayISO() };
+    DB.users.push(u);
+    userId = u.id;
+  }
+  // vendedor precisa de um código de 5 dígitos único pro link pessoal — gera só uma vez
+  if(papel==='vendedor' && !u.codigoVendedor){
+    u.codigoVendedor = gerarCodigoVendedorUnico();
   }
   await persist();
+  if(papel==='vendedor' && u.codigoVendedor){
+    try{ await sincronizarVendedorPublico(u); }catch(e){ console.warn('Falha ao sincronizar vendedor público', e); }
+  }
   closeModal();
   switchView('usuarios');
+  if(papel==='vendedor'){
+    openUserModal(userId); // reabre já mostrando o link pessoal com o código gerado
+  }
   toast('Usuário salvo.');
+}
+function gerarCodigoVendedorUnico(){
+  const existentes = new Set(DB.users.map(u=>u.codigoVendedor).filter(Boolean));
+  let codigo;
+  do{ codigo = String(Math.floor(10000 + Math.random()*89999)); }while(existentes.has(codigo));
+  return codigo;
+}
+function getVendedorLink(u){
+  const baseConfigurada = !FORM_BASE_URL.includes('SEU-USUARIO');
+  const base = baseConfigurada ? FORM_BASE_URL.replace('formulario-cliente.html','index.html') : 'https://SEU-USUARIO.github.io/SEU-REPO-PUBLICO/index.html';
+  return base + '?v=' + (u.codigoVendedor || '');
+}
+function copiarVendedorLink(){
+  const input = document.getElementById('vendedorLinkInput');
+  input.select();
+  navigator.clipboard.writeText(input.value).then(()=>toast('Link copiado.'));
+}
+async function sincronizarVendedorPublico(u){
+  await sbUpsert('vendedores_publico', [{ codigo: u.codigoVendedor, nome: u.nome, ativo: !!u.ativo }], 'codigo');
 }
 async function deleteUser(id){
   if(id===CURRENT_USER.id){ toast('Você não pode excluir seu próprio usuário.'); return; }
