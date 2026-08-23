@@ -2048,10 +2048,7 @@ function viewCRM(){
   <div class="view-wrap">
     <div class="page-head">
       <div class="page-title">CRM</div>
-      <div style="display:flex;gap:10px;">
-        <button class="btn-ghost" onclick="importarLeadsDoSite()">${ICONS.upload} Importar leads do site</button>
-        ${canCriar?`<button class="btn-primary" onclick="openClientModal(null,true)">${ICONS.plus} Novo card</button>`:''}
-      </div>
+      ${canCriar?`<button class="btn-primary" onclick="openClientModal(null,true)">${ICONS.plus} Novo card</button>`:''}
     </div>
     <div class="kanban-board">
       ${ADESAO_STAGES.map(st=>`
@@ -3616,18 +3613,20 @@ function viewUsuarios(){
       <button class="btn-primary" onclick="openUserModal()">${ICONS.plus} Novo usuário</button>
     </div>
     <table class="table-simple">
-      <thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Status</th></tr></thead>
+      <thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Status</th><th>Link pessoal</th></tr></thead>
       <tbody>
         ${DB.users.map(u=>`
-          <tr onclick="openUserModal('${u.id}')">
-            <td><b>${u.nome}</b></td>
-            <td>${u.email}</td>
-            <td>${papelLabel(u.papel)}</td>
-            <td><span class="status-pill ${u.ativo?'ativo':'inativo'}">${u.ativo?'Ativo':'Inativo'}</span></td>
+          <tr>
+            <td onclick="openUserModal('${u.id}')" style="cursor:pointer;"><b>${u.nome}</b></td>
+            <td onclick="openUserModal('${u.id}')" style="cursor:pointer;">${u.email}</td>
+            <td onclick="openUserModal('${u.id}')" style="cursor:pointer;">${papelLabel(u.papel)}</td>
+            <td onclick="openUserModal('${u.id}')" style="cursor:pointer;"><span class="status-pill ${u.ativo?'ativo':'inativo'}">${u.ativo?'Ativo':'Inativo'}</span></td>
+            <td>${u.papel==='vendedor' && u.codigoVendedor ? `<button class="btn-ghost" style="padding:5px 10px;font-size:11.5px;" onclick="event.stopPropagation();openUserModal('${u.id}')">${ICONS.upload} Código ${u.codigoVendedor}</button>` : '—'}</td>
           </tr>
         `).join('')}
       </tbody>
     </table>
+    <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Pra cadastrar um vendedor: clique em "Novo usuário" e escolha o papel "Vendedor" — o código e o link pessoal dele aparecem automaticamente depois de salvar.</p>
   </div>`;
 }
 function openUserModal(id){
@@ -3658,6 +3657,12 @@ function openUserModal(id){
         <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:12.5px;">
           <input type="checkbox" id="us_ativo" ${u.ativo?'checked':''}/> Usuário ativo
         </label>
+
+        <div class="fg" id="celularVendedorBlock" style="margin-top:14px;${u.papel!=='vendedor'?'display:none;':''}">
+          <label>Celular / WhatsApp do vendedor</label>
+          <input id="us_celular" value="${u.celular||''}" placeholder="(84) 99999-9999" oninput="this.value=maskPhone(this.value)"/>
+          <p style="font-size:11px;color:var(--text-faint);margin-top:4px;">É pra esse número que o botão de WhatsApp do cliente vai apontar, quando ele entrar pelo link deste vendedor.</p>
+        </div>
 
         ${u.papel==='vendedor' && id ? `
         <div style="margin-top:16px;padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-alt);">
@@ -3698,6 +3703,7 @@ function openUserModal(id){
 }
 function renderClientModalPermVisibility(papel){
   document.getElementById('permBlock').style.display = papel==='atendente' ? 'block' : 'none';
+  document.getElementById('celularVendedorBlock').style.display = papel==='vendedor' ? 'block' : 'none';
 }
 async function saveUser(id){
   const nome = document.getElementById('us_nome').value.trim();
@@ -3705,7 +3711,9 @@ async function saveUser(id){
   const senhaField = document.getElementById('us_senha').value;
   const papel = document.getElementById('us_papel').value;
   const ativo = document.getElementById('us_ativo').checked;
+  const celular = onlyDigits(document.getElementById('us_celular').value);
   if(!nome || !email){ toast('Preencha nome e e-mail.'); return; }
+  if(papel==='vendedor' && !celular){ toast('Informe o celular/WhatsApp do vendedor.'); return; }
   const permissoes = {};
   MODULOS.forEach(m=>{
     permissoes[m] = {
@@ -3719,11 +3727,11 @@ async function saveUser(id){
   let u;
   if(id){
     u = DB.users.find(x=>x.id===id);
-    Object.assign(u, { nome, email, papel, ativo, permissoes });
+    Object.assign(u, { nome, email, papel, ativo, permissoes, celular });
     if(senhaField) u.senha = senhaField;
   }else{
     if(!senhaField){ toast('Defina uma senha para o novo usuário.'); return; }
-    u = { id:uid('usr'), nome, email, senha:senhaField, papel, ativo, permissoes, criadoEm:todayISO() };
+    u = { id:uid('usr'), nome, email, senha:senhaField, papel, ativo, permissoes, celular, criadoEm:todayISO() };
     DB.users.push(u);
     userId = u.id;
   }
@@ -3759,7 +3767,7 @@ function copiarVendedorLink(){
   navigator.clipboard.writeText(input.value).then(()=>toast('Link copiado.'));
 }
 async function sincronizarVendedorPublico(u){
-  await sbUpsert('vendedores_publico', [{ codigo: u.codigoVendedor, nome: u.nome, ativo: !!u.ativo }], 'codigo');
+  await sbUpsert('vendedores_publico', [{ codigo: u.codigoVendedor, nome: u.nome, ativo: !!u.ativo, celular: u.celular||null }], 'codigo');
 }
 async function deleteUser(id){
   if(id===CURRENT_USER.id){ toast('Você não pode excluir seu próprio usuário.'); return; }
