@@ -1049,12 +1049,16 @@ input,select,textarea{font-family:inherit;}
 .fg input, .fg select{ width:100%; border:1px solid var(--border); border-radius:10px; padding:10px 12px; font-size:13px; outline:none; background:var(--bg); color:var(--text); }
 .fg input:focus, .fg select:focus{ border-color:var(--blue); background:#fff; }
 .kanban-board{ display:flex; gap:14px; overflow-x:auto; padding-bottom:10px; }
-.kanban-col{ min-width:260px; max-width:260px; background:var(--surface-alt); border-radius:var(--radius-md); padding:10px; flex-shrink:0; }
-.kanban-col-title{ font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:var(--text-muted); padding:4px 6px 10px; display:flex; justify-content:space-between; }
-.kanban-card{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; margin-bottom:8px; cursor:pointer; box-shadow:var(--shadow-sm); }
-.kanban-card:hover{ box-shadow:var(--shadow-md); }
+.kanban-col{ min-width:264px; max-width:264px; background:var(--surface-alt); border-radius:var(--radius-md); padding:10px; flex-shrink:0; }
+.kanban-col-title{ font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:var(--text-muted); padding:4px 6px 10px; display:flex; justify-content:space-between; align-items:center; }
+.kanban-col-title span:last-child{ font-size:11px; font-weight:800; padding:1px 8px; border-radius:999px; }
+.kanban-card{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); padding:13px; margin-bottom:9px; cursor:pointer; box-shadow:var(--shadow-sm); transition:.15s; }
+.kanban-card:hover{ box-shadow:var(--shadow-md); transform:translateY(-2px); border-color:var(--navy-800); }
+.kanban-card .kc-top{ display:flex; align-items:center; gap:9px; margin-bottom:2px; }
+.kanban-card .kc-avatar{ width:26px; height:26px; border-radius:50%; color:#fff; font-size:10.5px; font-weight:800; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .kanban-card .kc-name{ font-size:13px; font-weight:700; color:var(--text); }
 .kanban-card .kc-sub{ font-size:11.5px; color:var(--text-muted); margin-top:3px; }
+.kanban-card .kc-plan-tag{ display:inline-block; font-size:10.5px; font-weight:700; color:var(--success); background:var(--success-light); padding:2px 9px; border-radius:999px; margin-top:7px; }
 .table-simple{ width:100%; border-collapse:collapse; }
 .table-simple th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--text-faint); border-bottom:1px solid var(--border); padding:8px 10px; }
 .table-simple td{ font-size:13px; padding:10px; border-bottom:1px solid var(--border); vertical-align:middle; }
@@ -1071,9 +1075,10 @@ input,select,textarea{font-family:inherit;}
 .page-title{ font-size:19px; font-weight:800; color:var(--navy); }
 .view-wrap{ padding:22px 26px; overflow-y:auto; height:calc(100vh - 0px); }
 .stat-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:14px; margin-bottom:22px; }
-.stat-card{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px; box-shadow:var(--shadow-sm); }
-.stat-card .sc-val{ font-size:24px; font-weight:800; color:var(--navy); }
-.stat-card .sc-label{ font-size:11.5px; color:var(--text-muted); margin-top:2px; }
+.stat-card{ background:var(--surface); border:1px solid var(--border); border-left:4px solid var(--accent,var(--navy)); border-radius:var(--radius-md); padding:16px; box-shadow:var(--shadow-sm); transition:.15s; }
+.stat-card:hover{ box-shadow:var(--shadow-md); transform:translateY(-2px); }
+.stat-card .sc-val{ font-size:26px; font-weight:800; color:var(--accent,var(--navy)); }
+.stat-card .sc-label{ font-size:11.5px; color:var(--text-muted); margin-top:2px; font-weight:600; }
 .modal{ background:var(--surface); border-radius:20px; max-width:640px; width:94%; max-height:88vh; overflow-y:auto; box-shadow:var(--shadow-lg); }
 .modal-wide{ max-width:760px; }
 .ds-q-row{ display:flex; align-items:flex-start; gap:12px; padding:9px 0; border-top:1px dashed var(--border); }
@@ -1112,20 +1117,33 @@ input,select,textarea{font-family:inherit;}
 .stage-pill{ display:inline-block; font-size:10.5px; font-weight:700; padding:3px 9px; border-radius:999px; background:var(--surface-alt); color:var(--text); border:1px solid var(--border); }
 .pend-pill{ display:inline-block; font-size:10px; font-weight:800; padding:2px 8px; border-radius:999px; background:#FEF3C7; color:#92400E; }
 
-.stage-tracker{ display:flex; align-items:flex-start; margin-bottom:16px; padding:4px 2px; overflow-x:auto; }
+.stage-tracker{ display:flex; align-items:flex-start; margin-bottom:4px; padding:4px 2px; overflow-x:auto; }
 .stage-item{ display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; flex-shrink:0; width:88px; }
 .stage-dot{
-  width:26px; height:26px; border-radius:50%; background:var(--surface-alt); color:var(--text-muted); border:2px solid var(--border);
-  display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; flex-shrink:0;
+  width:30px; height:30px; border-radius:50%; background:var(--surface-alt); color:var(--text-muted); border:2px solid var(--border);
+  display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; flex-shrink:0; transition:.15s;
 }
-.stage-dot svg{ width:12px; height:12px; }
-.stage-item.current .stage-dot{ background:var(--navy); border-color:var(--navy); color:#fff; }
+.stage-dot svg{ width:13px; height:13px; }
+.stage-item.current .stage-dot{ background:var(--navy); border-color:var(--navy); color:#fff; box-shadow:0 0 0 4px var(--navy-tint); }
 .stage-item.done .stage-dot{ background:var(--success); border-color:var(--success); color:#fff; }
-.stage-label{ font-size:10px; text-align:center; color:var(--text-muted); font-weight:600; line-height:1.2; }
+.stage-label{ font-size:10.5px; text-align:center; color:var(--text-muted); font-weight:600; line-height:1.2; }
 .stage-item.current .stage-label{ color:var(--navy); font-weight:800; }
 .stage-item.done .stage-label{ color:var(--success); }
-.stage-line{ flex:1; height:2px; background:var(--border); margin-top:13px; min-width:14px; }
+.stage-line{ flex:1; height:2px; background:var(--border); margin-top:15px; min-width:14px; }
 .stage-line.done{ background:var(--success); }
+
+.modal-section{ margin:0 -22px 22px; padding:0 22px 22px; border-bottom:1px solid var(--border); }
+.modal-section:last-of-type{ border-bottom:none; margin-bottom:0; padding-bottom:0; }
+.modal-section-title{ font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin-bottom:14px; display:flex; align-items:center; gap:8px; }
+.modal-section-title .count-badge{ background:var(--navy-tint); color:var(--navy); font-size:10px; padding:1px 7px; border-radius:999px; text-transform:none; letter-spacing:0; }
+.doc-actions-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+@media (max-width:600px){ .doc-actions-grid{ grid-template-columns:1fr; } }
+.doc-action-card{ display:flex; align-items:center; gap:11px; padding:13px 14px; border:1px solid var(--border); border-radius:12px; background:var(--surface-alt); text-align:left; cursor:pointer; font-size:12.5px; font-weight:700; color:var(--text); transition:.15s; width:100%; font-family:inherit; }
+.doc-action-card:hover{ border-color:var(--navy); background:var(--surface); box-shadow:var(--shadow-card); }
+.doc-action-card .doc-icon{ width:36px; height:36px; border-radius:10px; background:var(--navy-tint); color:var(--navy); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.doc-action-card .doc-icon svg{ width:17px; height:17px; }
+.doc-action-card .doc-text small{ display:block; font-weight:500; color:var(--text-muted); font-size:11px; margin-top:1px; }
+.admin-actions-row{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; }
 
 .pendencia-banner{
   background:#FEF3C7; color:#92400E; border:1px solid #FDE68A; border-radius:10px; padding:10px 14px;
@@ -1757,6 +1775,37 @@ function maskCpf(v){
   v = v.replace(/^(\d{3})(\d)/,"$1.$2").replace(/^(\d{3})\.(\d{3})(\d)/,"$1.$2.$3").replace(/\.(\d{3})(\d{1,2})$/,".$1-$2");
   return v;
 }
+// Validação matemática real do CPF (dígitos verificadores)
+function isValidCPF(cpf){
+  cpf = onlyDigits(cpf);
+  if(cpf.length !== 11) return false;
+  if(/^(\d)\1{10}$/.test(cpf)) return false;
+  let soma = 0;
+  for(let i=0;i<9;i++) soma += parseInt(cpf[i]) * (10-i);
+  let resto = (soma*10) % 11; if(resto===10) resto = 0;
+  if(resto !== parseInt(cpf[9])) return false;
+  soma = 0;
+  for(let i=0;i<10;i++) soma += parseInt(cpf[i]) * (11-i);
+  resto = (soma*10) % 11; if(resto===10) resto = 0;
+  return resto === parseInt(cpf[10]);
+}
+function maskCep(v){
+  v = onlyDigits(v).slice(0,8);
+  return v.replace(/^(\d{5})(\d)/,"$1-$2");
+}
+async function buscarCep(cepInputId, targets){
+  const cep = onlyDigits(document.getElementById(cepInputId).value);
+  if(cep.length !== 8) return;
+  try{
+    const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+    const data = await res.json();
+    if(data.erro) return;
+    if(targets.rua && data.logradouro) document.getElementById(targets.rua).value = data.logradouro;
+    if(targets.bairro && data.bairro) document.getElementById(targets.bairro).value = data.bairro;
+    if(targets.cidade && data.localidade) document.getElementById(targets.cidade).value = data.localidade;
+    if(targets.estado && data.uf) document.getElementById(targets.estado).value = data.uf;
+  }catch(e){ console.warn('Não foi possível buscar o CEP agora.', e); }
+}
 function formatBRL(v){ return (Number(v)||0).toLocaleString('pt-BR', { style:'currency', currency:'BRL' }); }
 function toast(msg){
   const t=document.getElementById('toast');
@@ -2024,10 +2073,10 @@ function viewInicio(){
   <div class="view-wrap">
     <div class="page-head"><div class="page-title">Bem-vindo(a), ${CURRENT_USER.nome.split(' ')[0]}</div></div>
     <div class="stat-grid">
-      <div class="stat-card"><div class="sc-val">${emAndamento}</div><div class="sc-label">Adesões em andamento</div></div>
-      <div class="stat-card"><div class="sc-val">${clientesAtivos}</div><div class="sc-label">Clientes ativos</div></div>
-      <div class="stat-card"><div class="sc-val">${clientesInativos}</div><div class="sc-label">Clientes inativos</div></div>
-      <div class="stat-card"><div class="sc-val">${empresas}</div><div class="sc-label">Empresas filiadas</div></div>
+      <div class="stat-card" style="--accent:#6366F1;"><div class="sc-val">${emAndamento}</div><div class="sc-label">Adesões em andamento</div></div>
+      <div class="stat-card" style="--accent:#12B76A;"><div class="sc-val">${clientesAtivos}</div><div class="sc-label">Clientes ativos</div></div>
+      <div class="stat-card" style="--accent:#F04438;"><div class="sc-val">${clientesInativos}</div><div class="sc-label">Clientes inativos</div></div>
+      <div class="stat-card" style="--accent:#0EA5E9;"><div class="sc-val">${empresas}</div><div class="sc-label">Empresas filiadas</div></div>
     </div>
     <p style="font-size:12.5px;color:var(--text-muted);max-width:520px;">
       Este portal é de uso exclusivo da equipe interna. Os contatos que chegam pela landing page do simulador
@@ -2052,13 +2101,16 @@ function viewCRM(){
     </div>
     <div class="kanban-board">
       ${ADESAO_STAGES.map(st=>`
-        <div class="kanban-col">
-          <div class="kanban-col-title"><span>${st.label}</span><span>${DB.clients.filter(c=>c.etapaAdesao===st.id).length}</span></div>
+        <div class="kanban-col" style="border-top:3px solid ${st.color};">
+          <div class="kanban-col-title"><span style="display:flex;align-items:center;gap:7px;"><span style="width:8px;height:8px;border-radius:50%;background:${st.color};flex-shrink:0;"></span>${st.label}</span><span style="background:${st.color}22;color:${st.color};">${DB.clients.filter(c=>c.etapaAdesao===st.id).length}</span></div>
           ${DB.clients.filter(c=>c.etapaAdesao===st.id).map(c=>`
             <div class="kanban-card" onclick="openClientModal('${c.id}')">
-              <div class="kc-name">${c.titular.razaoSocial||c.titular.nome} ${c.origemSite?`<span class="site-tag">Site</span>`:''}</div>
+              <div class="kc-top">
+                <div class="kc-avatar" style="background:${avatarColor(c.titular.razaoSocial||c.titular.nome)};">${initials(c.titular.nome||c.titular.razaoSocial)}</div>
+                <div class="kc-name">${c.titular.razaoSocial||c.titular.nome} ${c.origemSite?`<span class="site-tag">Site</span>`:''}</div>
+              </div>
               <div class="kc-sub">${c.titular.nome||'—'} · ${maskPhone(c.titular.celular||'')||'—'}</div>
-              ${c.planoEscolhido?`<div class="kc-sub">${c.planoEscolhido}</div>`:''}
+              ${c.planoEscolhido?`<div class="kc-plan-tag">${c.planoEscolhido}</div>`:''}
               ${c.pendencia&&c.pendencia.ativa?`<span class="pend-pill" style="margin-top:6px;display:inline-block;">Pendência</span>`:''}
             </div>
           `).join('') || `<div style="font-size:11.5px;color:var(--text-faint);padding:10px 6px;">Nada aqui.</div>`}
@@ -2105,6 +2157,9 @@ async function importarLeadsDoSite(opts){
     if(lead.fatura_path){
       anexosTitular.push({ id:uid('anx'), nome:'Fatura atual enviada pelo cliente', dataUrl: getPublicStorageUrl(lead.fatura_path), criadoEm: lead.received_at||nowISO() });
     }
+    if(lead.orcamento_path){
+      anexosTitular.push({ id:uid('anx'), nome:'Orçamento gerado na simulação.pdf', dataUrl: getPublicStorageUrl(lead.orcamento_path), criadoEm: lead.received_at||nowISO() });
+    }
     const client = {
       id: uid('cli'), status:'ativo', origemSite: !!lead.novo_afiliado,
       etapaAdesao: lead.contrato_assinado ? 'documentacao' : 'nova',
@@ -2121,7 +2176,10 @@ async function importarLeadsDoSite(opts){
       planoEscolhido: lead.plano_escolhido || '',
       qtdVidasInformada: lead.qtd_vidas || vidas.length || null,
       vendedorCodigo: lead.vendedor_codigo || null,
-      historico:[{ data:nowISO(), texto:'Importado automaticamente do simulador (site).' }],
+      historico:[
+        { data:nowISO(), texto:'Importado automaticamente do simulador (site).' },
+        ...(anexosTitular.length ? [{ data:nowISO(), texto:`${anexosTitular.length} documento(s) recebido(s) do site: ${anexosTitular.map(a=>a.nome).join(', ')}.` }] : []),
+      ],
       emailAdministradoraEnviadoEm:null, criadoEm: lead.received_at || nowISO(),
       _leadAdministradoraAtual: lead.administradora_atual || null,
       _leadValorAtual: lead.valor_atual || null,
@@ -2148,13 +2206,21 @@ async function importarLeadsDoSite(opts){
    ========================================================= */
 let CLIENT_FILTER = { q:'', status:'', origemSite:'' };
 const ADESAO_STAGES = [
-  { id:'nova',          label:'Nova adesão',        short:'Nova' },
-  { id:'documentacao',  label:'Documentação',       short:'Documentos' },
-  { id:'questionario',  label:'Questionário de Risco',short:'Questionário' },
-  { id:'conferencia',   label:'Conferência interna',short:'Conferência' },
-  { id:'enviado',       label:'Enviado à Unimed',   short:'Na Unimed' },
-  { id:'ativo',         label:'Ativo',              short:'Ativo' },
+  { id:'nova',          label:'Nova adesão',        short:'Nova',        color:'#6366F1' },
+  { id:'documentacao',  label:'Documentação',       short:'Documentos',  color:'#F79009' },
+  { id:'questionario',  label:'Questionário de Risco',short:'Questionário',color:'#EC4899' },
+  { id:'conferencia',   label:'Conferência interna',short:'Conferência', color:'#8B5CF6' },
+  { id:'enviado',       label:'Enviado à Unimed',   short:'Na Unimed',   color:'#0EA5E9' },
+  { id:'ativo',         label:'Ativo',              short:'Ativo',       color:'#12B76A' },
 ];
+// paleta viva pra avatares — a cor de cada pessoa é sempre a mesma, calculada a partir do nome
+const AVATAR_PALETTE = ['#6366F1','#EC4899','#F79009','#12B76A','#0EA5E9','#8B5CF6','#F04438','#14B8A6','#EAB308','#F472B6'];
+function avatarColor(name){
+  const str = name || '?';
+  let hash = 0;
+  for(let i=0;i<str.length;i++){ hash = str.charCodeAt(i) + ((hash<<5)-hash); }
+  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
+}
 function stageLabel(id){ const s = ADESAO_STAGES.find(x=>x.id===id); return s ? s.label : 'Nova adesão'; }
 
 function viewClientes(){
@@ -2272,6 +2338,21 @@ function renderClientModal(){
         <div class="fg"><label>Plano escolhido</label><input id="cl_plano" value="${c.planoEscolhido||''}" onchange="updatePlano()"/></div>
       </div>
       <div class="field-grid" style="margin-top:12px;">
+        <div class="fg"><label>CEP</label><input id="cl_cep" value="${t.cep||''}" oninput="this.value=maskCep(this.value)" onchange="updateTitular(); buscarCep('cl_cep',{rua:'cl_endereco',bairro:'cl_bairro',cidade:'cl_cidade',estado:'cl_estado'})"/></div>
+        <div class="fg"><label>Endereço</label><input id="cl_endereco" value="${t.endereco||''}" onchange="updateTitular()"/></div>
+      </div>
+      <div class="field-grid" style="margin-top:12px;">
+        <div class="fg"><label>Número</label><input id="cl_numero" value="${t.numero||''}" onchange="updateTitular()"/></div>
+        <div class="fg"><label>Complemento</label><input id="cl_complemento" value="${t.complemento||''}" onchange="updateTitular()"/></div>
+      </div>
+      <div class="field-grid" style="margin-top:12px;">
+        <div class="fg"><label>Bairro</label><input id="cl_bairro" value="${t.bairro||''}" onchange="updateTitular()"/></div>
+        <div class="fg" style="display:grid;grid-template-columns:1fr 70px;gap:8px;">
+          <div><label>Cidade</label><input id="cl_cidade" value="${t.cidade||''}" onchange="updateTitular()"/></div>
+          <div><label>UF</label><input id="cl_estado" value="${t.estado||''}" maxlength="2" onchange="updateTitular()"/></div>
+        </div>
+      </div>
+      <div class="field-grid" style="margin-top:12px;">
         <div class="fg"><label>Sexo</label>
           <select id="cl_sexo" onchange="updateTitular()">
             <option value="">Selecione</option>
@@ -2372,10 +2453,12 @@ function renderClientModal(){
     <div class="stage-tracker">
       ${ADESAO_STAGES.map((s,i)=>{
         const state = i < stageIdx ? 'done' : i === stageIdx ? 'current' : 'todo';
-        const line = i < ADESAO_STAGES.length-1 ? `<div class="stage-line ${i < stageIdx ? 'done' : ''}"></div>` : '';
+        const line = i < ADESAO_STAGES.length-1 ? `<div class="stage-line" style="${i < stageIdx ? `background:${s.color};` : ''}"></div>` : '';
+        const dotStyle = state==='current' ? `background:${s.color};border-color:${s.color};color:#fff;box-shadow:0 0 0 4px ${s.color}22;`
+                        : state==='done' ? `background:${s.color};border-color:${s.color};color:#fff;` : '';
         return `<div class="stage-item ${state}" onclick="setEtapaAdesao('${s.id}')" title="${s.label}">
-          <div class="stage-dot">${state==='done'?ICONS.check:i+1}</div>
-          <div class="stage-label">${s.short}</div>
+          <div class="stage-dot" style="${dotStyle}">${state==='done'?ICONS.check:i+1}</div>
+          <div class="stage-label" style="${state!=='todo'?`color:${s.color};`:''}">${s.short}</div>
         </div>${line}`;
       }).join('')}
     </div>
@@ -2389,9 +2472,9 @@ function renderClientModal(){
   `;
 
   openModalHTML(`
-    <div class="modal">
+    <div class="modal modal-wide">
       <div class="modal-head">
-        <div class="mh-avatar">${initials(t.nome||t.razaoSocial)}</div>
+        <div class="mh-avatar" style="background:${avatarColor(t.razaoSocial||t.nome)};">${initials(t.nome||t.razaoSocial)}</div>
         <div class="mh-info">
           <div class="mh-name">${t.razaoSocial||t.nome||'Novo cliente'} ${c.origemSite?`<span class="site-tag">Novo filiado · site</span>`:''}</div>
           <div class="mh-sub">${t.nome||''}</div>
@@ -2403,28 +2486,59 @@ function renderClientModal(){
         <button class="modal-close" onclick="closeModal(); switchView('clientes');">${ICONS.close}</button>
       </div>
       <div class="modal-body">
-        ${stageTrackerHTML}
-        <div class="person-tabs">
-          <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='titular'?'active':''}" onclick="switchPersonTab('titular')">Titular</button>
-          <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='dependentes'?'active':''}" onclick="switchPersonTab('dependentes')">Dependentes (${c.dependentes.length})</button>
-          <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='anexos'?'active':''}" onclick="switchPersonTab('anexos')">Anexos (${countAnexos(c)})</button>
-          <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='historico'?'active':''}" onclick="switchPersonTab('historico')">Histórico</button>
-          ${isAdmin()?`<button class="person-tab-btn ${ACTIVE_PERSON_TAB==='comissao'?'active':''}" onclick="switchPersonTab('comissao')">Comissão</button>`:''}
+
+        <div class="modal-section">
+          <div class="modal-section-title">Etapa da adesão</div>
+          ${stageTrackerHTML}
         </div>
-        ${tabContent}
-        <div class="btn-row" style="justify-content:flex-start;flex-wrap:wrap;">
-          <button class="btn-ghost" onclick="openQuestionarioRiscoModal()">${ICONS.clipboard} Preencher questionário de risco</button>
-          <button class="btn-ghost" onclick="openFichaUnimedModal()">${ICONS.clipboard} Preencher ficha Unimed</button>
-          <button class="btn-ghost" onclick="exportarLayoutUnimed()">${ICONS.upload} Exportar layout Unimed (.xlsx)</button>
-          <button class="btn-ghost" onclick="gerarLinkCliente()">${ICONS.mail} Link para o cliente preencher</button>
+
+        <div class="modal-section">
+          <div class="modal-section-title">Dados do cliente</div>
+          <div class="person-tabs">
+            <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='titular'?'active':''}" onclick="switchPersonTab('titular')">Titular</button>
+            <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='dependentes'?'active':''}" onclick="switchPersonTab('dependentes')">Dependentes (${c.dependentes.length})</button>
+            <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='anexos'?'active':''}" onclick="switchPersonTab('anexos')">Anexos (${countAnexos(c)})</button>
+            <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='historico'?'active':''}" onclick="switchPersonTab('historico')">Histórico</button>
+            ${isAdmin()?`<button class="person-tab-btn ${ACTIVE_PERSON_TAB==='comissao'?'active':''}" onclick="switchPersonTab('comissao')">Comissão</button>`:''}
+          </div>
+          ${tabContent}
         </div>
-        <div class="btn-row" style="justify-content:space-between;">
-          <div style="font-size:11.5px;">${emailStatus}</div>
-          <div style="display:flex;gap:10px;">
-            <button class="btn-primary" onclick="openSendAdminEmailModal()">${ICONS.mail} Enviar e-mail para administradora</button>
-            <button class="btn-danger" onclick="deleteClient()">Excluir cliente</button>
+
+        <div class="modal-section">
+          <div class="modal-section-title">Documentos e ficha Unimed</div>
+          <div class="doc-actions-grid">
+            <button type="button" class="doc-action-card" onclick="openQuestionarioRiscoModal()">
+              <span class="doc-icon">${ICONS.clipboard}</span>
+              <span class="doc-text">Questionário de risco<small>Declaração de saúde do titular e dependentes</small></span>
+            </button>
+            <button type="button" class="doc-action-card" onclick="openFichaUnimedModal()">
+              <span class="doc-icon">${ICONS.clipboard}</span>
+              <span class="doc-text">Ficha Unimed<small>Proposta de adesão preenchida</small></span>
+            </button>
+            <button type="button" class="doc-action-card" onclick="exportarLayoutUnimed()">
+              <span class="doc-icon">${ICONS.upload}</span>
+              <span class="doc-text">Exportar layout (.xlsx)<small>Planilha padrão pra enviar à Unimed</small></span>
+            </button>
+            <button type="button" class="doc-action-card" onclick="gerarLinkCliente()">
+              <span class="doc-icon">${ICONS.mail}</span>
+              <span class="doc-text">Link para o cliente<small>Ele mesmo completa os dados que faltam</small></span>
+            </button>
           </div>
         </div>
+
+        <div class="modal-section">
+          <div class="modal-section-title">Ações</div>
+          <div class="admin-actions-row">
+            <div style="display:flex;align-items:center;gap:10px;font-size:11.5px;">
+              <span style="color:var(--text-muted);">E-mail pra administradora:</span> ${emailStatus}
+            </div>
+            <div style="display:flex;gap:10px;">
+              <button class="btn-primary" onclick="openSendAdminEmailModal()">${ICONS.mail} Enviar e-mail para administradora</button>
+              <button class="btn-danger" onclick="deleteClient()">Excluir cliente</button>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>`);
 }
@@ -2682,6 +2796,8 @@ function gerarLinkCliente(){
   const numero = getOrCreateClientNumero(c);
   const baseConfigurada = !FORM_BASE_URL.includes('SEU-USUARIO');
   const link = FORM_BASE_URL + '?c=' + numero;
+  c.historico.push({ data:nowISO(), texto:'Link de preenchimento gerado e disponibilizado para o cliente.' });
+  persist();
   openModalHTML(`
     <div class="modal modal-small">
       <div class="modal-head">
@@ -2755,6 +2871,8 @@ function exportarLayoutUnimed(){
   XLSX.utils.book_append_sheet(wb, ws, 'Layout');
   const nomeArquivo = `layout-unimed-${(c.titular.razaoSocial||'cliente').toLowerCase().replace(/[^a-z0-9]+/g,'-')}.xlsx`;
   XLSX.writeFile(wb, nomeArquivo);
+  c.historico.push({ data:nowISO(), texto:'Planilha (layout Unimed) exportada.' });
+  persist();
   toast('Planilha exportada. Confira os códigos marcados como "confirmar" antes de enviar à Unimed.');
 }
 
@@ -3261,16 +3379,35 @@ async function togglePendencia(){
 
 async function updateTitular(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  const antes = JSON.stringify(c.titular);
   c.titular.razaoSocial = document.getElementById('cl_razao').value.trim();
   c.titular.cnpj = onlyDigits(document.getElementById('cl_cnpj').value);
   c.titular.nome = document.getElementById('cl_nome').value.trim();
-  c.titular.cpf = onlyDigits(document.getElementById('cl_cpf').value);
+  const cpfDigitado = onlyDigits(document.getElementById('cl_cpf').value);
+  const cpfEl = document.getElementById('cl_cpf');
+  if(cpfDigitado && !isValidCPF(cpfDigitado)){
+    cpfEl.style.borderColor = 'var(--danger)';
+    toast('⚠️ Esse CPF não é válido — confira os números.');
+  } else {
+    cpfEl.style.borderColor = '';
+  }
+  c.titular.cpf = cpfDigitado;
   c.titular.dataNascimento = document.getElementById('cl_nasc').value;
   c.titular.celular = document.getElementById('cl_celular').value.trim();
   c.titular.email = document.getElementById('cl_email').value.trim();
+  c.titular.cep = onlyDigits(document.getElementById('cl_cep').value);
+  c.titular.endereco = document.getElementById('cl_endereco').value.trim();
+  c.titular.numero = document.getElementById('cl_numero').value.trim();
+  c.titular.complemento = document.getElementById('cl_complemento').value.trim();
+  c.titular.bairro = document.getElementById('cl_bairro').value.trim();
+  c.titular.cidade = document.getElementById('cl_cidade').value.trim();
+  c.titular.estado = document.getElementById('cl_estado').value.trim().toUpperCase();
   c.titular.sexo = document.getElementById('cl_sexo').value;
   c.titular.estadoCivil = document.getElementById('cl_estadoCivil').value;
   c.titular.nomeMae = document.getElementById('cl_nomeMae').value.trim();
+  if(JSON.stringify(c.titular) !== antes){
+    c.historico.push({ data:nowISO(), texto:'Dados do titular atualizados.' });
+  }
   await persist();
 }
 async function updatePlano(){
@@ -3289,17 +3426,24 @@ async function toggleClientStatus(){
 async function addDependente(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   c.dependentes.push({ id:uid('dep'), nome:'', cpf:'', dataNascimento:'', parentesco:'' });
+  c.historico.push({ data:nowISO(), texto:'Dependente adicionado.' });
   await persist();
   renderClientModal();
 }
 async function updateDependente(i, field, value){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
-  c.dependentes[i][field] = field==='cpf' ? onlyDigits(value) : value;
+  const val = field==='cpf' ? onlyDigits(value) : value;
+  c.dependentes[i][field] = val;
+  if(field==='cpf' && val && !isValidCPF(val)){
+    toast('⚠️ O CPF desse dependente não é válido — confira os números.');
+  }
   await persist();
 }
 async function removeDependente(i){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  const nome = c.dependentes[i].nome || 'sem nome';
   c.dependentes.splice(i,1);
+  c.historico.push({ data:nowISO(), texto:`Dependente removido (${nome}).` });
   await persist();
   renderClientModal();
 }
@@ -3321,6 +3465,7 @@ function handleAttachFile(event){
     const reader = new FileReader();
     reader.onload = async ()=>{
       target.anexos.push({ id:uid('anx'), nome:file.name, dataUrl:reader.result, criadoEm:nowISO() });
+      c.historico.push({ data:nowISO(), texto:`Anexo adicionado: ${file.name}.` });
       pending--;
       if(pending===0){ await persist(); renderClientModal(); toast('Anexo(s) adicionado(s).'); }
     };
@@ -3332,7 +3477,9 @@ function handleAttachFile(event){
 async function removeAnexoFrom(type, index, anexoIdx){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   const target = getAnexoTarget(c, type, index === null ? undefined : index);
+  const nome = target.anexos[anexoIdx]?.nome || 'anexo';
   target.anexos.splice(anexoIdx, 1);
+  c.historico.push({ data:nowISO(), texto:`Anexo removido: ${nome}.` });
   await persist();
   renderClientModal();
 }
