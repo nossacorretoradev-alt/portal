@@ -1002,7 +1002,14 @@ input,select,textarea{font-family:inherit;}
 </head>
 <body>
 
-<div id="loginScreen">
+<div id="loadingScreen" style="position:fixed;inset:0;background:var(--navy,#00042D);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;z-index:9999;">
+  <img src="" id="loadingLogo" alt="Portal" style="height:44px;opacity:0.95;filter:brightness(0) invert(1);"/>
+  <div style="width:34px;height:34px;border:3px solid rgba(255,255,255,0.2);border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+  <div style="color:rgba(255,255,255,0.7);font-size:12.5px;font-weight:600;letter-spacing:.02em;">Carregando...</div>
+</div>
+<style>@keyframes spin{to{transform:rotate(360deg);}}</style>
+
+<div id="loginScreen" style="display:none;">
   <div class="login-card" id="loginCard"></div>
 </div>
 
@@ -1039,6 +1046,11 @@ input,select,textarea{font-family:inherit;}
 .person-tabs{ display:flex; gap:4px; background:var(--surface-alt); border:1px solid var(--border); border-radius:11px; padding:4px; width:fit-content; margin-bottom:16px; }
 .person-tab-btn{ padding:8px 18px; font-size:12.5px; font-weight:700; border-radius:8px; background:transparent; border:none; color:var(--text-muted); }
 .person-tab-btn.active{ background:var(--surface); color:var(--navy); box-shadow:var(--shadow-sm); }
+.journey-tabs{ display:flex; gap:2px; border-bottom:2px solid var(--border); margin:0 -22px 20px; padding:0 22px; overflow-x:auto; }
+.journey-tab-btn{ padding:11px 14px; font-size:12px; font-weight:700; background:transparent; border:none; color:var(--text-muted); white-space:nowrap; border-bottom:2px solid transparent; margin-bottom:-2px; flex-shrink:0; }
+.journey-tab-btn.active{ color:var(--navy); border-bottom-color:var(--navy); }
+.journey-tab-btn:hover{ color:var(--navy); }
+.journey-tab-content{ min-height:120px; }
 .dep-card{ border:1px solid var(--border); border-radius:var(--radius-md); padding:14px 16px; margin-bottom:10px; background:var(--surface); }
 .dep-card-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
 .field-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
@@ -1925,7 +1937,7 @@ function renderLogin(msg){
   card.innerHTML = `
     <div class="login-brand">
       <img class="lb-logo" src="${LOGO_WORDMARK}" alt="Portal"/>
-      <div class="lb-t2">Portal interno — CDL Mossoró × Unimed</div>
+      <div class="lb-t2">Portal interno</div>
     </div>
     <div class="login-error ${msg?'show':''}" id="loginError">${msg||'E-mail ou senha inválidos.'}</div>
     <div class="login-field">
@@ -2091,6 +2103,11 @@ function viewInicio(){
 /* =========================================================
    VIEW: CRM (kanban por etapa da adesão — usa o MESMO registro/modal do cliente)
    ========================================================= */
+// Filtro defensivo: se por algum motivo um vendedor acessar essas telas, só vê os próprios clientes/leads
+function clientesVisiveisPara(lista){
+  if(!isVendedor()) return lista;
+  return lista.filter(c=>(c.vendedores||[]).some(v=>v.vendedorId===CURRENT_USER.id));
+}
 function viewCRM(){
   const canCriar = hasPerm('crm','criar');
   return `
@@ -2102,8 +2119,8 @@ function viewCRM(){
     <div class="kanban-board">
       ${ADESAO_STAGES.map(st=>`
         <div class="kanban-col" style="border-top:3px solid ${st.color};">
-          <div class="kanban-col-title"><span style="display:flex;align-items:center;gap:7px;"><span style="width:8px;height:8px;border-radius:50%;background:${st.color};flex-shrink:0;"></span>${st.label}</span><span style="background:${st.color}22;color:${st.color};">${DB.clients.filter(c=>c.etapaAdesao===st.id).length}</span></div>
-          ${DB.clients.filter(c=>c.etapaAdesao===st.id).map(c=>`
+          <div class="kanban-col-title"><span style="display:flex;align-items:center;gap:7px;"><span style="width:8px;height:8px;border-radius:50%;background:${st.color};flex-shrink:0;"></span>${st.label}</span><span style="background:${st.color}22;color:${st.color};">${clientesVisiveisPara(DB.clients).filter(c=>c.etapaAdesao===st.id).length}</span></div>
+          ${clientesVisiveisPara(DB.clients).filter(c=>c.etapaAdesao===st.id).map(c=>`
             <div class="kanban-card" onclick="openClientModal('${c.id}')">
               <div class="kc-top">
                 <div class="kc-avatar" style="background:${avatarColor(c.titular.razaoSocial||c.titular.nome)};">${initials(c.titular.nome||c.titular.razaoSocial)}</div>
@@ -2225,7 +2242,7 @@ function stageLabel(id){ const s = ADESAO_STAGES.find(x=>x.id===id); return s ? 
 
 function viewClientes(){
   const canCriar = hasPerm('clientes','criar');
-  const list = DB.clients.filter(c=>{
+  const list = clientesVisiveisPara(DB.clients).filter(c=>{
     if(CLIENT_FILTER.status && c.status!==CLIENT_FILTER.status) return false;
     if(CLIENT_FILTER.origemSite==='1' && !c.origemSite) return false;
     if(CLIENT_FILTER.q){
@@ -2274,12 +2291,12 @@ function viewClientes(){
 }
 
 let ACTIVE_CLIENT_ID = null;
-let ACTIVE_PERSON_TAB = 'titular';
+let ACTIVE_PERSON_TAB = 'nova';
 let PENDING_ANEXO_TARGET = null;
 
 function openClientModal(id, isNew){
   ACTIVE_CLIENT_ID = id;
-  ACTIVE_PERSON_TAB = 'titular';
+  ACTIVE_PERSON_TAB = 'nova';
   if(isNew){
     const c = {
       id:uid('cli'), status:'ativo', origemSite:false, etapaAdesao:'nova', pendencia:{ativa:false,motivo:''},
@@ -2289,6 +2306,10 @@ function openClientModal(id, isNew){
     };
     DB.clients.push(c);
     ACTIVE_CLIENT_ID = c.id;
+  } else {
+    // abre já na aba que corresponde à etapa atual do cliente na jornada
+    const existente = DB.clients.find(x=>x.id===id);
+    if(existente && existente.etapaAdesao) ACTIVE_PERSON_TAB = existente.etapaAdesao;
   }
   migrateClientShape(DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID));
   renderClientModal();
@@ -2306,10 +2327,12 @@ function migrateClientShape(c){
   if(!c.pendencia) c.pendencia = { ativa:false, motivo:'' };
   if(c.origemSite === undefined) c.origemSite = false;
   if(!c.vendedores) c.vendedores = [];
+  c.vendedores.forEach(v=>{ if(!v.pagamentos) v.pagamentos = []; });
   if(!c.comissoes) c.comissoes = [];
 }
 function switchPersonTab(tab){ ACTIVE_PERSON_TAB = tab; renderClientModal(); }
 function countAnexos(c){ return (c.titular.anexos||[]).length + c.dependentes.reduce((n,d)=>n+(d.anexos||[]).length, 0); }
+function temAnexoChamado(c, nome){ return (c.titular.anexos||[]).some(a=>a.nome===nome); }
 
 function renderClientModal(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
@@ -2317,9 +2340,12 @@ function renderClientModal(){
   migrateClientShape(c);
   const t = c.titular;
   const wppLink = t.celular ? `https://api.whatsapp.com/send?phone=55${onlyDigits(t.celular)}` : null;
+  const emailStatusInline = c.emailAdministradoraEnviadoEm
+    ? `<span class="status-pill ativo">Enviado em ${fmtDateTime(c.emailAdministradoraEnviadoEm)}</span>`
+    : `<span class="status-pill inativo">Ainda não enviado</span>`;
 
   let tabContent = '';
-  if(ACTIVE_PERSON_TAB==='titular'){
+  if(ACTIVE_PERSON_TAB==='nova'){
     tabContent = `
       <div class="field-grid">
         <div class="fg"><label>Razão social / Empresa</label><input id="cl_razao" value="${t.razaoSocial||''}" onchange="updateTitular()"/></div>
@@ -2374,38 +2400,39 @@ function renderClientModal(){
       <div class="fg" style="margin-top:12px;"><label>Nome da mãe</label><input id="cl_nomeMae" value="${t.nomeMae||''}" onchange="updateTitular()"/></div>
       ${c.origemSite?`<div class="site-tag" style="margin-top:14px;font-size:11px;padding:4px 10px;">✓ Identificado automaticamente como novo afiliado via site</div>`:''}
       ${wppLink?`<a class="wpp-btn" style="margin-top:14px;" href="${wppLink}" target="_blank">${ICONS.wpp} Chamar titular no WhatsApp</a>`:''}
-    `;
-  } else if(ACTIVE_PERSON_TAB==='dependentes'){
-    tabContent = `
-      ${c.dependentes.map((d,i)=>`
-        <div class="dep-card">
-          <div class="dep-card-head">
-            <b style="font-size:12.5px;">Dependente ${i+1}</b>
-            <button class="btn-danger" style="padding:5px 10px;" onclick="removeDependente(${i})">${ICONS.trash}</button>
-          </div>
-          <div class="field-grid">
-            <div class="fg"><label>Nome</label><input value="${d.nome||''}" onchange="updateDependente(${i},'nome',this.value)"/></div>
-            <div class="fg"><label>CPF</label><input value="${d.cpf||''}" oninput="this.value=maskCpf(this.value)" onchange="updateDependente(${i},'cpf',this.value)"/></div>
-          </div>
-          <div class="field-grid" style="margin-top:10px;">
-            <div class="fg"><label>Data de nascimento</label><input type="date" value="${d.dataNascimento||''}" onchange="updateDependente(${i},'dataNascimento',this.value)"/></div>
-            <div class="fg"><label>Parentesco</label><input value="${d.parentesco||''}" placeholder="Cônjuge, filho(a)..." onchange="updateDependente(${i},'parentesco',this.value)"/></div>
-          </div>
-          <div class="field-grid" style="margin-top:10px;">
-            <div class="fg"><label>Sexo</label>
-              <select onchange="updateDependente(${i},'sexo',this.value)">
-                <option value="">Selecione</option>
-                <option value="M" ${d.sexo==='M'?'selected':''}>Masculino</option>
-                <option value="F" ${d.sexo==='F'?'selected':''}>Feminino</option>
-              </select>
+
+      <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border);">
+        <div class="modal-section-title" style="margin-bottom:12px;">Dependentes (${c.dependentes.length})</div>
+        ${c.dependentes.map((d,i)=>`
+          <div class="dep-card">
+            <div class="dep-card-head">
+              <b style="font-size:12.5px;">Dependente ${i+1}</b>
+              <button class="btn-danger" style="padding:5px 10px;" onclick="removeDependente(${i})">${ICONS.trash}</button>
             </div>
-            <div class="fg"><label>Nome da mãe</label><input value="${d.nomeMae||''}" onchange="updateDependente(${i},'nomeMae',this.value)"/></div>
+            <div class="field-grid">
+              <div class="fg"><label>Nome</label><input value="${d.nome||''}" onchange="updateDependente(${i},'nome',this.value)"/></div>
+              <div class="fg"><label>CPF</label><input value="${d.cpf||''}" oninput="this.value=maskCpf(this.value)" onchange="updateDependente(${i},'cpf',this.value)"/></div>
+            </div>
+            <div class="field-grid" style="margin-top:10px;">
+              <div class="fg"><label>Data de nascimento</label><input type="date" value="${d.dataNascimento||''}" onchange="updateDependente(${i},'dataNascimento',this.value)"/></div>
+              <div class="fg"><label>Parentesco</label><input value="${d.parentesco||''}" placeholder="Cônjuge, filho(a)..." onchange="updateDependente(${i},'parentesco',this.value)"/></div>
+            </div>
+            <div class="field-grid" style="margin-top:10px;">
+              <div class="fg"><label>Sexo</label>
+                <select onchange="updateDependente(${i},'sexo',this.value)">
+                  <option value="">Selecione</option>
+                  <option value="M" ${d.sexo==='M'?'selected':''}>Masculino</option>
+                  <option value="F" ${d.sexo==='F'?'selected':''}>Feminino</option>
+                </select>
+              </div>
+              <div class="fg"><label>Nome da mãe</label><input value="${d.nomeMae||''}" onchange="updateDependente(${i},'nomeMae',this.value)"/></div>
+            </div>
           </div>
-        </div>
-      `).join('') || `<div style="font-size:12.5px;color:var(--text-faint);margin-bottom:10px;">Nenhum dependente cadastrado.</div>`}
-      <button class="btn-ghost" onclick="addDependente()">${ICONS.plus} Adicionar dependente</button>
+        `).join('') || `<div style="font-size:12.5px;color:var(--text-faint);margin-bottom:10px;">Nenhum dependente cadastrado.</div>`}
+        <button class="btn-ghost" onclick="addDependente()">${ICONS.plus} Adicionar dependente</button>
+      </div>
     `;
-  } else if(ACTIVE_PERSON_TAB==='anexos'){
+  } else if(ACTIVE_PERSON_TAB==='documentacao'){
     const pessoas = [{ label: `Titular — ${t.nome || 'sem nome'}`, anexos: t.anexos||[], type:'titular' }]
       .concat(c.dependentes.map((d,i)=>({ label: `Dependente ${i+1} — ${d.nome || 'sem nome'}`, anexos: d.anexos||[], type:'dependente', index:i })));
     tabContent = `
@@ -2440,13 +2467,47 @@ function renderClientModal(){
         ${c.historico.slice().reverse().map(h=>`<div class="history-item"><span class="hi-date">${fmtDateTime(h.data)}</span><span>${h.texto}</span></div>`).join('')}
       </div>
     `;
-  } else if(ACTIVE_PERSON_TAB==='comissao'){
-    tabContent = renderComissaoTab(c);
+  } else if(ACTIVE_PERSON_TAB==='ativo'){
+    tabContent = renderComissaoTab(c) + (isAdmin() ? `
+      <div class="btn-row" style="justify-content:flex-end;margin-top:18px;padding-top:16px;border-top:1px solid var(--border);">
+        <button class="btn-danger" onclick="deleteClient()">Excluir cliente</button>
+      </div>` : '');
+  } else if(ACTIVE_PERSON_TAB==='questionario'){
+    const feito = temAnexoChamado(c,'Declaracao de Saude e RC.pdf');
+    tabContent = `
+      <div class="doc-actions-grid" style="grid-template-columns:1fr;">
+        <button type="button" class="doc-action-card" onclick="openQuestionarioRiscoModal()">
+          <span class="doc-icon">${ICONS.clipboard}</span>
+          <span class="doc-text">Questionário de risco<small>Declaração de saúde do titular e dependentes</small></span>
+        </button>
+      </div>
+      <div style="margin-top:14px;">${feito ? `<span class="status-pill ativo">✓ Já preenchido</span>` : `<span class="status-pill inativo">Ainda não preenchido</span>`}</div>
+    `;
+  } else if(ACTIVE_PERSON_TAB==='conferencia'){
+    const fichaFeita = temAnexoChamado(c,'Ficha de Adesao Unimed.pdf');
+    tabContent = `
+      <div class="doc-actions-grid">
+        <button type="button" class="doc-action-card" onclick="openFichaUnimedModal()">
+          <span class="doc-icon">${ICONS.clipboard}</span>
+          <span class="doc-text">Ficha Unimed<small>Proposta de adesão preenchida</small></span>
+        </button>
+        <button type="button" class="doc-action-card" onclick="exportarLayoutUnimed()">
+          <span class="doc-icon">${ICONS.upload}</span>
+          <span class="doc-text">Exportar layout (.xlsx)<small>Planilha padrão pra enviar à Unimed</small></span>
+        </button>
+      </div>
+      <div style="margin-top:14px;">${fichaFeita ? `<span class="status-pill ativo">✓ Ficha já preenchida</span>` : `<span class="status-pill inativo">Ficha ainda não preenchida</span>`}</div>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Confira os anexos (aba Documentos) e o questionário de risco antes de marcar como conferido e avançar pra "Na Unimed".</p>
+    `;
+  } else if(ACTIVE_PERSON_TAB==='enviado'){
+    tabContent = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <span style="font-size:12.5px;color:var(--text-muted);">Status do envio:</span> ${emailStatusInline}
+      </div>
+      <button class="btn-primary" onclick="openSendAdminEmailModal()">${ICONS.mail} Enviar e-mail para administradora</button>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Isso monta um e-mail com o resumo da triagem e os anexos, pronto pra você conferir e enviar pela sua caixa de e-mail.</p>
+    `;
   }
-
-  const emailStatus = c.emailAdministradoraEnviadoEm
-    ? `<span class="status-pill ativo">Enviado em ${fmtDateTime(c.emailAdministradoraEnviadoEm)}</span>`
-    : `<span class="status-pill inativo">Ainda não enviado</span>`;
 
   const stageIdx = ADESAO_STAGES.findIndex(s=>s.id===c.etapaAdesao);
   const stageTrackerHTML = `
@@ -2471,8 +2532,18 @@ function renderClientModal(){
     ${c.formularioClientePreenchidoEm ? `<div class="site-tag" style="font-size:11px;padding:5px 10px;margin-bottom:16px;display:inline-block;">✓ Cliente enviou dados pelo link em ${fmtDateTime(c.formularioClientePreenchidoEm)}</div>` : ''}
   `;
 
+  const JOURNEY_TABS = [
+    { id:'nova', label:'Dados' },
+    { id:'documentacao', label:`Documentos (${countAnexos(c)})` },
+    { id:'questionario', label:'Questionário' },
+    { id:'conferencia', label:'Conferência' },
+    { id:'enviado', label:'Na Unimed' },
+    ...(isAdmin()||isVendedor() ? [{ id:'ativo', label:'Comissão' }] : []),
+    { id:'historico', label:'Histórico' },
+  ];
+
   openModalHTML(`
-    <div class="modal modal-wide">
+    <div class="modal">
       <div class="modal-head">
         <div class="mh-avatar" style="background:${avatarColor(t.razaoSocial||t.nome)};">${initials(t.nome||t.razaoSocial)}</div>
         <div class="mh-info">
@@ -2492,51 +2563,16 @@ function renderClientModal(){
           ${stageTrackerHTML}
         </div>
 
-        <div class="modal-section">
-          <div class="modal-section-title">Dados do cliente</div>
-          <div class="person-tabs">
-            <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='titular'?'active':''}" onclick="switchPersonTab('titular')">Titular</button>
-            <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='dependentes'?'active':''}" onclick="switchPersonTab('dependentes')">Dependentes (${c.dependentes.length})</button>
-            <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='anexos'?'active':''}" onclick="switchPersonTab('anexos')">Anexos (${countAnexos(c)})</button>
-            <button class="person-tab-btn ${ACTIVE_PERSON_TAB==='historico'?'active':''}" onclick="switchPersonTab('historico')">Histórico</button>
-            ${isAdmin()?`<button class="person-tab-btn ${ACTIVE_PERSON_TAB==='comissao'?'active':''}" onclick="switchPersonTab('comissao')">Comissão</button>`:''}
-          </div>
-          ${tabContent}
+        <div class="journey-tabs">
+          ${JOURNEY_TABS.map(jt=>`<button class="journey-tab-btn ${ACTIVE_PERSON_TAB===jt.id?'active':''}" onclick="switchPersonTab('${jt.id}')">${jt.label}</button>`).join('')}
         </div>
-
-        <div class="modal-section">
-          <div class="modal-section-title">Documentos e ficha Unimed</div>
-          <div class="doc-actions-grid">
-            <button type="button" class="doc-action-card" onclick="openQuestionarioRiscoModal()">
-              <span class="doc-icon">${ICONS.clipboard}</span>
-              <span class="doc-text">Questionário de risco<small>Declaração de saúde do titular e dependentes</small></span>
-            </button>
-            <button type="button" class="doc-action-card" onclick="openFichaUnimedModal()">
-              <span class="doc-icon">${ICONS.clipboard}</span>
-              <span class="doc-text">Ficha Unimed<small>Proposta de adesão preenchida</small></span>
-            </button>
-            <button type="button" class="doc-action-card" onclick="exportarLayoutUnimed()">
-              <span class="doc-icon">${ICONS.upload}</span>
-              <span class="doc-text">Exportar layout (.xlsx)<small>Planilha padrão pra enviar à Unimed</small></span>
-            </button>
-            <button type="button" class="doc-action-card" onclick="gerarLinkCliente()">
+        <div class="journey-tab-content">
+          ${ACTIVE_PERSON_TAB==='documentacao' ? `
+            <button type="button" class="doc-action-card" style="margin-bottom:16px;" onclick="gerarLinkCliente()">
               <span class="doc-icon">${ICONS.mail}</span>
               <span class="doc-text">Link para o cliente<small>Ele mesmo completa os dados que faltam</small></span>
-            </button>
-          </div>
-        </div>
-
-        <div class="modal-section">
-          <div class="modal-section-title">Ações</div>
-          <div class="admin-actions-row">
-            <div style="display:flex;align-items:center;gap:10px;font-size:11.5px;">
-              <span style="color:var(--text-muted);">E-mail pra administradora:</span> ${emailStatus}
-            </div>
-            <div style="display:flex;gap:10px;">
-              <button class="btn-primary" onclick="openSendAdminEmailModal()">${ICONS.mail} Enviar e-mail para administradora</button>
-              <button class="btn-danger" onclick="deleteClient()">Excluir cliente</button>
-            </div>
-          </div>
+            </button>` : ''}
+          ${tabContent}
         </div>
 
       </div>
@@ -2544,6 +2580,7 @@ function renderClientModal(){
 }
 
 function renderComissaoTab(c){
+  const podeEditar = isAdmin();
   const vendedoresDisponiveis = DB.users.filter(u=>u.papel==='vendedor' && u.ativo);
   const somaPercentual = c.vendedores.reduce((s,v)=>s+Number(v.percentual||0),0);
   const totalRecebido = c.comissoes.reduce((s,x)=>s+Number(x.valor||0),0);
@@ -2551,18 +2588,49 @@ function renderComissaoTab(c){
   const vendedoresHTML = c.vendedores.map(v=>{
     const u = DB.users.find(x=>x.id===v.vendedorId);
     const nome = u ? u.nome : '(usuário removido)';
-    const valorDoVendedor = totalRecebido * (Number(v.percentual||0)/100);
+    const recebidaDoVendedor = totalRecebido * (Number(v.percentual||0)/100); // proporcional ao que a corretora já recebeu
+    const pagamentos = v.pagamentos || [];
+    const totalPago = pagamentos.reduce((s,p)=>s+Number(p.valor||0),0);
+    const pendente = Math.max(0, recebidaDoVendedor - totalPago);
+    const pagamentosHTML = pagamentos.slice().reverse().map(p=>`
+      <div class="history-item" style="padding-left:0;">
+        <span class="hi-date">${fmtDate(p.data)}</span>
+        <span>${formatBRL(p.valor)} pago ${podeEditar?`<button class="btn-danger" style="padding:2px 8px;font-size:10px;margin-left:6px;" onclick="removePagamentoVendedor('${v.vendedorId}','${p.id}')">${ICONS.close}</button>`:''}</span>
+      </div>`).join('');
     return `
-      <div class="dep-card" style="display:flex;justify-content:space-between;align-items:center;">
-        <div>
+      <div class="dep-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
           <b style="font-size:12.5px;">${nome}</b>
-          <div style="font-size:11.5px;color:var(--text-muted);">${v.percentual}% da comissão · já liberado: ${formatBRL(valorDoVendedor)}</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:11.5px;color:var(--text-muted);">${v.percentual}% da comissão</span>
+            ${podeEditar?`<button class="btn-danger" style="padding:5px 10px;" onclick="removeVendedorFromClient('${v.vendedorId}')">${ICONS.trash}</button>`:''}
+          </div>
         </div>
-        <button class="btn-danger" style="padding:5px 10px;" onclick="removeVendedorFromClient('${v.vendedorId}')">${ICONS.trash}</button>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px;">
+          <div style="text-align:center;padding:8px 4px;border-radius:8px;background:#0EA5E922;">
+            <div style="font-size:13px;font-weight:800;color:#0EA5E9;">${formatBRL(recebidaDoVendedor)}</div>
+            <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:var(--text-muted);">Recebida</div>
+          </div>
+          <div style="text-align:center;padding:8px 4px;border-radius:8px;background:#12B76A22;">
+            <div style="font-size:13px;font-weight:800;color:#12B76A;">${formatBRL(totalPago)}</div>
+            <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:var(--text-muted);">Paga</div>
+          </div>
+          <div style="text-align:center;padding:8px 4px;border-radius:8px;background:${pendente>0?'#F7900922':'var(--surface-alt)'};">
+            <div style="font-size:13px;font-weight:800;color:${pendente>0?'#F79009':'var(--text-faint)'};">${formatBRL(pendente)}</div>
+            <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:var(--text-muted);">Pendente</div>
+          </div>
+        </div>
+        ${podeEditar ? `
+          <div style="display:flex;gap:8px;margin-top:10px;align-items:flex-end;">
+            <div class="fg" style="flex:1;"><label style="font-size:10px;">Data do pagamento</label><input type="date" id="pgtoData_${v.vendedorId}" value="${todayISO()}" style="padding:6px 8px;font-size:11.5px;"></div>
+            <div class="fg" style="flex:1;"><label style="font-size:10px;">Valor pago (R$)</label><input type="number" id="pgtoValor_${v.vendedorId}" min="0" placeholder="Ex: 175" style="padding:6px 8px;font-size:11.5px;"></div>
+            <button class="btn-ghost" style="padding:7px 12px;font-size:11.5px;flex-shrink:0;" onclick="addPagamentoVendedor('${v.vendedorId}')">${ICONS.plus} Pagar</button>
+          </div>` : ''}
+        ${pagamentosHTML ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);">${pagamentosHTML}</div>` : ''}
       </div>`;
   }).join('') || `<div style="font-size:12.5px;color:var(--text-faint);margin-bottom:10px;">Nenhum vendedor vinculado a esta venda ainda.</div>`;
 
-  const addVendedorHTML = c.vendedores.length>=5 ? `<p style="font-size:11.5px;color:var(--text-muted);">Limite de 5 vendedores por venda atingido.</p>` : `
+  const addVendedorHTML = !podeEditar ? '' : (c.vendedores.length>=5 ? `<p style="font-size:11.5px;color:var(--text-muted);">Limite de 5 vendedores por venda atingido.</p>` : `
     <div class="field-grid" style="margin-top:10px;">
       <div class="fg"><label>Vendedor</label>
         <select id="novoVendedorId">
@@ -2573,23 +2641,18 @@ function renderComissaoTab(c){
       <div class="fg"><label>% da comissão</label><input type="number" id="novoVendedorPct" min="1" max="100" placeholder="Ex: 50"></div>
     </div>
     <button class="btn-ghost" style="margin-top:10px;" onclick="assignVendedorToClient()">${ICONS.plus} Adicionar vendedor</button>
-  `;
+  `);
 
   const somaAviso = somaPercentual > 100 ? `<p style="font-size:11.5px;color:var(--warn);margin-top:6px;">⚠ A soma dos percentuais está em ${somaPercentual}% — passou de 100%.</p>` : '';
 
   const comissoesHTML = c.comissoes.slice().reverse().map(x=>`
     <div class="history-item">
       <span class="hi-date">${fmtDate(x.data)}</span>
-      <span>${formatBRL(x.valor)}${x.obs?` — ${x.obs}`:''} <button class="btn-danger" style="padding:2px 8px;font-size:10px;margin-left:6px;" onclick="removeComissaoRecebida('${x.id}')">${ICONS.close}</button></span>
+      <span>${formatBRL(x.valor)}${x.obs?` — ${x.obs}`:''} ${podeEditar?`<button class="btn-danger" style="padding:2px 8px;font-size:10px;margin-left:6px;" onclick="removeComissaoRecebida('${x.id}')">${ICONS.close}</button>`:''}</span>
     </div>
   `).join('') || `<div style="font-size:12.5px;color:var(--text-faint);">Nenhum recebimento registrado ainda — a comissão só é liberada aos vendedores depois de registrada aqui.</div>`;
 
-  return `
-    <div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;">Vendedores desta venda (até 5)</div>
-    ${vendedoresHTML}
-    ${addVendedorHTML}
-    ${somaAviso}
-
+  const formNovoRecebimento = !podeEditar ? '' : `
     <div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);margin:20px 0 8px;">Comissão recebida da administradora</div>
     <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:10px;">Registre aqui cada vez que a corretora efetivamente receber a comissão desta venda (mensal ou única) — isso é o que libera o repasse para os vendedores.</p>
     <div class="field-grid">
@@ -2598,6 +2661,15 @@ function renderComissaoTab(c){
     </div>
     <div class="fg" style="margin-top:10px;"><label>Observação (opcional)</label><input id="novaComissaoObs" placeholder="Ex: referente a agosto/2026"></div>
     <button class="btn-primary" style="margin-top:10px;" onclick="addComissaoRecebida()">${ICONS.plus} Registrar recebimento</button>
+  `;
+
+  return `
+    <div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;">Vendedores desta venda (até 5)</div>
+    ${vendedoresHTML}
+    ${addVendedorHTML}
+    ${somaAviso}
+    ${!podeEditar ? `<div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);margin:20px 0 8px;">Recebimentos registrados</div>` : ''}
+    ${formNovoRecebimento}
 
     <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border);font-size:12.5px;">
       <b>Total recebido nesta venda:</b> ${formatBRL(totalRecebido)}
@@ -2606,25 +2678,28 @@ function renderComissaoTab(c){
   `;
 }
 async function assignVendedorToClient(){
+  if(!isAdmin()){ toast('Só o administrador define a comissão de uma venda.'); return; }
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   const vendedorId = document.getElementById('novoVendedorId').value;
   const percentual = Number(document.getElementById('novoVendedorPct').value||0);
   if(!vendedorId){ toast('Selecione um vendedor.'); return; }
   if(percentual<=0){ toast('Informe o percentual desse vendedor.'); return; }
   if(c.vendedores.length>=5){ toast('Limite de 5 vendedores por venda.'); return; }
-  c.vendedores.push({ vendedorId, percentual });
+  c.vendedores.push({ vendedorId, percentual, pagamentos:[] });
   const u = DB.users.find(x=>x.id===vendedorId);
   c.historico.push({ data:nowISO(), texto:`Vendedor ${u?u.nome:''} vinculado à venda (${percentual}%).` });
   await persist();
   renderClientModal();
 }
 async function removeVendedorFromClient(vendedorId){
+  if(!isAdmin()){ toast('Só o administrador altera a comissão de uma venda.'); return; }
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   c.vendedores = c.vendedores.filter(v=>v.vendedorId!==vendedorId);
   await persist();
   renderClientModal();
 }
 async function addComissaoRecebida(){
+  if(!isAdmin()){ toast('Só o administrador registra recebimentos.'); return; }
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   const data = document.getElementById('novaComissaoData').value || todayISO();
   const valor = Number(document.getElementById('novaComissaoValor').value||0);
@@ -2634,12 +2709,38 @@ async function addComissaoRecebida(){
   c.historico.push({ data:nowISO(), texto:`Comissão de ${formatBRL(valor)} registrada como recebida.` });
   await persist();
   renderClientModal();
-  toast('Recebimento registrado — comissão liberada para os vendedores vinculados.');
+  toast('Recebimento registrado.');
 }
 async function removeComissaoRecebida(id){
+  if(!isAdmin()){ toast('Só o administrador altera recebimentos.'); return; }
   if(!confirm('Excluir este registro de recebimento?')) return;
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   c.comissoes = c.comissoes.filter(x=>x.id!==id);
+  await persist();
+  renderClientModal();
+}
+async function addPagamentoVendedor(vendedorId){
+  if(!isAdmin()){ toast('Só o administrador registra pagamentos.'); return; }
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  const vinculo = c.vendedores.find(v=>v.vendedorId===vendedorId);
+  if(!vinculo) return;
+  const data = document.getElementById(`pgtoData_${vendedorId}`).value || todayISO();
+  const valor = Number(document.getElementById(`pgtoValor_${vendedorId}`).value||0);
+  if(valor<=0){ toast('Informe o valor pago.'); return; }
+  vinculo.pagamentos = vinculo.pagamentos || [];
+  vinculo.pagamentos.push({ id:uid('pgto'), data, valor, criadoEm:nowISO() });
+  const u = DB.users.find(x=>x.id===vendedorId);
+  c.historico.push({ data:nowISO(), texto:`Pagamento de ${formatBRL(valor)} registrado para ${u?u.nome:'vendedor'}.` });
+  await persist();
+  renderClientModal();
+  toast('Pagamento registrado.');
+}
+async function removePagamentoVendedor(vendedorId, pagamentoId){
+  if(!isAdmin()){ toast('Só o administrador altera pagamentos.'); return; }
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  const vinculo = c.vendedores.find(v=>v.vendedorId===vendedorId);
+  if(!vinculo) return;
+  vinculo.pagamentos = (vinculo.pagamentos||[]).filter(p=>p.id!==pagamentoId);
   await persist();
   renderClientModal();
 }
@@ -2738,23 +2839,53 @@ function exportComissoesCSV(){
    ========================================================= */
 function viewMinhaComissao(){
   const v = CURRENT_USER;
+  const meusClientes = DB.clients.filter(c=>(c.vendedores||[]).some(x=>x.vendedorId===v.id));
   const linhas = [];
-  DB.clients.forEach(c=>{
-    const assoc = (c.vendedores||[]).find(x=>x.vendedorId===v.id);
-    if(!assoc) return;
+  meusClientes.forEach(c=>{
+    const assoc = c.vendedores.find(x=>x.vendedorId===v.id);
     (c.comissoes||[]).forEach(com=>{
       linhas.push({ empresa: c.titular.razaoSocial||c.titular.nome, data: com.data, valorVendedor: com.valor*(assoc.percentual/100), percentual: assoc.percentual });
     });
   });
   const total = linhas.reduce((s,l)=>s+l.valorVendedor,0);
-  const vendasVinculadas = DB.clients.filter(c=>(c.vendedores||[]).some(x=>x.vendedorId===v.id)).length;
+  const link = getVendedorLink(v);
+  const naoAtivos = meusClientes.filter(c=>c.etapaAdesao!=='ativo');
+
   return `
   <div class="view-wrap">
-    <div class="page-head"><div class="page-title">Minha Comissão</div></div>
-    <div class="stat-grid">
-      <div class="stat-card"><div class="sc-val">${formatBRL(total)}</div><div class="sc-label">Total já liberado</div></div>
-      <div class="stat-card"><div class="sc-val">${vendasVinculadas}</div><div class="sc-label">Vendas vinculadas a você</div></div>
+    <div class="page-head"><div class="page-title">Olá, ${v.nome.split(' ')[0]}</div></div>
+
+    <div style="margin-bottom:20px;padding:16px 18px;border:1px solid var(--border);border-radius:14px;background:var(--surface-alt);">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;">Seu link pessoal</div>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">Divulgue esse link — toda venda feita por ele já entra identificada com o seu nome.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <input id="meuLinkInput" value="${link}" readonly onclick="this.select()" style="flex:1;min-width:220px;padding:9px 12px;border:1px solid var(--border);border-radius:9px;font-size:12px;background:var(--surface);"/>
+        <button class="btn-primary" style="flex-shrink:0;" onclick="copiarMeuLink()">${ICONS.upload} Copiar link</button>
+      </div>
     </div>
+
+    <div class="stat-grid">
+      <div class="stat-card" style="--accent:#12B76A;"><div class="sc-val">${formatBRL(total)}</div><div class="sc-label">Comissão já liberada</div></div>
+      <div class="stat-card" style="--accent:#6366F1;"><div class="sc-val">${meusClientes.length}</div><div class="sc-label">Clientes / leads seus</div></div>
+      <div class="stat-card" style="--accent:#F79009;"><div class="sc-val">${naoAtivos.length}</div><div class="sc-label">Em andamento</div></div>
+    </div>
+
+    <div class="page-head" style="margin-top:8px;"><div style="font-size:15px;font-weight:800;color:var(--navy);">Seus clientes e leads</div></div>
+    <table class="table-simple">
+      <thead><tr><th>Empresa</th><th>Contato</th><th>Etapa</th></tr></thead>
+      <tbody>
+        ${meusClientes.map(c=>{
+          const st = ADESAO_STAGES.find(s=>s.id===c.etapaAdesao) || ADESAO_STAGES[0];
+          return `<tr onclick="openClientModal('${c.id}')" style="cursor:pointer;">
+            <td><b>${c.titular.razaoSocial||c.titular.nome}</b></td>
+            <td>${c.titular.nome||'—'} · ${maskPhone(c.titular.celular||'')||'—'}</td>
+            <td><span class="status-pill" style="background:${st.color}22;color:${st.color};">${st.label}</span></td>
+          </tr>`;
+        }).join('') || `<tr><td colspan="3" style="text-align:center;color:var(--text-faint);">Nenhum cliente vinculado a você ainda — divulgue seu link!</td></tr>`}
+      </tbody>
+    </table>
+
+    <div class="page-head" style="margin-top:8px;"><div style="font-size:15px;font-weight:800;color:var(--navy);">Detalhamento de comissões</div></div>
     <table class="table-simple">
       <thead><tr><th>Empresa</th><th>Data</th><th>Sua parte</th></tr></thead>
       <tbody>
@@ -2763,6 +2894,11 @@ function viewMinhaComissao(){
     </table>
     <p style="font-size:11.5px;color:var(--text-muted);margin-top:16px;">A comissão só aparece aqui depois que a corretora confirma o recebimento junto à administradora — isso é registrado pela equipe interna.</p>
   </div>`;
+}
+function copiarMeuLink(){
+  const input = document.getElementById('meuLinkInput');
+  input.select();
+  navigator.clipboard.writeText(input.value).then(()=>toast('Link copiado.'));
 }
 /* =========================================================
    DECLARAÇÃO DE SAÚDE (DS) + REDUÇÃO DE CARÊNCIA (RC)
@@ -3124,7 +3260,7 @@ async function gerarQuestionarioRisco(){
   c.titular.anexos.push({ id:uid('anx'), nome:'Declaracao de Saude e RC.pdf', dataUrl, criadoEm:nowISO() });
   c.historico.push({ data:nowISO(), texto:'Declaração de Saúde e Redução de Carência preenchida e anexada.' });
   await persist();
-  ACTIVE_PERSON_TAB = 'anexos';
+  ACTIVE_PERSON_TAB = 'documentacao';
   renderClientModal();
   toast('Declaração de Saúde gerada e anexada ao Titular.');
 }
@@ -3349,7 +3485,7 @@ async function gerarFichaUnimed(){
   c.titular.anexos.push({ id:uid('anx'), nome:'Ficha de Adesao Unimed.pdf', dataUrl, criadoEm:nowISO() });
   c.historico.push({ data:nowISO(), texto:'Ficha de Adesão Unimed (PME III) preenchida e anexada.' });
   await persist();
-  ACTIVE_PERSON_TAB = 'anexos';
+  ACTIVE_PERSON_TAB = 'documentacao';
   renderClientModal();
   toast('Ficha de Adesão Unimed gerada e anexada ao Titular.');
 }
@@ -3929,10 +4065,14 @@ async function deleteUser(id){
    BOOT
    ========================================================= */
 async function boot(){
+  const logoEl = document.getElementById('loadingLogo');
+  if(logoEl) logoEl.src = LOGO_WORDMARK;
   await loadDB();
+  document.getElementById('loadingScreen').style.display = 'none';
   if(checkSession()){
     enterApp();
   }else{
+    document.getElementById('loginScreen').style.display = 'flex';
     renderLogin();
   }
 }
