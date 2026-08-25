@@ -1933,6 +1933,8 @@ async function loadDB(){
   }
   // garante que módulos novos existam mesmo em bases antigas
   DB.users = DB.users||[]; DB.clients = DB.clients||[]; DB.companies = DB.companies||[]; DB.logs = DB.logs||[];
+  DB.leadsExcluidos = DB.leadsExcluidos||[]; // ids de leads do site que foram excluídos de propósito — não reimportar
+  DB.empresas = DB.empresas||[]; // agrupa vários titulares (clients) sob a mesma empresa/CNPJ
   DB.clients.forEach(migrateClientShape);
   // Empresas Filiadas agora vem direto da tabela real cdl_base — a mesma que o site
   // consulta pra saber se um CNPJ já é associado. Sem essa etapa, o que era cadastrado
@@ -2253,7 +2255,8 @@ async function importarLeadsDoSite(opts){
   if(!leads.length){ if(!silencioso) toast('Nenhum lead encontrado no Supabase ainda.'); return; }
 
   const jaImportados = new Set(DB.clients.map(c=>c.leadOrigemId).filter(Boolean));
-  const novosLeads = leads.filter(l=>!jaImportados.has(l.id));
+  const excluidos = new Set(DB.leadsExcluidos || []);
+  const novosLeads = leads.filter(l=>!jaImportados.has(l.id) && !excluidos.has(l.id));
   if(!novosLeads.length){ if(!silencioso) toast('Nenhum lead novo — tudo que chegou do site já está no CRM.'); return; }
 
   let criados = 0;
@@ -2273,11 +2276,13 @@ async function importarLeadsDoSite(opts){
       anexosTitular.push({ id:uid('anx'), nome:'Orçamento gerado na simulação.pdf', dataUrl: getPublicStorageUrl(lead.orcamento_path), criadoEm: lead.received_at||nowISO() });
     }
     const donoLink = lead.vendedor_codigo ? DB.users.find(u=>u.codigoVendedor===lead.vendedor_codigo) : null;
+    const empresaId = getOrCreateEmpresaByCnpj(cnpjLimpo, lead.empresa || '').id;
     const client = {
       id: uid('cli'), status:'ativo', origemSite: !!lead.novo_afiliado,
       etapaAdesao: lead.contrato_assinado ? 'documentacao' : 'nova',
       pendencia:{ativa:false,motivo:''},
       leadOrigemId: lead.id,
+      empresaId,
       titular:{
         nome: lead.nome || (primeiraVida&&primeiraVida.nome) || '',
         cpf: onlyDigits((primeiraVida&&primeiraVida.cpf) || ''),
@@ -2335,12 +2340,12 @@ const CDL_TIERS_PORTAL = {
   associado: { nome: "Associado CDL",               valor: 145.00 },
 };
 const ADESAO_STAGES = [
-  { id:'nova',          label:'Nova adesão',        short:'Nova',        color:'#6366F1' },
-  { id:'documentacao',  label:'Documentação',       short:'Documentos',  color:'#F79009' },
-  { id:'questionario',  label:'Questionário de Risco',short:'Questionário',color:'#EC4899' },
-  { id:'conferencia',   label:'Conferência interna',short:'Conferência', color:'#8B5CF6' },
-  { id:'enviado',       label:'Enviado à Unimed',   short:'Na Unimed',   color:'#0EA5E9' },
-  { id:'ativo',         label:'Ativo',              short:'Ativo',       color:'#12B76A' },
+  { id:'nova',          label:'Cadastro',                    short:'Cadastro',    color:'#6366F1' },
+  { id:'documentacao',  label:'Validação de Documentos',     short:'Documentos',  color:'#F79009' },
+  { id:'questionario',  label:'Questionário de Risco',       short:'Questionário',color:'#EC4899' },
+  { id:'conferencia',   label:'Conferência de Plano',        short:'Conferência', color:'#8B5CF6' },
+  { id:'enviado',       label:'Implantação',                 short:'Implantação', color:'#0EA5E9' },
+  { id:'ativo',         label:'Ativo',                       short:'Ativo',       color:'#12B76A' },
 ];
 
 /* =========================================================
@@ -2533,6 +2538,7 @@ async function criarOrcamentoNoPortal(){
   // Qualquer usuário que crie um orçamento leva o próprio código junto — mesma regra
   // usada quando a venda chega pelo link pessoal (não é só o papel "vendedor").
   const vendedores = CURRENT_USER.codigoVendedor ? [{ vendedorId: CURRENT_USER.id, percentual: 100, pagamentos: [] }] : [];
+  const empresaId = getOrCreateEmpresaByCnpj(cnpj, razaoSocial).id;
   const dadosBasePDF = { razaoSocial, cnpj, nome, celular, email };
   let c, pdfInfo;
 
@@ -2555,6 +2561,7 @@ async function criarOrcamentoNoPortal(){
 
     c = {
       id: uid('cli'), status:'ativo', origemSite:false, etapaAdesao:'nova', pendencia:{ativa:false,motivo:''},
+      empresaId,
       titular:{ nome, cpf:'', dataNascimento:'', celular, email, razaoSocial, cnpj, anexos:[] },
       dependentes:[],
       planoEscolhido: plano.nome,
@@ -2581,6 +2588,7 @@ async function criarOrcamentoNoPortal(){
 
     c = {
       id: uid('cli'), status:'ativo', origemSite:false, etapaAdesao:'nova', pendencia:{ativa:false,motivo:''},
+      empresaId,
       titular:{ nome, cpf:'', dataNascimento:'', celular, email, razaoSocial, cnpj, anexos:[] },
       dependentes:[],
       planoEscolhido: null,
@@ -2665,15 +2673,26 @@ function viewClientes(){
 }
 
 let ACTIVE_CLIENT_ID = null;
-async function deleteClientFromList(id){
-  if(!isAdmin()){ toast('Só o administrador pode excluir clientes.'); return; }
+// Função central de exclusão — usada tanto pelo botão da lista quanto pelo do modal.
+// Registra o lead de origem (se tiver) numa lista de "não reimportar", senão a
+// importação automática do site traz o cliente de volta sozinha.
+async function excluirClientePorId(id){
   const c = DB.clients.find(x=>x.id===id);
-  if(!(await showConfirmDialog(`Excluir "${c?.titular?.razaoSocial || c?.titular?.nome}" definitivamente? Essa ação não pode ser desfeita.`))) return;
-  await registrarLog('Cliente excluído', c?.titular?.razaoSocial || c?.titular?.nome || id);
+  if(!c) return false;
+  if(!(await showConfirmDialog(`Excluir "${c.titular?.razaoSocial || c.titular?.nome}" definitivamente? Essa ação não pode ser desfeita.`))) return false;
+  if(c.leadOrigemId){
+    DB.leadsExcluidos = DB.leadsExcluidos || [];
+    if(!DB.leadsExcluidos.includes(c.leadOrigemId)) DB.leadsExcluidos.push(c.leadOrigemId);
+  }
+  await registrarLog('Cliente excluído', c.titular?.razaoSocial || c.titular?.nome || id);
   DB.clients = DB.clients.filter(x=>x.id!==id);
   await persist();
-  switchView('clientes');
   toast('Cliente excluído.');
+  return true;
+}
+async function deleteClientFromList(id){
+  if(!isAdmin()){ toast('Só o administrador pode excluir clientes.'); return; }
+  if(await excluirClientePorId(id)) switchView('clientes');
 }
 let ACTIVE_PERSON_TAB = 'nova';
 let PENDING_ANEXO_TARGET = null;
@@ -2715,10 +2734,80 @@ function migrateClientShape(c){
   if(!c.comissoes) c.comissoes = [];
   if(!c.statusPagamento) c.statusPagamento = 'em_dia'; // 'em_dia' | 'inadimplente'
   if(!c.historicoPagamento) c.historicoPagamento = [];
+  if(!c.empresaId) c.empresaId = getOrCreateEmpresaByCnpj(c.titular.cnpj, c.titular.razaoSocial).id;
 }
 function switchPersonTab(tab){ ACTIVE_PERSON_TAB = tab; renderClientModal(); }
 function countAnexos(c){ return (c.titular.anexos||[]).length + c.dependentes.reduce((n,d)=>n+(d.anexos||[]).length, 0); }
 function temAnexoChamado(c, nome){ return (c.titular.anexos||[]).some(a=>a.nome===nome); }
+
+/* =========================================================
+   EMPRESA — agrupa vários titulares (cada um com seu próprio plano e etapa)
+   sob a mesma empresa/CNPJ. Documentos da empresa (contrato social, ficha
+   associativa CDL etc.) ficam guardados uma única vez aqui, não repetidos
+   por titular.
+   ========================================================= */
+function getOrCreateEmpresaByCnpj(cnpj, razaoSocial){
+  DB.empresas = DB.empresas || [];
+  let emp = DB.empresas.find(e=>e.cnpj===cnpj);
+  if(!emp){
+    emp = { id:uid('org'), cnpj: cnpj||'', razaoSocial: razaoSocial||'', anexos:[], criadoEm:nowISO() };
+    DB.empresas.push(emp);
+  } else if(razaoSocial && !emp.razaoSocial){
+    emp.razaoSocial = razaoSocial;
+  }
+  return emp;
+}
+function getEmpresaDoCliente(c){
+  DB.empresas = DB.empresas || [];
+  return DB.empresas.find(e=>e.id===c.empresaId) || getOrCreateEmpresaByCnpj(c.titular.cnpj, c.titular.razaoSocial);
+}
+function getTitularesDaEmpresa(empresaId){
+  return DB.clients.filter(c=>c.empresaId===empresaId);
+}
+async function adicionarTitularNaEmpresa(empresaId){
+  const emp = DB.empresas.find(e=>e.id===empresaId);
+  if(!emp) return;
+  const c = {
+    id:uid('cli'), status:'ativo', origemSite:false, etapaAdesao:'nova', pendencia:{ativa:false,motivo:''},
+    empresaId: emp.id,
+    titular:{ nome:'', cpf:'', dataNascimento:'', celular:'', email:'', cargo:'', razaoSocial:emp.razaoSocial, cnpj:emp.cnpj, anexos:[] },
+    dependentes:[], planoEscolhido:'',
+    vendedores:[], comissoes:[],
+    historico:[{ data:nowISO(), texto:`Novo titular adicionado à empresa ${emp.razaoSocial||emp.cnpj}.` }],
+    emailAdministradoraEnviadoEm:null, criadoEm:nowISO(),
+  };
+  DB.clients.push(c);
+  await registrarLog('Novo titular adicionado', emp.razaoSocial||emp.cnpj);
+  await persist();
+  openClientModal(c.id);
+  toast('Novo titular criado nesta empresa — já pode preencher os dados dele.');
+}
+async function addAnexoEmpresa(event){
+  const files = Array.from(event.target.files||[]);
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  if(!c || !files.length) return;
+  const emp = getEmpresaDoCliente(c);
+  emp.anexos = emp.anexos || [];
+  let pending = files.length;
+  files.forEach(file=>{
+    const reader = new FileReader();
+    reader.onload = async ()=>{
+      emp.anexos.push({ id:uid('anx'), nome:file.name, dataUrl:reader.result, criadoEm:nowISO() });
+      c.historico.push({ data:nowISO(), texto:`Documento da empresa anexado: ${file.name}.` });
+      pending--;
+      if(pending===0){ await persist(); renderClientModal(); toast('Documento(s) da empresa anexado(s).'); }
+    };
+    reader.readAsDataURL(file);
+  });
+  event.target.value = '';
+}
+async function removeAnexoEmpresa(anexoIdx){
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  const emp = getEmpresaDoCliente(c);
+  emp.anexos.splice(anexoIdx, 1);
+  await persist();
+  renderClientModal();
+}
 
 function renderClientModal(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
@@ -2819,15 +2908,34 @@ function renderClientModal(){
       </div>
     `;
   } else if(ACTIVE_PERSON_TAB==='documentacao'){
+    const emp = getEmpresaDoCliente(c);
+    const outrosTitulares = getTitularesDaEmpresa(c.empresaId).filter(x=>x.id!==c.id);
     const pessoas = [{ label: `Titular — ${t.nome || 'sem nome'}`, anexos: t.anexos||[], type:'titular' }]
       .concat(c.dependentes.map((d,i)=>({ label: `Dependente ${i+1} — ${d.nome || 'sem nome'}`, anexos: d.anexos||[], type:'dependente', index:i })));
     tabContent = `
+      <div class="anexo-person-block" style="border-color:var(--navy);">
+        <div class="anexo-person-head">
+          <span><b>Documentos da empresa</b> — ${emp.razaoSocial || t.razaoSocial || 'sem nome'}</span>
+          <label class="btn-ghost" style="padding:6px 12px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" multiple style="display:none;" onchange="addAnexoEmpresa(event)"></label>
+        </div>
+        <p style="font-size:11px;color:var(--text-muted);margin:2px 0 8px;">CNPJ · Contrato Social ou CCMEI · E-mail e telefone · RG/CPF/CNH do responsável · Comprovante de residência · Ficha associativa da CDL</p>
+        <div class="attachment-list">
+          ${(emp.anexos||[]).map((a,i)=>`
+            <span class="attachment-chip">${ICONS.file}${a.nome}
+              <a href="${a.dataUrl}" download="${a.nome}" style="color:inherit;display:flex;">${ICONS.upload}</a>
+              <button onclick="removeAnexoEmpresa(${i})">${ICONS.close}</button>
+            </span>
+          `).join('') || `<span style="font-size:12px;color:var(--text-faint);">Nenhum documento da empresa ainda.</span>`}
+        </div>
+        ${outrosTitulares.length ? `<p style="font-size:11px;color:var(--text-muted);margin-top:10px;">Esses documentos valem pra todos os titulares desta empresa — ${outrosTitulares.length} outro(s): ${outrosTitulares.map(x=>`<a href="#" onclick="openClientModal('${x.id}');return false;" style="color:var(--navy);font-weight:700;">${x.titular.nome||'sem nome'}</a>`).join(', ')}.</p>` : ''}
+      </div>
       ${pessoas.map(p=>`
         <div class="anexo-person-block">
           <div class="anexo-person-head">
             <span>${p.label}</span>
             <button class="btn-ghost" style="padding:6px 12px;font-size:11.5px;" onclick="triggerAttach('${p.type}'${p.index!==undefined?','+p.index:''})">${ICONS.upload} Anexar</button>
           </div>
+          <p style="font-size:11px;color:var(--text-muted);margin:2px 0 8px;">RG/CPF ou CNH · Comprovante de endereço · E-mail e telefone</p>
           <div class="attachment-list">
             ${p.anexos.map((a,i)=>`
               <span class="attachment-chip">${ICONS.file}${a.nome}
@@ -2838,7 +2946,6 @@ function renderClientModal(){
           </div>
         </div>
       `).join('')}
-      <p style="font-size:11px;color:var(--text-faint);margin-top:6px;">Cada pessoa tem seus próprios documentos (RG, comprovantes, carteirinha) — mais fácil de conferir antes de enviar pra administradora.</p>
       ${(c._leadFaturaPath || c._leadInternalPdfPath) ? `
         <div class="pendencia-banner" style="background:var(--navy-tint);color:var(--navy);border-color:var(--border);margin-top:12px;">
           <b>📎 Arquivos do site (Storage privado):</b>
@@ -2882,7 +2989,7 @@ function renderClientModal(){
         </button>
       </div>
       <div style="margin-top:14px;">${fichaFeita ? `<span class="status-pill ativo">✓ Ficha já preenchida</span>` : `<span class="status-pill inativo">Ficha ainda não preenchida</span>`}</div>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Confira os anexos (aba Documentos) e o questionário de risco antes de marcar como conferido e avançar pra "Na Unimed".</p>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Confira os anexos (aba Documentos) e o questionário de risco antes de marcar como conferido e avançar pra "Implantação".</p>
     `;
   } else if(ACTIVE_PERSON_TAB==='enviado'){
     tabContent = `
@@ -2922,7 +3029,7 @@ function renderClientModal(){
     { id:'documentacao', label:`Documentos (${countAnexos(c)})` },
     { id:'questionario', label:'Questionário' },
     { id:'conferencia', label:'Conferência' },
-    { id:'enviado', label:'Na Unimed' },
+    { id:'enviado', label:'Implantação' },
     ...(isAdmin()||isVendedor() ? [{ id:'ativo', label:'Comissão' }] : []),
     { id:'historico', label:'Histórico' },
   ];
@@ -2943,6 +3050,16 @@ function renderClientModal(){
         <button class="modal-close" onclick="closeModal(); switchView('clientes');">${ICONS.close}</button>
       </div>
       <div class="modal-body">
+
+        <div class="modal-section" style="padding-bottom:14px;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);">Titulares desta empresa:</span>
+            ${getTitularesDaEmpresa(c.empresaId).map(x=>`
+              <button class="btn-ghost" style="padding:5px 10px;font-size:11.5px;${x.id===c.id?'background:var(--navy);color:#fff;':''}" onclick="openClientModal('${x.id}')">${x.titular.nome||'sem nome'}${x.planoEscolhido?` · ${x.planoEscolhido}`:''}</button>
+            `).join('')}
+            <button class="btn-ghost" style="padding:5px 10px;font-size:11.5px;" onclick="adicionarTitularNaEmpresa('${c.empresaId}')">${ICONS.plus} Novo titular</button>
+          </div>
+        </div>
 
         <div class="modal-section">
           <div class="modal-section-title">Etapa da adesão</div>
@@ -4005,6 +4122,14 @@ async function updateTitular(){
   if(JSON.stringify(c.titular) !== antes){
     c.historico.push({ data:nowISO(), texto:'Dados do titular atualizados.' });
   }
+  // se o CNPJ mudou (ex: cliente novo em branco sendo preenchido pela 1ª vez),
+  // realinha com a empresa certa em vez de deixar preso na empresa vazia inicial
+  const empresaAntes = DB.empresas.find(e=>e.id===c.empresaId);
+  if(!empresaAntes || empresaAntes.cnpj !== c.titular.cnpj){
+    c.empresaId = getOrCreateEmpresaByCnpj(c.titular.cnpj, c.titular.razaoSocial).id;
+  } else if(c.titular.razaoSocial && !empresaAntes.razaoSocial){
+    empresaAntes.razaoSocial = c.titular.razaoSocial;
+  }
   await persist();
 }
 async function updatePlano(){
@@ -4082,14 +4207,10 @@ async function removeAnexoFrom(type, index, anexoIdx){
 }
 async function deleteClient(){
   if(!isAdmin()){ toast('Só o administrador pode excluir clientes.'); return; }
-  if(!(await showConfirmDialog('Excluir este cliente definitivamente? Essa ação não pode ser desfeita.'))) return;
-  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
-  await registrarLog('Cliente excluído', `${c?.titular?.razaoSocial || c?.titular?.nome || ACTIVE_CLIENT_ID}`);
-  DB.clients = DB.clients.filter(c=>c.id!==ACTIVE_CLIENT_ID);
-  await persist();
-  closeModal();
-  switchView('clientes');
-  toast('Cliente excluído.');
+  if(await excluirClientePorId(ACTIVE_CLIENT_ID)){
+    closeModal();
+    switchView('clientes');
+  }
 }
 
 /* ---- Envio de e-mail para a administradora (mailto: com resumo da triagem) ---- */
