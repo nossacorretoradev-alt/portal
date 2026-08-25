@@ -2272,6 +2272,7 @@ async function importarLeadsDoSite(opts){
     if(lead.orcamento_path){
       anexosTitular.push({ id:uid('anx'), nome:'Orçamento gerado na simulação.pdf', dataUrl: getPublicStorageUrl(lead.orcamento_path), criadoEm: lead.received_at||nowISO() });
     }
+    const donoLink = lead.vendedor_codigo ? DB.users.find(u=>u.codigoVendedor===lead.vendedor_codigo) : null;
     const client = {
       id: uid('cli'), status:'ativo', origemSite: !!lead.novo_afiliado,
       etapaAdesao: lead.contrato_assinado ? 'documentacao' : 'nova',
@@ -2288,8 +2289,11 @@ async function importarLeadsDoSite(opts){
       planoEscolhido: lead.plano_escolhido || '',
       qtdVidasInformada: lead.qtd_vidas || vidas.length || null,
       vendedorCodigo: lead.vendedor_codigo || null,
+      vendedores: donoLink ? [{ vendedorId: donoLink.id, percentual: 100, pagamentos: [] }] : [],
+      comissoes: [],
       historico:[
         { data:nowISO(), texto:'Importado automaticamente do simulador (site).' },
+        ...(donoLink ? [{ data:nowISO(), texto:`Venda identificada automaticamente com ${donoLink.nome} (código ${lead.vendedor_codigo}).` }] : []),
         ...(anexosTitular.length ? [{ data:nowISO(), texto:`${anexosTitular.length} documento(s) recebido(s) do site: ${anexosTitular.map(a=>a.nome).join(', ')}.` }] : []),
       ],
       emailAdministradoraEnviadoEm:null, criadoEm: lead.received_at || nowISO(),
@@ -2526,7 +2530,9 @@ async function criarOrcamentoNoPortal(){
   if(!nome || !celular){ toast('Preencha nome e celular do responsável.'); return; }
   if(!ORC_PLANO_ESCOLHIDO){ toast('Escolha uma opção.'); return; }
 
-  const vendedores = isVendedor() ? [{ vendedorId: CURRENT_USER.id, percentual: 100, pagamentos: [] }] : [];
+  // Qualquer usuário que crie um orçamento leva o próprio código junto — mesma regra
+  // usada quando a venda chega pelo link pessoal (não é só o papel "vendedor").
+  const vendedores = CURRENT_USER.codigoVendedor ? [{ vendedorId: CURRENT_USER.id, percentual: 100, pagamentos: [] }] : [];
   const dadosBasePDF = { razaoSocial, cnpj, nome, celular, email };
   let c, pdfInfo;
 
@@ -2555,7 +2561,7 @@ async function criarOrcamentoNoPortal(){
       qtdVidasInformada: vidas,
       planoCdlEscolhido: cdlTier ? CDL_TIERS_PORTAL[cdlTier].nome : null,
       vendedores, comissoes:[],
-      historico:[{ data:nowISO(), texto:`Orçamento de plano de saúde criado direto no portal por ${CURRENT_USER.nome}${isVendedor()?' (vendedor, código '+(CURRENT_USER.codigoVendedor||'—')+')':''} — ${plano.nome} para ${vidas} vida(s).` }],
+      historico:[{ data:nowISO(), texto:`Orçamento de plano de saúde criado direto no portal por ${CURRENT_USER.nome}${CURRENT_USER.codigoVendedor?' (código '+CURRENT_USER.codigoVendedor+')':''} — ${plano.nome} para ${vidas} vida(s).` }],
       emailAdministradoraEnviadoEm:null, criadoEm:nowISO(),
     };
   } else {
@@ -2580,7 +2586,7 @@ async function criarOrcamentoNoPortal(){
       planoEscolhido: null,
       planoCdlEscolhido: tier.nome,
       vendedores, comissoes:[],
-      historico:[{ data:nowISO(), texto:`Orçamento de adesão CDL criado direto no portal por ${CURRENT_USER.nome}${isVendedor()?' (vendedor, código '+(CURRENT_USER.codigoVendedor||'—')+')':''} — ${tier.nome}.` }],
+      historico:[{ data:nowISO(), texto:`Orçamento de adesão CDL criado direto no portal por ${CURRENT_USER.nome}${CURRENT_USER.codigoVendedor?' (código '+CURRENT_USER.codigoVendedor+')':''} — ${tier.nome}.` }],
       emailAdministradoraEnviadoEm:null, criadoEm:nowISO(),
     };
   }
@@ -2862,7 +2868,9 @@ function renderClientModal(){
     `;
   } else if(ACTIVE_PERSON_TAB==='conferencia'){
     const fichaFeita = temAnexoChamado(c,'Ficha de Adesao Unimed.pdf');
+    const dsFeita = temAnexoChamado(c,'Declaracao de Saude e RC.pdf');
     tabContent = `
+      ${!dsFeita ? `<div class="pendencia-banner" style="margin-bottom:14px;">⚠️ O questionário de risco ainda não foi preenchido — recomendamos preencher ele primeiro (aba "Questionário"), os dados de lá ajudam a preencher a Ficha Unimed.</div>` : ''}
       <div class="doc-actions-grid">
         <button type="button" class="doc-action-card" onclick="openFichaUnimedModal()">
           <span class="doc-icon">${ICONS.clipboard}</span>
@@ -3712,9 +3720,9 @@ async function gerarQuestionarioRisco(){
   c.titular.anexos.push({ id:uid('anx'), nome:'Declaracao de Saude e RC.pdf', dataUrl, criadoEm:nowISO() });
   c.historico.push({ data:nowISO(), texto:'Declaração de Saúde e Redução de Carência preenchida e anexada.' });
   await persist();
-  ACTIVE_PERSON_TAB = 'documentacao';
+  ACTIVE_PERSON_TAB = 'conferencia'; // próximo passo natural: preencher a Ficha Unimed
   renderClientModal();
-  toast('Declaração de Saúde gerada e anexada ao Titular.');
+  toast('✓ Declaração de Saúde anexada. Agora é só preencher a Ficha Unimed abaixo.');
 }
 
 /* ---------- FICHA / PROPOSTA DE ADESÃO UNIMED (PME PORTE III) ---------- */
@@ -4379,7 +4387,7 @@ function viewUsuarios(){
               <td onclick="openUserModal('${u.id}')" style="cursor:pointer;">${u.email}</td>
               <td onclick="openUserModal('${u.id}')" style="cursor:pointer;">${papelLabel(u.papel)}</td>
               <td onclick="openUserModal('${u.id}')" style="cursor:pointer;"><span class="status-pill ${u.ativo?'ativo':'inativo'}">${u.ativo?'Ativo':'Inativo'}</span></td>
-              <td>${u.papel==='vendedor' && u.codigoVendedor ? `<button class="btn-ghost" style="padding:5px 10px;font-size:11.5px;" onclick="event.stopPropagation();openUserModal('${u.id}')">${ICONS.upload} Código ${u.codigoVendedor}</button>` : '—'}</td>
+              <td>${u.codigoVendedor ? `<button class="btn-ghost" style="padding:5px 10px;font-size:11.5px;" onclick="event.stopPropagation();openUserModal('${u.id}')">${ICONS.upload} Código ${u.codigoVendedor}</button>` : '—'}</td>
             </tr>
           `).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--text-faint);">Nenhum usuário encontrado.</td></tr>`}
         </tbody>
@@ -4421,7 +4429,7 @@ function openUserModal(id){
   const perms = u.permissoes || defaultPermissoes();
   const modLabels = { crm:'CRM', clientes:'Clientes', empresas:'Empresas Filiadas', usuarios:'Usuários & Permissões' };
   openModalHTML(`
-    <div class="modal">
+    <div class="modal modal-wide">
       <div class="modal-head">
         <div class="mh-info"><div class="mh-name">${id?'Editar usuário':'Novo usuário'}</div></div>
         <button class="modal-close" onclick="closeModal()">${ICONS.close}</button>
@@ -4441,25 +4449,65 @@ function openUserModal(id){
             </select>
           </div>
         </div>
+        <div class="fg" style="margin-top:12px;">
+          <label>CPF</label>
+          <input id="us_cpf" value="${u.cpf||''}" placeholder="000.000.000-00" oninput="this.value=maskCpf(this.value)"/>
+        </div>
         <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:12.5px;">
           <input type="checkbox" id="us_ativo" ${u.ativo?'checked':''}/> Usuário ativo
         </label>
 
-        <div class="fg" id="celularVendedorBlock" style="margin-top:14px;${u.papel!=='vendedor'?'display:none;':''}">
-          <label>Celular / WhatsApp do vendedor</label>
-          <input id="us_celular" value="${u.celular||''}" placeholder="(84) 99999-9999" oninput="this.value=maskPhone(this.value)"/>
-          <p style="font-size:11px;color:var(--text-faint);margin-top:4px;">É pra esse número que o botão de WhatsApp do cliente vai apontar, quando ele entrar pelo link deste vendedor.</p>
+        <div class="modal-section-title" style="margin-top:22px;">Endereço</div>
+        <div class="field-grid">
+          <div class="fg"><label>CEP</label><input id="us_cep" value="${u.cep||''}" oninput="this.value=maskCep(this.value)" onchange="buscarCep('us_cep',{rua:'us_endereco',bairro:'us_bairro',cidade:'us_cidade',estado:'us_estado'})"/></div>
+          <div class="fg"><label>Endereço</label><input id="us_endereco" value="${u.endereco||''}"/></div>
+        </div>
+        <div class="field-grid" style="margin-top:12px;">
+          <div class="fg"><label>Número</label><input id="us_numero" value="${u.numero||''}"/></div>
+          <div class="fg"><label>Complemento</label><input id="us_complemento" value="${u.complemento||''}"/></div>
+        </div>
+        <div class="field-grid" style="margin-top:12px;">
+          <div class="fg"><label>Bairro</label><input id="us_bairro" value="${u.bairro||''}"/></div>
+          <div class="fg" style="display:grid;grid-template-columns:1fr 70px;gap:8px;">
+            <div><label>Cidade</label><input id="us_cidade" value="${u.cidade||''}"/></div>
+            <div><label>UF</label><input id="us_estado" value="${u.estado||''}" maxlength="2"/></div>
+          </div>
         </div>
 
-        ${u.papel==='vendedor' && id ? `
+        <div class="modal-section-title" style="margin-top:22px;">Dados bancários e PIX</div>
+        <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 12px;">Usado pra registrar o repasse de comissão — não é obrigatório preencher agora.</p>
+        <div class="field-grid">
+          <div class="fg"><label>Banco</label><input id="us_banco" value="${u.banco||''}" placeholder="Ex: Nubank, Banco do Brasil..."/></div>
+          <div class="fg"><label>Agência</label><input id="us_agencia" value="${u.agencia||''}"/></div>
+        </div>
+        <div class="field-grid" style="margin-top:12px;">
+          <div class="fg"><label>Conta</label><input id="us_conta" value="${u.conta||''}"/></div>
+          <div class="fg"><label>Tipo de chave PIX</label>
+            <select id="us_pixTipo">
+              <option value="cpf" ${u.pixTipo==='cpf'?'selected':''}>CPF</option>
+              <option value="email" ${u.pixTipo==='email'?'selected':''}>E-mail</option>
+              <option value="telefone" ${u.pixTipo==='telefone'?'selected':''}>Telefone</option>
+              <option value="aleatoria" ${u.pixTipo==='aleatoria'?'selected':''}>Chave aleatória</option>
+            </select>
+          </div>
+        </div>
+        <div class="fg" style="margin-top:12px;"><label>Chave PIX</label><input id="us_pixChave" value="${u.pixChave||''}" placeholder="Cole a chave PIX aqui"/></div>
+
+        <div class="fg" id="celularVendedorBlock" style="margin-top:14px;">
+          <label>Celular / WhatsApp (usado no link pessoal)</label>
+          <input id="us_celular" value="${u.celular||''}" placeholder="(84) 99999-9999" oninput="this.value=maskPhone(this.value)"/>
+          <p style="font-size:11px;color:var(--text-faint);margin-top:4px;">É pra esse número que o botão de WhatsApp do cliente vai apontar, quando ele entrar pelo link pessoal dessa pessoa.</p>
+        </div>
+
+        ${id ? `
         <div style="margin-top:16px;padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-alt);">
-          <div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;">Link pessoal deste vendedor</div>
-          <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:10px;">Quem entrar por esse link e simular vira uma venda já identificada com este vendedor no CRM.</p>
+          <div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;">Link pessoal</div>
+          <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:10px;">Quem entrar por esse link e simular vira uma venda já identificada com esta pessoa no CRM${u.papel==='vendedor' ? ' e conta pra comissão dela' : ''}.</p>
           <div class="fg"><input id="vendedorLinkInput" value="${getVendedorLink(u)}" readonly onclick="this.select()"></div>
           <div class="btn-row" style="margin-top:8px;">
             <button type="button" class="btn-ghost" onclick="copiarVendedorLink()">${ICONS.upload} Copiar link</button>
           </div>
-          <p style="font-size:11px;color:var(--text-faint);margin-top:8px;">Código deste vendedor: <b>${u.codigoVendedor || '(gerado ao salvar)'}</b></p>
+          <p style="font-size:11px;color:var(--text-faint);margin-top:8px;">Código pessoal: <b>${u.codigoVendedor || '(gerado ao salvar)'}</b></p>
         </div>` : ''}
 
         <div id="permBlock" style="margin-top:18px;${u.papel!=='atendente'?'display:none;':''}">
@@ -4490,7 +4538,6 @@ function openUserModal(id){
 }
 function renderClientModalPermVisibility(papel){
   document.getElementById('permBlock').style.display = papel==='atendente' ? 'block' : 'none';
-  document.getElementById('celularVendedorBlock').style.display = papel==='vendedor' ? 'block' : 'none';
 }
 async function saveUser(id){
   const nome = document.getElementById('us_nome').value.trim();
@@ -4500,7 +4547,26 @@ async function saveUser(id){
   const ativo = document.getElementById('us_ativo').checked;
   const celular = onlyDigits(document.getElementById('us_celular').value);
   if(!nome || !email){ toast('Preencha nome e e-mail.'); return; }
-  if(papel==='vendedor' && !celular){ toast('Informe o celular/WhatsApp do vendedor.'); return; }
+
+  const cpf = onlyDigits(document.getElementById('us_cpf').value);
+  if(cpf && !isValidCPF(cpf)){ toast('⚠️ Esse CPF não é válido — confira os números.'); return; }
+
+  const dadosExtras = {
+    cpf,
+    cep: onlyDigits(document.getElementById('us_cep').value),
+    endereco: document.getElementById('us_endereco').value.trim(),
+    numero: document.getElementById('us_numero').value.trim(),
+    complemento: document.getElementById('us_complemento').value.trim(),
+    bairro: document.getElementById('us_bairro').value.trim(),
+    cidade: document.getElementById('us_cidade').value.trim(),
+    estado: document.getElementById('us_estado').value.trim().toUpperCase(),
+    banco: document.getElementById('us_banco').value.trim(),
+    agencia: document.getElementById('us_agencia').value.trim(),
+    conta: document.getElementById('us_conta').value.trim(),
+    pixTipo: document.getElementById('us_pixTipo').value,
+    pixChave: document.getElementById('us_pixChave').value.trim(),
+  };
+
   const permissoes = {};
   MODULOS.forEach(m=>{
     permissoes[m] = {
@@ -4514,28 +4580,26 @@ async function saveUser(id){
   let u;
   if(id){
     u = DB.users.find(x=>x.id===id);
-    Object.assign(u, { nome, email, papel, ativo, permissoes, celular });
+    Object.assign(u, { nome, email, papel, ativo, permissoes, celular, ...dadosExtras });
     if(senhaField) u.senha = senhaField;
   }else{
     if(!senhaField){ toast('Defina uma senha para o novo usuário.'); return; }
-    u = { id:uid('usr'), nome, email, senha:senhaField, papel, ativo, permissoes, celular, criadoEm:todayISO() };
+    u = { id:uid('usr'), nome, email, senha:senhaField, papel, ativo, permissoes, celular, ...dadosExtras, criadoEm:todayISO() };
     DB.users.push(u);
     userId = u.id;
   }
-  // vendedor precisa de um código de 5 dígitos único pro link pessoal — gera só uma vez
-  if(papel==='vendedor' && !u.codigoVendedor){
+  // qualquer usuário pode ter um código de 5 dígitos único pro link pessoal — gera só uma vez
+  if(!u.codigoVendedor){
     u.codigoVendedor = gerarCodigoVendedorUnico();
   }
   await registrarLog(id ? 'Usuário editado' : 'Usuário criado', `${nome} (${papelLabel(papel)})`);
   await persist();
-  if(papel==='vendedor' && u.codigoVendedor){
-    try{ await sincronizarVendedorPublico(u); }catch(e){ console.warn('Falha ao sincronizar vendedor público', e); }
+  if(u.codigoVendedor){
+    try{ await sincronizarVendedorPublico(u); }catch(e){ console.warn('Falha ao sincronizar link público', e); }
   }
   closeModal();
   switchView('usuarios');
-  if(papel==='vendedor'){
-    openUserModal(userId); // reabre já mostrando o link pessoal com o código gerado
-  }
+  openUserModal(userId); // reabre já mostrando o link pessoal com o código gerado
   toast('Usuário salvo.');
 }
 function gerarCodigoVendedorUnico(){
