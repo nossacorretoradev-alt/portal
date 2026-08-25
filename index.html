@@ -2354,6 +2354,14 @@ const ADESAO_STAGES = [
    isso aqui é só um segundo jeito de entrar a mesma informação, direto no portal.
    ========================================================= */
 let ORC_MODE = 'plano'; // 'plano' | 'cdl'
+function preencherCnpjPorEmpresaExistente(){
+  const nomeDigitado = document.getElementById('orc_razao').value.trim();
+  const emp = (DB.empresas||[]).find(e=>e.razaoSocial===nomeDigitado);
+  if(emp && emp.cnpj){
+    document.getElementById('orc_cnpj').value = maskCnpj(emp.cnpj);
+    toast(`Empresa já cadastrada — CNPJ preenchido automaticamente.`);
+  }
+}
 function viewOrcamento(){
   return `
   <div class="view-wrap">
@@ -2371,7 +2379,11 @@ function viewOrcamento(){
     <div class="modal-section" style="border-bottom:none;">
       <div class="modal-section-title">Dados do cliente</div>
       <div class="field-grid">
-        <div class="fg"><label>Razão social / Empresa</label><input id="orc_razao" placeholder="Nome da empresa"/></div>
+        <div class="fg"><label>Razão social / Empresa</label><input id="orc_razao" list="orc_empresasList" placeholder="Digite ou escolha uma empresa já cadastrada" oninput="preencherCnpjPorEmpresaExistente()"/>
+          <datalist id="orc_empresasList">
+            ${(DB.empresas||[]).filter(e=>e.razaoSocial).map(e=>`<option value="${e.razaoSocial}" data-cnpj="${e.cnpj}"></option>`).join('')}
+          </datalist>
+        </div>
         <div class="fg"><label>CNPJ</label><input id="orc_cnpj" placeholder="00.000.000/0000-00" oninput="this.value=maskCnpj(this.value)"/></div>
       </div>
       <div class="field-grid" style="margin-top:12px;">
@@ -4446,7 +4458,9 @@ let EMPRESA_FILTER = { origemSite:'' };
 function viewEmpresas(){
   if(!isAdmin()) return `<div class="view-wrap"><div class="empty-state">${ICONS.empty}<div>Esses dados são visíveis só para administradores.</div></div></div>`;
   const canCriar = true;
-  const list = DB.companies.filter(e => EMPRESA_FILTER.origemSite!=='1' || e.origemSite);
+  const q = (EMPRESA_FILTER.q||'').toLowerCase();
+  const list = DB.companies.filter(e => EMPRESA_FILTER.origemSite!=='1' || e.origemSite)
+    .filter(e => !q || (e.nome||'').toLowerCase().includes(q) || (e.cnpj||'').includes(q) || (e.contatoNome||'').toLowerCase().includes(q));
   return `
   <div class="view-wrap">
     <div class="page-head">
@@ -4456,11 +4470,13 @@ function viewEmpresas(){
         ${canCriar?`<button class="btn-primary" onclick="openEmpresaModal()">${ICONS.plus} Nova empresa</button>`:''}
       </div>
     </div>
-    <div style="margin-bottom:16px;">
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
+      <input class="search-input" style="max-width:340px;" placeholder="Buscar por nome, CNPJ ou contato..." value="${EMPRESA_FILTER.q||''}" oninput="EMPRESA_FILTER.q=this.value; switchView('empresas')"/>
       <label class="site-flag-check" style="margin:0;">
         <input type="checkbox" ${EMPRESA_FILTER.origemSite==='1'?'checked':''} onchange="EMPRESA_FILTER.origemSite=this.checked?'1':''; switchView('empresas')"/>
         <span>Só novos afiliados via site</span>
       </label>
+      <span style="font-size:11.5px;color:var(--text-muted);">${list.length} de ${DB.companies.length} empresa(s)</span>
     </div>
     <table class="table-simple">
       <thead><tr><th>Empresa</th><th>CNPJ</th><th>Contato</th><th>Status</th></tr></thead>
@@ -4472,7 +4488,7 @@ function viewEmpresas(){
             <td>${e.contatoNome||'—'} ${e.contatoCelular?('· '+maskPhone(e.contatoCelular)):''}</td>
             <td><span class="status-pill ${e.status==='ativa'?'ativo':'inativo'}">${e.status==='ativa'?'Ativa':'Inativa'}</span></td>
           </tr>
-        `).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--text-faint);">Nenhuma empresa cadastrada.</td></tr>`}
+        `).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--text-faint);">Nenhuma empresa encontrada.</td></tr>`}
       </tbody>
     </table>
   </div>`;
