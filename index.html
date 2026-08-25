@@ -1870,9 +1870,45 @@ document.addEventListener('keydown',(e)=>{
 /* =========================================================
    BASE DE DADOS (em memória, persistida via window.storage)
    ========================================================= */
-let DB = { users:[], leads:[], clients:[], companies:[] };
+let DB = { users:[], leads:[], clients:[], companies:[], logs:[] };
 let CURRENT_USER = null;
 let CURRENT_VIEW = 'inicio';
+let SESSAO_IP_INFO = null; // cache — busca só uma vez por sessão, não a cada ação
+
+async function getIpInfo(){
+  if(SESSAO_IP_INFO) return SESSAO_IP_INFO;
+  try{
+    const res = await fetch('https://ipapi.co/json/');
+    const data = await res.json();
+    SESSAO_IP_INFO = {
+      ip: data.ip || '—',
+      local: [data.city, data.region, data.country_name].filter(Boolean).join(', ') || '—',
+    };
+  }catch(e){
+    SESSAO_IP_INFO = { ip: '—', local: '—' };
+  }
+  return SESSAO_IP_INFO;
+}
+async function registrarLog(acao, detalhes){
+  try{
+    const info = await getIpInfo();
+    DB.logs = DB.logs || [];
+    DB.logs.push({
+      id: uid('log'),
+      data: nowISO(),
+      usuario: CURRENT_USER ? CURRENT_USER.nome : '—',
+      papel: CURRENT_USER ? CURRENT_USER.papel : '—',
+      acao,
+      detalhes: detalhes || '',
+      ip: info.ip,
+      local: info.local,
+    });
+    // mantém só os últimos 2000 registros, pra não crescer pra sempre
+    if(DB.logs.length > 2000) DB.logs = DB.logs.slice(-2000);
+  }catch(e){
+    console.warn('Não foi possível registrar o log.', e);
+  }
+}
 
 async function persist(){
   try{
@@ -1891,7 +1927,7 @@ async function loadDB(){
     try{ await persist(); }catch(e2){ console.warn('Não foi possível salvar a base inicial.', e2); }
   }
   // garante que módulos novos existam mesmo em bases antigas
-  DB.users = DB.users||[]; DB.clients = DB.clients||[]; DB.companies = DB.companies||[];
+  DB.users = DB.users||[]; DB.clients = DB.clients||[]; DB.companies = DB.companies||[]; DB.logs = DB.logs||[];
   // Empresas Filiadas agora vem direto da tabela real cdl_base — a mesma que o site
   // consulta pra saber se um CNPJ já é associado. Sem essa etapa, o que era cadastrado
   // aqui no portal nunca aparecia pro simulador.
@@ -1995,9 +2031,12 @@ async function doLogin(){
   err.classList.remove('show');
   CURRENT_USER = u;
   localStorage.setItem(SESSION_KEY, u.id);
+  await registrarLog('Login realizado');
+  await persist();
   enterApp();
 }
 function logout(){
+  if(CURRENT_USER){ registrarLog('Logout realizado').then(()=>persist()); }
   CURRENT_USER = null;
   localStorage.removeItem(SESSION_KEY);
   if(window.__leadsPollInterval){ clearInterval(window.__leadsPollInterval); window.__leadsPollInterval = null; }
@@ -2064,13 +2103,18 @@ function renderTopbar(){
    ========================================================= */
 function getNavItems(){
   if(isVendedor()){
-    return [{id:'minhacomissao', label:'Minha Comissão', icon:ICONS.money}];
+    return [
+      {id:'orcamento', label:'Novo Orçamento', icon:ICONS.plus},
+      {id:'minhacomissao', label:'Minha Comissão', icon:ICONS.money},
+    ];
   }
   const items = [{id:'inicio', label:'Início', icon:ICONS.home}];
+  items.push({id:'orcamento', label:'Novo Orçamento', icon:ICONS.plus});
   if(hasPerm('crm','ver')) items.push({id:'crm', label:'CRM', icon:ICONS.kanban});
   if(hasPerm('clientes','ver')) items.push({id:'clientes', label:'Clientes', icon:ICONS.clients});
   if(isAdmin()) items.push({id:'empresas', label:'Empresas Filiadas', icon:ICONS.building});
   if(isAdmin()) items.push({id:'comissoes', label:'Comissões', icon:ICONS.money});
+  if(isAdmin()) items.push({id:'logs', label:'Log do sistema', icon:ICONS.admin});
   if(isAdmin()) items.push({id:'usuarios', label:'Usuários & Permissões', icon:ICONS.admin});
   return items;
 }
@@ -2100,6 +2144,8 @@ function switchView(id){
   else if(id==='comissoes') views.innerHTML = viewComissoes();
   else if(id==='usuarios') views.innerHTML = viewUsuarios();
   else if(id==='minhacomissao') views.innerHTML = viewMinhaComissao();
+  else if(id==='orcamento') { views.innerHTML = viewOrcamento(); initOrcamentoForm(); }
+  else if(id==='logs') { if(isAdmin()) views.innerHTML = viewLogs(); }
 }
 
 /* =========================================================
@@ -2251,6 +2297,19 @@ async function importarLeadsDoSite(opts){
    VIEW: CLIENTES (lista + ficha com abas Titular / Dependentes)
    ========================================================= */
 let CLIENT_FILTER = { q:'', status:'', origemSite:'' };
+// Mesmos valores reais usados no simulador do site — mantidos aqui também pra
+// o vendedor conseguir montar um orçamento direto no portal, sem precisar do link público.
+const PLAN_VALUES_PORTAL = {
+  essencial:  { nome: "Essencial Flex II",           tag: "Enfermaria",   valor: 243.49 },
+  greenEnf:   { nome: "Green Flex II — Enfermaria",  tag: "Enfermaria",   valor: 318.66 },
+  greenApt:   { nome: "Green Flex II — Apartamento", tag: "Apartamento",  valor: 447.50 }
+};
+const CDL_TIERS_PORTAL = {
+  spc1:      { nome: "Usuário SPC — Faturamento 1", valor: 48.00 },
+  spc2:      { nome: "Usuário SPC — Faturamento 2", valor: 58.00 },
+  spc3:      { nome: "Usuário SPC — Faturamento 3", valor: 78.00 },
+  associado: { nome: "Associado CDL",               valor: 145.00 },
+};
 const ADESAO_STAGES = [
   { id:'nova',          label:'Nova adesão',        short:'Nova',        color:'#6366F1' },
   { id:'documentacao',  label:'Documentação',       short:'Documentos',  color:'#F79009' },
@@ -2259,7 +2318,134 @@ const ADESAO_STAGES = [
   { id:'enviado',       label:'Enviado à Unimed',   short:'Na Unimed',   color:'#0EA5E9' },
   { id:'ativo',         label:'Ativo',              short:'Ativo',       color:'#12B76A' },
 ];
-// paleta viva pra avatares — a cor de cada pessoa é sempre a mesma, calculada a partir do nome
+
+/* =========================================================
+   VIEW: NOVO ORÇAMENTO (vendedor ou admin criando direto no portal)
+   O link público com o código do vendedor continua existindo normalmente —
+   isso aqui é só um segundo jeito de entrar a mesma informação, direto no portal.
+   ========================================================= */
+function viewOrcamento(){
+  return `
+  <div class="view-wrap">
+    <div class="page-head"><div class="page-title">Novo Orçamento</div></div>
+    <p style="font-size:12.5px;color:var(--text-muted);margin:-8px 0 20px;">
+      Preencha os dados do cliente e gere um orçamento na hora — já cai direto no CRM
+      ${isVendedor() ? 'identificado com o seu código de vendedor' : ''}, sem precisar do link público do site.
+    </p>
+
+    <div class="modal-section" style="border-bottom:none;">
+      <div class="modal-section-title">Dados do cliente</div>
+      <div class="field-grid">
+        <div class="fg"><label>Razão social / Empresa</label><input id="orc_razao" placeholder="Nome da empresa"/></div>
+        <div class="fg"><label>CNPJ</label><input id="orc_cnpj" placeholder="00.000.000/0000-00" oninput="this.value=maskCnpj(this.value)"/></div>
+      </div>
+      <div class="field-grid" style="margin-top:12px;">
+        <div class="fg"><label>Nome do responsável</label><input id="orc_nome" placeholder="Nome completo"/></div>
+        <div class="fg"><label>Celular / WhatsApp</label><input id="orc_celular" placeholder="(00) 00000-0000" oninput="this.value=maskPhone(this.value)"/></div>
+      </div>
+      <div class="field-grid" style="margin-top:12px;">
+        <div class="fg"><label>E-mail</label><input id="orc_email" placeholder="email@empresa.com.br"/></div>
+        <div class="fg"><label>Número de vidas</label><input id="orc_vidas" type="number" min="1" value="1" oninput="calcularOrcamentoPortal()"/></div>
+      </div>
+
+      <div class="fg" style="margin-top:16px;">
+        <label>A empresa já é associada CDL Mossoró?</label>
+        <select id="orc_associado" onchange="toggleOrcCdlTier()">
+          <option value="sim">Sim, já é associada</option>
+          <option value="nao">Não — vamos filiar agora</option>
+        </select>
+      </div>
+      <div class="fg" id="orc_cdlTierBlock" style="margin-top:12px;display:none;">
+        <label>Categoria de associado desejada</label>
+        <select id="orc_cdlTier">
+          ${Object.entries(CDL_TIERS_PORTAL).map(([k,t])=>`<option value="${k}">${t.nome} — ${formatBRL(t.valor)}/mês</option>`).join('')}
+        </select>
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-title">Escolha o plano</div>
+      <div id="orc_planosArea" class="doc-actions-grid" style="grid-template-columns:1fr 1fr 1fr;"></div>
+    </div>
+
+    <div class="modal-section" style="border-bottom:none;">
+      <button class="btn-primary" id="orc_submitBtn" onclick="criarOrcamentoNoPortal()" disabled>Escolha um plano acima para continuar</button>
+    </div>
+  </div>`;
+}
+let ORC_PLANO_ESCOLHIDO = null;
+function initOrcamentoForm(){
+  ORC_PLANO_ESCOLHIDO = null;
+  calcularOrcamentoPortal();
+}
+function toggleOrcCdlTier(){
+  const ehAssociado = document.getElementById('orc_associado').value === 'sim';
+  document.getElementById('orc_cdlTierBlock').style.display = ehAssociado ? 'none' : 'block';
+}
+function calcularOrcamentoPortal(){
+  const vidas = Math.max(1, Number(document.getElementById('orc_vidas').value || 1));
+  const area = document.getElementById('orc_planosArea');
+  area.innerHTML = Object.entries(PLAN_VALUES_PORTAL).map(([key,p])=>{
+    const total = p.valor * vidas;
+    const selecionado = ORC_PLANO_ESCOLHIDO === key;
+    return `
+      <button type="button" class="doc-action-card" style="flex-direction:column;align-items:flex-start;gap:2px;${selecionado?'border-color:var(--navy);background:var(--navy-tint);':''}" onclick="selecionarPlanoOrcamento('${key}')">
+        <b style="font-size:12.5px;">${p.nome}</b>
+        <span style="font-size:11px;color:var(--text-muted);">${p.tag}</span>
+        <span style="font-size:17px;font-weight:800;color:var(--navy);margin-top:4px;">${formatBRL(total)}<small style="font-size:10.5px;font-weight:500;">/mês</small></span>
+        <span style="font-size:10.5px;color:var(--text-muted);">${formatBRL(p.valor)}/vida × ${vidas}</span>
+      </button>`;
+  }).join('');
+}
+function selecionarPlanoOrcamento(key){
+  ORC_PLANO_ESCOLHIDO = key;
+  calcularOrcamentoPortal();
+  const btn = document.getElementById('orc_submitBtn');
+  btn.disabled = false;
+  btn.textContent = `Gerar orçamento — ${PLAN_VALUES_PORTAL[key].nome}`;
+}
+async function criarOrcamentoNoPortal(){
+  const razaoSocial = document.getElementById('orc_razao').value.trim();
+  const cnpj = onlyDigits(document.getElementById('orc_cnpj').value);
+  const nome = document.getElementById('orc_nome').value.trim();
+  const celular = document.getElementById('orc_celular').value.trim();
+  const email = document.getElementById('orc_email').value.trim();
+  const vidas = Math.max(1, Number(document.getElementById('orc_vidas').value || 1));
+  const ehAssociado = document.getElementById('orc_associado').value === 'sim';
+  const cdlTier = ehAssociado ? null : document.getElementById('orc_cdlTier').value;
+
+  if(!razaoSocial || cnpj.length!==14){ toast('Preencha a razão social e um CNPJ válido.'); return; }
+  if(!nome || !celular){ toast('Preencha nome e celular do responsável.'); return; }
+  if(!ORC_PLANO_ESCOLHIDO){ toast('Escolha um plano.'); return; }
+
+  const plano = PLAN_VALUES_PORTAL[ORC_PLANO_ESCOLHIDO];
+  const vendedores = isVendedor() ? [{ vendedorId: CURRENT_USER.id, percentual: 100, pagamentos: [] }] : [];
+
+  const c = {
+    id: uid('cli'), status:'ativo', origemSite:false, etapaAdesao:'nova', pendencia:{ativa:false,motivo:''},
+    titular:{
+      nome, cpf:'', dataNascimento:'', celular, email, razaoSocial, cnpj, anexos:[],
+    },
+    dependentes:[],
+    planoEscolhido: plano.nome,
+    qtdVidasInformada: vidas,
+    planoCdlEscolhido: cdlTier ? CDL_TIERS_PORTAL[cdlTier].nome : null,
+    vendedores,
+    comissoes:[],
+    historico:[{
+      data:nowISO(),
+      texto:`Orçamento criado direto no portal por ${CURRENT_USER.nome}${isVendedor()?' (vendedor, código '+ (CURRENT_USER.codigoVendedor||'—') +')':''} — ${plano.nome} para ${vidas} vida(s).`
+    }],
+    emailAdministradoraEnviadoEm:null, criadoEm:nowISO(),
+  };
+  DB.clients.push(c);
+  await registrarLog('Orçamento criado no portal', `${razaoSocial} — ${plano.nome} (${vidas} vidas)`);
+  await persist();
+  toast('Orçamento criado — já está no CRM.');
+  openClientModal(c.id);
+}
+
+
 const AVATAR_PALETTE = ['#6366F1','#EC4899','#F79009','#12B76A','#0EA5E9','#8B5CF6','#F04438','#14B8A6','#EAB308','#F472B6'];
 function avatarColor(name){
   const str = name || '?';
@@ -2777,6 +2963,31 @@ async function removePagamentoVendedor(vendedorId, pagamentoId){
 /* =========================================================
    VIEW: COMISSÕES (relatório do admin, por vendedor)
    ========================================================= */
+function viewLogs(){
+  const logs = (DB.logs || []).slice().reverse();
+  return `
+  <div class="view-wrap">
+    <div class="page-head">
+      <div class="page-title">Log do sistema</div>
+      <span style="font-size:11.5px;color:var(--text-muted);">${logs.length} registro(s) · visível só pro administrador</span>
+    </div>
+    <table class="table-simple">
+      <thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Detalhes</th><th>IP</th><th>Localização</th></tr></thead>
+      <tbody>
+        ${logs.map(l=>`
+          <tr>
+            <td style="white-space:nowrap;">${fmtDateTime(l.data)}</td>
+            <td><b>${l.usuario}</b><br><span style="font-size:10.5px;color:var(--text-muted);">${papelLabel(l.papel)}</span></td>
+            <td>${l.acao}</td>
+            <td style="color:var(--text-muted);font-size:11.5px;">${l.detalhes||'—'}</td>
+            <td style="font-family:monospace;font-size:11.5px;">${l.ip}</td>
+            <td style="font-size:11.5px;">${l.local}</td>
+          </tr>
+        `).join('') || `<tr><td colspan="6" style="text-align:center;color:var(--text-faint);">Nenhum registro ainda.</td></tr>`}
+      </tbody>
+    </table>
+  </div>`;
+}
 function viewComissoes(){
   const vendedores = DB.users.filter(u=>u.papel==='vendedor');
   const linhas = vendedores.map(v=>{
@@ -3524,6 +3735,7 @@ async function setEtapaAdesao(stageId){
   c.etapaAdesao = stageId;
   if(stageId === 'ativo') c.status = 'ativo';
   c.historico.push({ data:nowISO(), texto:`Etapa da adesão alterada para "${stageLabel(stageId)}".` });
+  await registrarLog('Etapa da adesão alterada', `${c.titular.razaoSocial||c.titular.nome} → ${stageLabel(stageId)}`);
   await persist();
   renderClientModal();
 }
@@ -3649,7 +3861,10 @@ async function removeAnexoFrom(type, index, anexoIdx){
   renderClientModal();
 }
 async function deleteClient(){
+  if(!isAdmin()){ toast('Só o administrador pode excluir clientes.'); return; }
   if(!(await showConfirmDialog('Excluir este cliente definitivamente? Essa ação não pode ser desfeita.'))) return;
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  await registrarLog('Cliente excluído', `${c?.titular?.razaoSocial || c?.titular?.nome || ACTIVE_CLIENT_ID}`);
   DB.clients = DB.clients.filter(c=>c.id!==ACTIVE_CLIENT_ID);
   await persist();
   closeModal();
@@ -3719,6 +3934,7 @@ async function confirmSendAdminEmail(mailtoBase){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   c.emailAdministradoraEnviadoEm = nowISO();
   c.historico.push({ data:nowISO(), texto:'E-mail de adesão preparado e enviado para a administradora.' });
+  await registrarLog('E-mail enviado à administradora', c.titular.razaoSocial||c.titular.nome);
   await persist();
   renderClientModal();
   toast('E-mail preparado — confira seu programa de e-mail.');
@@ -3901,9 +4117,12 @@ async function saveEmpresa(id){
   }
 }
 async function deleteEmpresa(id){
+  if(!isAdmin()){ toast('Só o administrador pode excluir empresas.'); return; }
   if(!(await showConfirmDialog('Excluir esta empresa da base de filiadas? Ela também deixa de ser reconhecida no simulador.'))) return;
   try{
     await sbDelete('cdl_base', 'cnpj', id);
+    await registrarLog('Empresa filiada excluída', id);
+    await persist();
     await loadCompaniesFromCdlBase();
     closeModal();
     switchView('empresas');
@@ -4051,6 +4270,7 @@ async function saveUser(id){
   if(papel==='vendedor' && !u.codigoVendedor){
     u.codigoVendedor = gerarCodigoVendedorUnico();
   }
+  await registrarLog(id ? 'Usuário editado' : 'Usuário criado', `${nome} (${papelLabel(papel)})`);
   await persist();
   if(papel==='vendedor' && u.codigoVendedor){
     try{ await sincronizarVendedorPublico(u); }catch(e){ console.warn('Falha ao sincronizar vendedor público', e); }
@@ -4082,9 +4302,12 @@ async function sincronizarVendedorPublico(u){
   await sbUpsert('vendedores_publico', [{ codigo: u.codigoVendedor, nome: u.nome, ativo: !!u.ativo, celular: u.celular||null }], 'codigo');
 }
 async function deleteUser(id){
+  if(!isAdmin()){ toast('Só o administrador pode excluir usuários.'); return; }
   if(id===CURRENT_USER.id){ toast('Você não pode excluir seu próprio usuário.'); return; }
   if(!(await showConfirmDialog('Excluir este usuário?'))) return;
+  const u = DB.users.find(x=>x.id===id);
   DB.users = DB.users.filter(u=>u.id!==id);
+  await registrarLog('Usuário excluído', u?.nome || id);
   await persist();
   closeModal();
   switchView('usuarios');
