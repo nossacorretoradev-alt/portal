@@ -2140,6 +2140,19 @@ function renderMobileTabbar(){
     `<button class="mtab-btn ${CURRENT_VIEW===item.id?'active':''}" onclick="switchView('${item.id}')"><span class="mtab-icon">${item.icon}</span><span class="mtab-label">${item.label.split(' ')[0]}</span></button>`
   ).join('');
 }
+// Redesenha a tela (pra aplicar um filtro de busca) SEM tirar o foco de quem
+// está digitando — sem isso, cada letra digitada faria o campo perder o foco,
+// travando a busca depois da primeira letra.
+function refiltrar(viewId, inputId){
+  const antes = document.getElementById(inputId);
+  const cursorPos = antes ? antes.selectionStart : null;
+  switchView(viewId);
+  const depois = document.getElementById(inputId);
+  if(depois){
+    depois.focus();
+    if(cursorPos !== null) depois.setSelectionRange(cursorPos, cursorPos);
+  }
+}
 function switchView(id){
   CURRENT_VIEW = id;
   renderNav();
@@ -2211,7 +2224,7 @@ function viewCRM(){
       <div class="page-title">CRM</div>
       ${canCriar?`<button class="btn-primary" onclick="openClientModal(null,true)">${ICONS.plus} Novo card</button>`:''}
     </div>
-    <input class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar por nome, empresa, CNPJ ou celular..." value="${CRM_FILTER.q}" oninput="CRM_FILTER.q=this.value; switchView('crm')"/>
+    <input id="crmSearchInput" class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar por nome, empresa, CNPJ ou celular..." value="${CRM_FILTER.q}" oninput="CRM_FILTER.q=this.value; refiltrar('crm','crmSearchInput')"/>
     <div class="kanban-board">
       ${ADESAO_STAGES.map(st=>`
         <div class="kanban-col" style="border-top:3px solid ${st.color};">
@@ -2652,7 +2665,7 @@ function viewClientes(){
       ${canCriar?`<button class="btn-primary" onclick="openClientModal(null,true)">${ICONS.plus} Novo cliente</button>`:''}
     </div>
     <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center;">
-      <input class="search-input" placeholder="Buscar por nome, empresa ou CNPJ..." value="${CLIENT_FILTER.q}" oninput="CLIENT_FILTER.q=this.value; switchView('clientes')"/>
+      <input id="clientesSearchInput" class="search-input" placeholder="Buscar por nome, empresa ou CNPJ..." value="${CLIENT_FILTER.q}" oninput="CLIENT_FILTER.q=this.value; refiltrar('clientes','clientesSearchInput')"/>
       <select class="search-input" onchange="CLIENT_FILTER.status=this.value; switchView('clientes')">
         <option value="">Todos os status</option>
         <option value="ativo" ${CLIENT_FILTER.status==='ativo'?'selected':''}>Ativos</option>
@@ -3317,7 +3330,7 @@ function viewGestao(){
     </div>
 
     <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center;">
-      <input class="search-input" placeholder="Buscar por nome, empresa ou CNPJ..." value="${GESTAO_FILTER.q}" oninput="GESTAO_FILTER.q=this.value; switchView('gestao')"/>
+      <input id="gestaoSearchInput" class="search-input" placeholder="Buscar por nome, empresa ou CNPJ..." value="${GESTAO_FILTER.q}" oninput="GESTAO_FILTER.q=this.value; refiltrar('gestao','gestaoSearchInput')"/>
       <select class="search-input" onchange="GESTAO_FILTER.status=this.value; switchView('gestao')">
         <option value="">Todos</option>
         <option value="em_dia" ${GESTAO_FILTER.status==='em_dia'?'selected':''}>Em dia</option>
@@ -3378,7 +3391,7 @@ function viewComissoes(){
       <div class="page-title">Comissões</div>
       <button class="btn-ghost" onclick="exportComissoesCSV()">${ICONS.upload} Exportar CSV</button>
     </div>
-    <input class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar vendedor por nome ou e-mail..." value="${COM_FILTER.q}" oninput="COM_FILTER.q=this.value; switchView('comissoes')"/>
+    <input id="comissoesSearchInput" class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar vendedor por nome ou e-mail..." value="${COM_FILTER.q}" oninput="COM_FILTER.q=this.value; refiltrar('comissoes','comissoesSearchInput')"/>
     <div class="stat-grid">
       <div class="stat-card"><div class="sc-val">${formatBRL(totalGeral)}</div><div class="sc-label">Total já liberado (todos os vendedores)</div></div>
       <div class="stat-card"><div class="sc-val">${vendedores.length}</div><div class="sc-label">Vendedores cadastrados</div></div>
@@ -4471,7 +4484,7 @@ function viewEmpresas(){
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
-      <input class="search-input" style="max-width:340px;" placeholder="Buscar por nome, CNPJ ou contato..." value="${EMPRESA_FILTER.q||''}" oninput="EMPRESA_FILTER.q=this.value; switchView('empresas')"/>
+      <input id="empresasSearchInput" class="search-input" style="max-width:340px;" placeholder="Buscar por nome, CNPJ ou contato..." value="${EMPRESA_FILTER.q||''}" oninput="EMPRESA_FILTER.q=this.value; refiltrar('empresas','empresasSearchInput')"/>
       <label class="site-flag-check" style="margin:0;">
         <input type="checkbox" ${EMPRESA_FILTER.origemSite==='1'?'checked':''} onchange="EMPRESA_FILTER.origemSite=this.checked?'1':''; switchView('empresas')"/>
         <span>Só novos afiliados via site</span>
@@ -4672,7 +4685,7 @@ function viewUsuarios(){
     </div>
 
     ${USUARIOS_SUBTAB==='lista' ? `
-      <input class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar por nome, e-mail ou papel..." value="${USER_FILTER.q}" oninput="USER_FILTER.q=this.value; switchView('usuarios')"/>
+      <input id="usuariosSearchInput" class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar por nome, e-mail ou papel..." value="${USER_FILTER.q}" oninput="USER_FILTER.q=this.value; refiltrar('usuarios','usuariosSearchInput')"/>
       <table class="table-simple">
         <thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Status</th><th>Link pessoal</th></tr></thead>
         <tbody>
@@ -4699,7 +4712,7 @@ function viewLogsContent(){
   });
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-      <input class="search-input" style="max-width:340px;" placeholder="Buscar por usuário, ação, IP, local..." value="${LOG_FILTER.q}" oninput="LOG_FILTER.q=this.value; switchView('usuarios')"/>
+      <input id="logSearchInput" class="search-input" style="max-width:340px;" placeholder="Buscar por usuário, ação, IP, local..." value="${LOG_FILTER.q}" oninput="LOG_FILTER.q=this.value; refiltrar('usuarios','logSearchInput')"/>
       <span style="font-size:11.5px;color:var(--text-muted);">${logs.length} registro(s) · visível só pro administrador</span>
     </div>
     <table class="table-simple">
