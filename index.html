@@ -2822,12 +2822,34 @@ function renderClientModal(){
 
   let tabContent = '';
   if(ACTIVE_PERSON_TAB==='nova'){
+    const emp = getEmpresaDoCliente(c);
     tabContent = `
       <div class="field-grid">
-        <div class="fg"><label>Razão social / Empresa</label><input id="cl_razao" value="${t.razaoSocial||''}" onchange="updateTitular()"/></div>
-        <div class="fg"><label>CNPJ</label><input id="cl_cnpj" value="${t.cnpj||''}" oninput="this.value=maskCnpj(this.value)" onchange="updateTitular()"/></div>
+        <div class="fg"><label>Razão social / Empresa</label><input id="emp_razao" value="${emp.razaoSocial||''}" onchange="updateEmpresa()"/></div>
+        <div class="fg"><label>CNPJ</label><input id="emp_cnpj" value="${emp.cnpj||''}" oninput="this.value=maskCnpj(this.value)" onchange="updateEmpresa()"/></div>
       </div>
       <div class="field-grid" style="margin-top:12px;">
+        <div class="fg"><label>CEP</label><input id="emp_cep" value="${emp.cep||''}" oninput="this.value=maskCep(this.value)" onchange="updateEmpresa(); buscarCep('emp_cep',{rua:'emp_endereco',bairro:'emp_bairro',cidade:'emp_cidade',estado:'emp_estado'})"/></div>
+        <div class="fg"><label>Endereço</label><input id="emp_endereco" value="${emp.endereco||''}" onchange="updateEmpresa()"/></div>
+      </div>
+      <div class="field-grid" style="margin-top:12px;">
+        <div class="fg"><label>Número</label><input id="emp_numero" value="${emp.numero||''}" onchange="updateEmpresa()"/></div>
+        <div class="fg"><label>Complemento</label><input id="emp_complemento" value="${emp.complemento||''}" onchange="updateEmpresa()"/></div>
+      </div>
+      <div class="field-grid" style="margin-top:12px;">
+        <div class="fg"><label>Bairro</label><input id="emp_bairro" value="${emp.bairro||''}" onchange="updateEmpresa()"/></div>
+        <div class="fg" style="display:grid;grid-template-columns:1fr 70px;gap:8px;">
+          <div><label>Cidade</label><input id="emp_cidade" value="${emp.cidade||''}" onchange="updateEmpresa()"/></div>
+          <div><label>UF</label><input id="emp_estado" value="${emp.estado||''}" maxlength="2" onchange="updateEmpresa()"/></div>
+        </div>
+      </div>
+      ${c.origemSite?`<div class="site-tag" style="margin-top:14px;font-size:11px;padding:4px 10px;">✓ Identificado automaticamente como novo afiliado via site</div>`:''}
+      <p style="font-size:11.5px;color:var(--text-muted);margin-top:18px;">Esses dados valem pra empresa inteira — se ela tiver mais de um titular, todos compartilham o mesmo CNPJ e endereço. Pra cadastrar as pessoas (titulares, dependentes e o plano de cada um), vá na aba "Pessoas".</p>
+    `;
+  } else if(ACTIVE_PERSON_TAB==='pessoas'){
+    tabContent = `
+      <div class="modal-section-title" style="margin-top:0;">Titular</div>
+      <div class="field-grid">
         <div class="fg"><label>Nome do titular</label><input id="cl_nome" value="${t.nome||''}" onchange="updateTitular()"/></div>
         <div class="fg"><label>CPF</label><input id="cl_cpf" value="${t.cpf||''}" oninput="this.value=maskCpf(this.value)" onchange="updateTitular()"/></div>
       </div>
@@ -2837,21 +2859,12 @@ function renderClientModal(){
       </div>
       <div class="field-grid" style="margin-top:12px;">
         <div class="fg"><label>E-mail</label><input id="cl_email" value="${t.email||''}" onchange="updateTitular()"/></div>
-        <div class="fg"><label>Plano escolhido</label><input id="cl_plano" value="${c.planoEscolhido||''}" onchange="updatePlano()"/></div>
-      </div>
-      <div class="field-grid" style="margin-top:12px;">
-        <div class="fg"><label>CEP</label><input id="cl_cep" value="${t.cep||''}" oninput="this.value=maskCep(this.value)" onchange="updateTitular(); buscarCep('cl_cep',{rua:'cl_endereco',bairro:'cl_bairro',cidade:'cl_cidade',estado:'cl_estado'})"/></div>
-        <div class="fg"><label>Endereço</label><input id="cl_endereco" value="${t.endereco||''}" onchange="updateTitular()"/></div>
-      </div>
-      <div class="field-grid" style="margin-top:12px;">
-        <div class="fg"><label>Número</label><input id="cl_numero" value="${t.numero||''}" onchange="updateTitular()"/></div>
-        <div class="fg"><label>Complemento</label><input id="cl_complemento" value="${t.complemento||''}" onchange="updateTitular()"/></div>
-      </div>
-      <div class="field-grid" style="margin-top:12px;">
-        <div class="fg"><label>Bairro</label><input id="cl_bairro" value="${t.bairro||''}" onchange="updateTitular()"/></div>
-        <div class="fg" style="display:grid;grid-template-columns:1fr 70px;gap:8px;">
-          <div><label>Cidade</label><input id="cl_cidade" value="${t.cidade||''}" onchange="updateTitular()"/></div>
-          <div><label>UF</label><input id="cl_estado" value="${t.estado||''}" maxlength="2" onchange="updateTitular()"/></div>
+        <div class="fg"><label>Plano escolhido por este titular</label>
+          <select id="cl_plano" onchange="updatePlano()">
+            <option value="">Selecione...</option>
+            ${Object.entries(PLAN_VALUES_PORTAL).map(([k,p])=>`<option value="${p.nome}" ${c.planoEscolhido===p.nome?'selected':''}>${p.nome} — ${formatBRL(p.valor)}/vida</option>`).join('')}
+            ${c.planoEscolhido && !Object.values(PLAN_VALUES_PORTAL).some(p=>p.nome===c.planoEscolhido) ? `<option value="${c.planoEscolhido}" selected>${c.planoEscolhido}</option>` : ''}
+          </select>
         </div>
       </div>
       <div class="field-grid" style="margin-top:12px;">
@@ -2874,11 +2887,11 @@ function renderClientModal(){
         </div>
       </div>
       <div class="fg" style="margin-top:12px;"><label>Nome da mãe</label><input id="cl_nomeMae" value="${t.nomeMae||''}" onchange="updateTitular()"/></div>
-      ${c.origemSite?`<div class="site-tag" style="margin-top:14px;font-size:11px;padding:4px 10px;">✓ Identificado automaticamente como novo afiliado via site</div>`:''}
       ${wppLink?`<a class="wpp-btn" style="margin-top:14px;" href="${wppLink}" target="_blank">${ICONS.wpp} Chamar titular no WhatsApp</a>`:''}
 
       <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border);">
-        <div class="modal-section-title" style="margin-bottom:12px;">Dependentes (${c.dependentes.length})</div>
+        <div class="modal-section-title" style="margin-bottom:4px;">Dependentes (${c.dependentes.length})</div>
+        <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">Todo dependente entra automaticamente no mesmo plano do titular acima — <b>${c.planoEscolhido||'nenhum plano escolhido ainda'}</b>.</p>
         ${c.dependentes.map((d,i)=>`
           <div class="dep-card">
             <div class="dep-card-head">
@@ -3035,6 +3048,7 @@ function renderClientModal(){
 
   const JOURNEY_TABS = [
     { id:'nova', label:'Dados' },
+    { id:'pessoas', label:`Pessoas (${1+c.dependentes.length})` },
     { id:'documentacao', label:`Documentos (${countAnexos(c)})` },
     { id:'questionario', label:'Questionário' },
     { id:'conferencia', label:'Conferência' },
@@ -4218,8 +4232,6 @@ async function togglePendencia(){
 async function updateTitular(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   const antes = JSON.stringify(c.titular);
-  c.titular.razaoSocial = document.getElementById('cl_razao').value.trim();
-  c.titular.cnpj = onlyDigits(document.getElementById('cl_cnpj').value);
   c.titular.nome = document.getElementById('cl_nome').value.trim();
   const cpfDigitado = onlyDigits(document.getElementById('cl_cpf').value);
   const cpfEl = document.getElementById('cl_cpf');
@@ -4233,28 +4245,50 @@ async function updateTitular(){
   c.titular.dataNascimento = document.getElementById('cl_nasc').value;
   c.titular.celular = document.getElementById('cl_celular').value.trim();
   c.titular.email = document.getElementById('cl_email').value.trim();
-  c.titular.cep = onlyDigits(document.getElementById('cl_cep').value);
-  c.titular.endereco = document.getElementById('cl_endereco').value.trim();
-  c.titular.numero = document.getElementById('cl_numero').value.trim();
-  c.titular.complemento = document.getElementById('cl_complemento').value.trim();
-  c.titular.bairro = document.getElementById('cl_bairro').value.trim();
-  c.titular.cidade = document.getElementById('cl_cidade').value.trim();
-  c.titular.estado = document.getElementById('cl_estado').value.trim().toUpperCase();
   c.titular.sexo = document.getElementById('cl_sexo').value;
   c.titular.estadoCivil = document.getElementById('cl_estadoCivil').value;
   c.titular.nomeMae = document.getElementById('cl_nomeMae').value.trim();
   if(JSON.stringify(c.titular) !== antes){
     c.historico.push({ data:nowISO(), texto:'Dados do titular atualizados.' });
   }
-  // se o CNPJ mudou (ex: cliente novo em branco sendo preenchido pela 1ª vez),
-  // realinha com a empresa certa em vez de deixar preso na empresa vazia inicial
-  const empresaAntes = DB.empresas.find(e=>e.id===c.empresaId);
-  if(!empresaAntes || empresaAntes.cnpj !== c.titular.cnpj){
-    c.empresaId = getOrCreateEmpresaByCnpj(c.titular.cnpj, c.titular.razaoSocial).id;
-  } else if(c.titular.razaoSocial && !empresaAntes.razaoSocial){
-    empresaAntes.razaoSocial = c.titular.razaoSocial;
+  await persist();
+}
+async function updateEmpresa(){
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  const emp = getEmpresaDoCliente(c);
+  const antes = JSON.stringify(emp);
+  emp.razaoSocial = document.getElementById('emp_razao').value.trim();
+  const cnpjNovo = onlyDigits(document.getElementById('emp_cnpj').value);
+  emp.cep = onlyDigits(document.getElementById('emp_cep').value);
+  emp.endereco = document.getElementById('emp_endereco').value.trim();
+  emp.numero = document.getElementById('emp_numero').value.trim();
+  emp.complemento = document.getElementById('emp_complemento').value.trim();
+  emp.bairro = document.getElementById('emp_bairro').value.trim();
+  emp.cidade = document.getElementById('emp_cidade').value.trim();
+  emp.estado = document.getElementById('emp_estado').value.trim().toUpperCase();
+
+  // se o CNPJ digitado já pertence a outra empresa cadastrada, funde nela em vez de duplicar
+  if(cnpjNovo && cnpjNovo !== emp.cnpj){
+    const outraComMesmoCnpj = DB.empresas.find(e=>e.cnpj===cnpjNovo && e.id!==emp.id);
+    if(outraComMesmoCnpj){
+      c.empresaId = outraComMesmoCnpj.id;
+      outraComMesmoCnpj.razaoSocial = outraComMesmoCnpj.razaoSocial || emp.razaoSocial;
+    } else {
+      emp.cnpj = cnpjNovo;
+    }
+  }
+  // mantém c.titular.razaoSocial/cnpj sincronizados em TODOS os titulares desta empresa —
+  // várias partes do sistema (PDFs, exportação Unimed, CRM) ainda leem esses campos ali.
+  const empresaFinal = DB.empresas.find(e=>e.id===c.empresaId);
+  getTitularesDaEmpresa(empresaFinal.id).forEach(x=>{
+    x.titular.razaoSocial = empresaFinal.razaoSocial;
+    x.titular.cnpj = empresaFinal.cnpj;
+  });
+  if(JSON.stringify(empresaFinal) !== antes){
+    c.historico.push({ data:nowISO(), texto:'Dados da empresa atualizados.' });
   }
   await persist();
+  renderClientModal(); // atualiza nome/CNPJ exibidos no cabeçalho e na barra de titulares
 }
 async function updatePlano(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
