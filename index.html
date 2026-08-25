@@ -1049,8 +1049,9 @@ input,select,textarea{font-family:inherit;}
 .person-tabs{ display:flex; gap:4px; background:var(--surface-alt); border:1px solid var(--border); border-radius:11px; padding:4px; width:fit-content; margin-bottom:16px; }
 .person-tab-btn{ padding:8px 18px; font-size:12.5px; font-weight:700; border-radius:8px; background:transparent; border:none; color:var(--text-muted); }
 .person-tab-btn.active{ background:var(--surface); color:var(--navy); box-shadow:var(--shadow-sm); }
-.journey-tabs{ display:flex; gap:2px; border-bottom:2px solid var(--border); margin:0 -22px 20px; padding:0 22px; overflow-x:auto; }
-.journey-tab-btn{ padding:11px 14px; font-size:12px; font-weight:700; background:transparent; border:none; color:var(--text-muted); white-space:nowrap; border-bottom:2px solid transparent; margin-bottom:-2px; flex-shrink:0; }
+.journey-tabs{ display:flex; flex-wrap:wrap; gap:2px 4px; border-bottom:2px solid var(--border); margin:0 -22px 20px; padding:0 22px 4px; }
+.journey-tab-btn{ padding:8px 10px; font-size:11.5px; font-weight:700; background:transparent; border:none; color:var(--text-muted); white-space:nowrap; border-bottom:2px solid transparent; margin-bottom:-2px; }
+@media (max-width:520px){ .journey-tab-btn{ padding:7px 8px; font-size:11px; } }
 .journey-tab-btn.active{ color:var(--navy); border-bottom-color:var(--navy); }
 .journey-tab-btn:hover{ color:var(--navy); }
 .journey-tab-content{ min-height:120px; }
@@ -1153,6 +1154,10 @@ input,select,textarea{font-family:inherit;}
 .modal-section-title .count-badge{ background:var(--navy-tint); color:var(--navy); font-size:10px; padding:1px 7px; border-radius:999px; text-transform:none; letter-spacing:0; }
 .doc-actions-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 @media (max-width:600px){ .doc-actions-grid{ grid-template-columns:1fr; } }
+.orc-planos-grid.cols-3{ grid-template-columns:1fr 1fr 1fr; }
+.orc-planos-grid.cols-2{ grid-template-columns:1fr 1fr; }
+@media (max-width:760px){ .orc-planos-grid.cols-3{ grid-template-columns:1fr 1fr; } }
+@media (max-width:520px){ .orc-planos-grid.cols-3, .orc-planos-grid.cols-2{ grid-template-columns:1fr; } }
 .doc-action-card{ display:flex; align-items:center; gap:11px; padding:13px 14px; border:1px solid var(--border); border-radius:12px; background:var(--surface-alt); text-align:left; cursor:pointer; font-size:12.5px; font-weight:700; color:var(--text); transition:.15s; width:100%; font-family:inherit; }
 .doc-action-card:hover{ border-color:var(--navy); background:var(--surface); box-shadow:var(--shadow-card); }
 .doc-action-card .doc-icon{ width:36px; height:36px; border-radius:10px; background:var(--navy-tint); color:var(--navy); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
@@ -1928,6 +1933,7 @@ async function loadDB(){
   }
   // garante que módulos novos existam mesmo em bases antigas
   DB.users = DB.users||[]; DB.clients = DB.clients||[]; DB.companies = DB.companies||[]; DB.logs = DB.logs||[];
+  DB.clients.forEach(migrateClientShape);
   // Empresas Filiadas agora vem direto da tabela real cdl_base — a mesma que o site
   // consulta pra saber se um CNPJ já é associado. Sem essa etapa, o que era cadastrado
   // aqui no portal nunca aparecia pro simulador.
@@ -2114,7 +2120,7 @@ function getNavItems(){
   if(hasPerm('clientes','ver')) items.push({id:'clientes', label:'Clientes', icon:ICONS.clients});
   if(isAdmin()) items.push({id:'empresas', label:'Empresas Filiadas', icon:ICONS.building});
   if(isAdmin()) items.push({id:'comissoes', label:'Comissões', icon:ICONS.money});
-  if(isAdmin()) items.push({id:'logs', label:'Log do sistema', icon:ICONS.admin});
+  if(isAdmin()) items.push({id:'gestao', label:'Gestão', icon:ICONS.building});
   if(isAdmin()) items.push({id:'usuarios', label:'Usuários & Permissões', icon:ICONS.admin});
   return items;
 }
@@ -2142,10 +2148,10 @@ function switchView(id){
   else if(id==='clientes') views.innerHTML = viewClientes();
   else if(id==='empresas') views.innerHTML = viewEmpresas();
   else if(id==='comissoes') views.innerHTML = viewComissoes();
+  else if(id==='gestao') views.innerHTML = viewGestao();
   else if(id==='usuarios') views.innerHTML = viewUsuarios();
   else if(id==='minhacomissao') views.innerHTML = viewMinhaComissao();
   else if(id==='orcamento') { views.innerHTML = viewOrcamento(); initOrcamentoForm(); }
-  else if(id==='logs') { if(isAdmin()) views.innerHTML = viewLogs(); }
 }
 
 /* =========================================================
@@ -2183,6 +2189,18 @@ function clientesVisiveisPara(lista){
   if(!isVendedor()) return lista;
   return lista.filter(c=>(c.vendedores||[]).some(v=>v.vendedorId===CURRENT_USER.id));
 }
+let CRM_FILTER = { q: '' };
+function crmVisiveis(){
+  let list = clientesVisiveisPara(DB.clients);
+  if(CRM_FILTER.q){
+    const q = CRM_FILTER.q.toLowerCase();
+    list = list.filter(c=>{
+      const t = c.titular||{};
+      return (t.nome||'').toLowerCase().includes(q) || (t.razaoSocial||'').toLowerCase().includes(q) || (t.cnpj||'').includes(q) || (t.celular||'').includes(q);
+    });
+  }
+  return list;
+}
 function viewCRM(){
   const canCriar = hasPerm('crm','criar');
   return `
@@ -2191,15 +2209,17 @@ function viewCRM(){
       <div class="page-title">CRM</div>
       ${canCriar?`<button class="btn-primary" onclick="openClientModal(null,true)">${ICONS.plus} Novo card</button>`:''}
     </div>
+    <input class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar por nome, empresa, CNPJ ou celular..." value="${CRM_FILTER.q}" oninput="CRM_FILTER.q=this.value; switchView('crm')"/>
     <div class="kanban-board">
       ${ADESAO_STAGES.map(st=>`
         <div class="kanban-col" style="border-top:3px solid ${st.color};">
-          <div class="kanban-col-title"><span style="display:flex;align-items:center;gap:7px;"><span style="width:8px;height:8px;border-radius:50%;background:${st.color};flex-shrink:0;"></span>${st.label}</span><span style="background:${st.color}22;color:${st.color};">${clientesVisiveisPara(DB.clients).filter(c=>c.etapaAdesao===st.id).length}</span></div>
-          ${clientesVisiveisPara(DB.clients).filter(c=>c.etapaAdesao===st.id).map(c=>`
+          <div class="kanban-col-title"><span style="display:flex;align-items:center;gap:7px;"><span style="width:8px;height:8px;border-radius:50%;background:${st.color};flex-shrink:0;"></span>${st.label}</span><span style="background:${st.color}22;color:${st.color};">${crmVisiveis().filter(c=>c.etapaAdesao===st.id).length}</span></div>
+          ${crmVisiveis().filter(c=>c.etapaAdesao===st.id).map(c=>`
             <div class="kanban-card" onclick="openClientModal('${c.id}')">
               <div class="kc-top">
                 <div class="kc-avatar" style="background:${avatarColor(c.titular.razaoSocial||c.titular.nome)};">${initials(c.titular.nome||c.titular.razaoSocial)}</div>
                 <div class="kc-name">${c.titular.razaoSocial||c.titular.nome} ${c.origemSite?`<span class="site-tag">Site</span>`:''}</div>
+                ${isAdmin()?`<button class="btn-danger" style="padding:3px 7px;margin-left:auto;flex-shrink:0;" title="Excluir" onclick="event.stopPropagation(); deleteClientFromList('${c.id}')">${ICONS.trash}</button>`:''}
               </div>
               <div class="kc-sub">${c.titular.nome||'—'} · ${maskPhone(c.titular.celular||'')||'—'}</div>
               ${c.planoEscolhido?`<div class="kc-plan-tag">${c.planoEscolhido}</div>`:''}
@@ -2324,14 +2344,20 @@ const ADESAO_STAGES = [
    O link público com o código do vendedor continua existindo normalmente —
    isso aqui é só um segundo jeito de entrar a mesma informação, direto no portal.
    ========================================================= */
+let ORC_MODE = 'plano'; // 'plano' | 'cdl'
 function viewOrcamento(){
   return `
   <div class="view-wrap">
     <div class="page-head"><div class="page-title">Novo Orçamento</div></div>
-    <p style="font-size:12.5px;color:var(--text-muted);margin:-8px 0 20px;">
-      Preencha os dados do cliente e gere um orçamento na hora — já cai direto no CRM
+    <p style="font-size:12.5px;color:var(--text-muted);margin:-8px 0 16px;">
+      Preencha os dados do cliente e gere um orçamento na hora, com PDF — já cai direto no CRM
       ${isVendedor() ? 'identificado com o seu código de vendedor' : ''}, sem precisar do link público do site.
     </p>
+
+    <div class="person-tabs" style="margin-bottom:20px;">
+      <button class="person-tab-btn ${ORC_MODE==='plano'?'active':''}" onclick="ORC_MODE='plano'; switchView('orcamento')">Plano de saúde</button>
+      <button class="person-tab-btn ${ORC_MODE==='cdl'?'active':''}" onclick="ORC_MODE='cdl'; switchView('orcamento')">Adesão CDL Mossoró</button>
+    </div>
 
     <div class="modal-section" style="border-bottom:none;">
       <div class="modal-section-title">Dados do cliente</div>
@@ -2345,38 +2371,39 @@ function viewOrcamento(){
       </div>
       <div class="field-grid" style="margin-top:12px;">
         <div class="fg"><label>E-mail</label><input id="orc_email" placeholder="email@empresa.com.br"/></div>
-        <div class="fg"><label>Número de vidas</label><input id="orc_vidas" type="number" min="1" value="1" oninput="calcularOrcamentoPortal()"/></div>
+        ${ORC_MODE==='plano' ? `<div class="fg"><label>Número de vidas</label><input id="orc_vidas" type="number" min="1" value="1" oninput="calcularOrcamentoPortal()"/></div>` : `<div></div>`}
       </div>
-
-      <div class="fg" style="margin-top:16px;">
-        <label>A empresa já é associada CDL Mossoró?</label>
-        <select id="orc_associado" onchange="toggleOrcCdlTier()">
-          <option value="sim">Sim, já é associada</option>
-          <option value="nao">Não — vamos filiar agora</option>
-        </select>
-      </div>
-      <div class="fg" id="orc_cdlTierBlock" style="margin-top:12px;display:none;">
-        <label>Categoria de associado desejada</label>
-        <select id="orc_cdlTier">
-          ${Object.entries(CDL_TIERS_PORTAL).map(([k,t])=>`<option value="${k}">${t.nome} — ${formatBRL(t.valor)}/mês</option>`).join('')}
-        </select>
-      </div>
+      ${ORC_MODE==='plano' ? `
+        <div class="fg" style="margin-top:16px;">
+          <label>A empresa já é associada CDL Mossoró?</label>
+          <select id="orc_associado" onchange="toggleOrcCdlTier()">
+            <option value="sim">Sim, já é associada</option>
+            <option value="nao">Não — vamos filiar agora</option>
+          </select>
+        </div>
+        <div class="fg" id="orc_cdlTierBlock" style="margin-top:12px;display:none;">
+          <label>Categoria de associado desejada</label>
+          <select id="orc_cdlTier">
+            ${Object.entries(CDL_TIERS_PORTAL).map(([k,t])=>`<option value="${k}">${t.nome} — ${formatBRL(t.valor)}/mês</option>`).join('')}
+          </select>
+        </div>
+      ` : ''}
     </div>
 
     <div class="modal-section">
-      <div class="modal-section-title">Escolha o plano</div>
-      <div id="orc_planosArea" class="doc-actions-grid" style="grid-template-columns:1fr 1fr 1fr;"></div>
+      <div class="modal-section-title">${ORC_MODE==='plano' ? 'Escolha o plano' : 'Escolha a categoria de associado'}</div>
+      <div id="orc_planosArea" class="doc-actions-grid orc-planos-grid ${ORC_MODE==='plano'?'cols-3':'cols-2'}"></div>
     </div>
 
     <div class="modal-section" style="border-bottom:none;">
-      <button class="btn-primary" id="orc_submitBtn" onclick="criarOrcamentoNoPortal()" disabled>Escolha um plano acima para continuar</button>
+      <button class="btn-primary" id="orc_submitBtn" onclick="criarOrcamentoNoPortal()" disabled>Escolha uma opção acima para continuar</button>
     </div>
   </div>`;
 }
 let ORC_PLANO_ESCOLHIDO = null;
 function initOrcamentoForm(){
   ORC_PLANO_ESCOLHIDO = null;
-  calcularOrcamentoPortal();
+  if(ORC_MODE==='plano') calcularOrcamentoPortal(); else calcularOrcamentoCdlPortal();
 }
 function toggleOrcCdlTier(){
   const ehAssociado = document.getElementById('orc_associado').value === 'sim';
@@ -2397,51 +2424,176 @@ function calcularOrcamentoPortal(){
       </button>`;
   }).join('');
 }
+function calcularOrcamentoCdlPortal(){
+  const area = document.getElementById('orc_planosArea');
+  area.innerHTML = Object.entries(CDL_TIERS_PORTAL).map(([key,t])=>{
+    const selecionado = ORC_PLANO_ESCOLHIDO === key;
+    return `
+      <button type="button" class="doc-action-card" style="flex-direction:column;align-items:flex-start;gap:2px;${selecionado?'border-color:var(--navy);background:var(--navy-tint);':''}" onclick="selecionarPlanoOrcamento('${key}')">
+        <b style="font-size:12.5px;">${t.nome}</b>
+        <span style="font-size:17px;font-weight:800;color:var(--navy);margin-top:4px;">${formatBRL(t.valor)}<small style="font-size:10.5px;font-weight:500;">/mês</small></span>
+      </button>`;
+  }).join('');
+}
 function selecionarPlanoOrcamento(key){
   ORC_PLANO_ESCOLHIDO = key;
-  calcularOrcamentoPortal();
+  if(ORC_MODE==='plano') calcularOrcamentoPortal(); else calcularOrcamentoCdlPortal();
+  const nome = ORC_MODE==='plano' ? PLAN_VALUES_PORTAL[key].nome : CDL_TIERS_PORTAL[key].nome;
   const btn = document.getElementById('orc_submitBtn');
   btn.disabled = false;
-  btn.textContent = `Gerar orçamento — ${PLAN_VALUES_PORTAL[key].nome}`;
+  btn.textContent = `Gerar orçamento — ${nome}`;
 }
+
+/* ---- Geração do PDF de orçamento, no mesmo padrão visual do simulador ---- */
+function gerarOrcamentoPDFPortal(dados){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const marginX = 18;
+  let y = 20;
+
+  try{ doc.addImage(LOGO_WORDMARK, "PNG", marginX, 12, 36, 13); }catch(e){}
+  doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(90,90,100);
+  doc.text("CDL Mossoró × Unimed", 210-marginX, 18, { align:"right" });
+
+  y = 34;
+  doc.setDrawColor(226,226,232); doc.line(marginX, y, 210-marginX, y);
+  y += 10;
+
+  doc.setFont("helvetica","bold"); doc.setFontSize(15); doc.setTextColor(0,4,45);
+  doc.text(dados.titulo, marginX, y);
+  y += 6;
+  doc.setFont("helvetica","normal"); doc.setFontSize(9.5); doc.setTextColor(90,90,100);
+  doc.text(`Gerado em ${new Date().toLocaleDateString('pt-BR')} por ${CURRENT_USER.nome}${isVendedor()?' (vendedor)':''}`, marginX, y);
+  y += 12;
+
+  doc.setFont("helvetica","bold"); doc.setFontSize(10.5); doc.setTextColor(0,4,45);
+  doc.text("Dados do cliente", marginX, y); y += 7;
+  doc.setFont("helvetica","normal"); doc.setFontSize(9.5); doc.setTextColor(30,30,40);
+  const linhasCliente = [
+    ["Razão social", dados.razaoSocial],
+    ["CNPJ", maskCnpj(dados.cnpj)],
+    ["Responsável", dados.nome],
+    ["Celular", dados.celular],
+    ["E-mail", dados.email || "—"],
+  ];
+  linhasCliente.forEach(([label,val])=>{
+    doc.setFont("helvetica","bold"); doc.text(label+":", marginX, y);
+    doc.setFont("helvetica","normal"); doc.text(String(val||"—"), marginX+38, y);
+    y += 6;
+  });
+  y += 6;
+
+  doc.setFont("helvetica","bold"); doc.setFontSize(10.5); doc.setTextColor(0,4,45);
+  doc.text(dados.secaoTitulo, marginX, y); y += 9;
+
+  // tabela simples
+  doc.setFillColor(246,246,248);
+  doc.rect(marginX, y-5, 210-2*marginX, 8, "F");
+  doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(90,90,100);
+  dados.colunas.forEach((col,i)=>doc.text(col, marginX + 4 + i*45, y));
+  y += 9;
+  doc.setFont("helvetica","normal"); doc.setFontSize(9.5); doc.setTextColor(30,30,40);
+  dados.linhas.forEach(linha=>{
+    linha.forEach((val,i)=>doc.text(String(val), marginX + 4 + i*45, y));
+    y += 7;
+  });
+  y += 4;
+  doc.setDrawColor(226,226,232); doc.line(marginX, y, 210-marginX, y);
+  y += 9;
+
+  doc.setFont("helvetica","bold"); doc.setFontSize(13); doc.setTextColor(21,148,66);
+  doc.text(`Total: ${dados.totalTexto}`, marginX, y);
+  y += 14;
+
+  if(dados.observacao){
+    doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.setTextColor(140,140,150);
+    const wrapped = doc.splitTextToSize(dados.observacao, 210-2*marginX);
+    wrapped.forEach(l=>{ doc.text(l, marginX, y); y += 4.6; });
+  }
+
+  const filename = `orcamento-${dados.tipoArquivo}-${(dados.razaoSocial||'cliente').toLowerCase().replace(/[^a-z0-9]+/g,'-')}.pdf`;
+  return { doc, filename };
+}
+
 async function criarOrcamentoNoPortal(){
   const razaoSocial = document.getElementById('orc_razao').value.trim();
   const cnpj = onlyDigits(document.getElementById('orc_cnpj').value);
   const nome = document.getElementById('orc_nome').value.trim();
   const celular = document.getElementById('orc_celular').value.trim();
   const email = document.getElementById('orc_email').value.trim();
-  const vidas = Math.max(1, Number(document.getElementById('orc_vidas').value || 1));
-  const ehAssociado = document.getElementById('orc_associado').value === 'sim';
-  const cdlTier = ehAssociado ? null : document.getElementById('orc_cdlTier').value;
 
   if(!razaoSocial || cnpj.length!==14){ toast('Preencha a razão social e um CNPJ válido.'); return; }
   if(!nome || !celular){ toast('Preencha nome e celular do responsável.'); return; }
-  if(!ORC_PLANO_ESCOLHIDO){ toast('Escolha um plano.'); return; }
+  if(!ORC_PLANO_ESCOLHIDO){ toast('Escolha uma opção.'); return; }
 
-  const plano = PLAN_VALUES_PORTAL[ORC_PLANO_ESCOLHIDO];
   const vendedores = isVendedor() ? [{ vendedorId: CURRENT_USER.id, percentual: 100, pagamentos: [] }] : [];
+  const dadosBasePDF = { razaoSocial, cnpj, nome, celular, email };
+  let c, pdfInfo;
 
-  const c = {
-    id: uid('cli'), status:'ativo', origemSite:false, etapaAdesao:'nova', pendencia:{ativa:false,motivo:''},
-    titular:{
-      nome, cpf:'', dataNascimento:'', celular, email, razaoSocial, cnpj, anexos:[],
-    },
-    dependentes:[],
-    planoEscolhido: plano.nome,
-    qtdVidasInformada: vidas,
-    planoCdlEscolhido: cdlTier ? CDL_TIERS_PORTAL[cdlTier].nome : null,
-    vendedores,
-    comissoes:[],
-    historico:[{
-      data:nowISO(),
-      texto:`Orçamento criado direto no portal por ${CURRENT_USER.nome}${isVendedor()?' (vendedor, código '+ (CURRENT_USER.codigoVendedor||'—') +')':''} — ${plano.nome} para ${vidas} vida(s).`
-    }],
-    emailAdministradoraEnviadoEm:null, criadoEm:nowISO(),
-  };
+  if(ORC_MODE==='plano'){
+    const vidas = Math.max(1, Number(document.getElementById('orc_vidas').value || 1));
+    const ehAssociado = document.getElementById('orc_associado').value === 'sim';
+    const cdlTier = ehAssociado ? null : document.getElementById('orc_cdlTier').value;
+    const plano = PLAN_VALUES_PORTAL[ORC_PLANO_ESCOLHIDO];
+    const total = plano.valor * vidas;
+
+    pdfInfo = gerarOrcamentoPDFPortal({
+      ...dadosBasePDF, tipoArquivo:'plano-saude',
+      titulo: 'Orçamento — Plano de Saúde Unimed',
+      secaoTitulo: 'Plano escolhido',
+      colunas: ['Plano', 'Vidas', 'Valor/vida', 'Total/mês'],
+      linhas: [[plano.nome, String(vidas), formatBRL(plano.valor), formatBRL(total)]],
+      totalTexto: `${formatBRL(total)}/mês`,
+      observacao: 'Valores sujeitos a análise cadastral e confirmação da Unimed. Condições exclusivas para associados CDL Mossoró — orçamento válido por 15 dias.',
+    });
+
+    c = {
+      id: uid('cli'), status:'ativo', origemSite:false, etapaAdesao:'nova', pendencia:{ativa:false,motivo:''},
+      titular:{ nome, cpf:'', dataNascimento:'', celular, email, razaoSocial, cnpj, anexos:[] },
+      dependentes:[],
+      planoEscolhido: plano.nome,
+      qtdVidasInformada: vidas,
+      planoCdlEscolhido: cdlTier ? CDL_TIERS_PORTAL[cdlTier].nome : null,
+      vendedores, comissoes:[],
+      historico:[{ data:nowISO(), texto:`Orçamento de plano de saúde criado direto no portal por ${CURRENT_USER.nome}${isVendedor()?' (vendedor, código '+(CURRENT_USER.codigoVendedor||'—')+')':''} — ${plano.nome} para ${vidas} vida(s).` }],
+      emailAdministradoraEnviadoEm:null, criadoEm:nowISO(),
+    };
+  } else {
+    const tier = CDL_TIERS_PORTAL[ORC_PLANO_ESCOLHIDO];
+
+    pdfInfo = gerarOrcamentoPDFPortal({
+      ...dadosBasePDF, tipoArquivo:'adesao-cdl',
+      titulo: 'Orçamento — Filiação CDL Mossoró',
+      secaoTitulo: 'Categoria de associado',
+      colunas: ['Categoria', 'Mensalidade'],
+      linhas: [[tier.nome, formatBRL(tier.valor)]],
+      totalTexto: `${formatBRL(tier.valor)}/mês`,
+      observacao: ORC_PLANO_ESCOLHIDO==='associado'
+        ? 'A filiação na categoria "Associado CDL" está sujeita à aprovação em reunião de diretoria, conforme normas estatutárias da entidade. Orçamento válido por 15 dias.'
+        : 'Orçamento válido por 15 dias, sujeito às condições vigentes da CDL Mossoró.',
+    });
+
+    c = {
+      id: uid('cli'), status:'ativo', origemSite:false, etapaAdesao:'nova', pendencia:{ativa:false,motivo:''},
+      titular:{ nome, cpf:'', dataNascimento:'', celular, email, razaoSocial, cnpj, anexos:[] },
+      dependentes:[],
+      planoEscolhido: null,
+      planoCdlEscolhido: tier.nome,
+      vendedores, comissoes:[],
+      historico:[{ data:nowISO(), texto:`Orçamento de adesão CDL criado direto no portal por ${CURRENT_USER.nome}${isVendedor()?' (vendedor, código '+(CURRENT_USER.codigoVendedor||'—')+')':''} — ${tier.nome}.` }],
+      emailAdministradoraEnviadoEm:null, criadoEm:nowISO(),
+    };
+  }
+
+  // anexa o PDF gerado direto no card, igual quando o simulador manda o orçamento do site
+  const pdfDataUrl = pdfInfo.doc.output('datauristring');
+  c.titular.anexos.push({ id:uid('anx'), nome:pdfInfo.filename, dataUrl:pdfDataUrl, criadoEm:nowISO() });
+
   DB.clients.push(c);
-  await registrarLog('Orçamento criado no portal', `${razaoSocial} — ${plano.nome} (${vidas} vidas)`);
+  await registrarLog('Orçamento criado no portal', `${razaoSocial} (${ORC_MODE==='plano'?'plano de saúde':'adesão CDL'})`);
   await persist();
-  toast('Orçamento criado — já está no CRM.');
+  pdfInfo.doc.save(pdfInfo.filename);
+  toast('Orçamento criado, PDF baixado e já está no CRM.');
   openClientModal(c.id);
 }
 
@@ -2487,7 +2639,7 @@ function viewClientes(){
     </div>
     ${list.length===0?`<div class="empty-state">${ICONS.empty}<div>Nenhum cliente encontrado.</div></div>`:`
     <table class="table-simple">
-      <thead><tr><th>Empresa / Titular</th><th>CNPJ</th><th>Celular</th><th>Plano</th><th>Etapa da adesão</th><th>Status</th><th>Dependentes</th></tr></thead>
+      <thead><tr><th>Empresa / Titular</th><th>CNPJ</th><th>Celular</th><th>Plano</th><th>Etapa da adesão</th><th>Status</th><th>Dependentes</th>${isAdmin()?'<th></th>':''}</tr></thead>
       <tbody>
         ${list.map(c=>`
           <tr onclick="openClientModal('${c.id}')">
@@ -2498,6 +2650,7 @@ function viewClientes(){
             <td><span class="stage-pill">${stageLabel(c.etapaAdesao)}</span>${c.pendencia&&c.pendencia.ativa?` <span class="pend-pill">Pendência</span>`:''}</td>
             <td><span class="status-pill ${c.status}">${c.status==='ativo'?'Ativo':'Inativo'}</span></td>
             <td>${c.dependentes.length}</td>
+            ${isAdmin()?`<td><button class="btn-danger" style="padding:5px 9px;" title="Excluir cliente" onclick="event.stopPropagation(); deleteClientFromList('${c.id}')">${ICONS.trash}</button></td>`:''}
           </tr>
         `).join('')}
       </tbody>
@@ -2506,6 +2659,16 @@ function viewClientes(){
 }
 
 let ACTIVE_CLIENT_ID = null;
+async function deleteClientFromList(id){
+  if(!isAdmin()){ toast('Só o administrador pode excluir clientes.'); return; }
+  const c = DB.clients.find(x=>x.id===id);
+  if(!(await showConfirmDialog(`Excluir "${c?.titular?.razaoSocial || c?.titular?.nome}" definitivamente? Essa ação não pode ser desfeita.`))) return;
+  await registrarLog('Cliente excluído', c?.titular?.razaoSocial || c?.titular?.nome || id);
+  DB.clients = DB.clients.filter(x=>x.id!==id);
+  await persist();
+  switchView('clientes');
+  toast('Cliente excluído.');
+}
 let ACTIVE_PERSON_TAB = 'nova';
 let PENDING_ANEXO_TARGET = null;
 
@@ -2544,6 +2707,8 @@ function migrateClientShape(c){
   if(!c.vendedores) c.vendedores = [];
   c.vendedores.forEach(v=>{ if(!v.pagamentos) v.pagamentos = []; });
   if(!c.comissoes) c.comissoes = [];
+  if(!c.statusPagamento) c.statusPagamento = 'em_dia'; // 'em_dia' | 'inadimplente'
+  if(!c.historicoPagamento) c.historicoPagamento = [];
 }
 function switchPersonTab(tab){ ACTIVE_PERSON_TAB = tab; renderClientModal(); }
 function countAnexos(c){ return (c.titular.anexos||[]).length + c.dependentes.reduce((n,d)=>n+(d.anexos||[]).length, 0); }
@@ -2683,10 +2848,7 @@ function renderClientModal(){
       </div>
     `;
   } else if(ACTIVE_PERSON_TAB==='ativo'){
-    tabContent = renderComissaoTab(c) + (isAdmin() ? `
-      <div class="btn-row" style="justify-content:flex-end;margin-top:18px;padding-top:16px;border-top:1px solid var(--border);">
-        <button class="btn-danger" onclick="deleteClient()">Excluir cliente</button>
-      </div>` : '');
+    tabContent = renderComissaoTab(c);
   } else if(ACTIVE_PERSON_TAB==='questionario'){
     const feito = temAnexoChamado(c,'Declaracao de Saude e RC.pdf');
     tabContent = `
@@ -2769,6 +2931,7 @@ function renderClientModal(){
           <input type="checkbox" ${c.status==='ativo'?'checked':''} onchange="toggleClientStatus()"/>
           <span class="toggle-slider"></span>
         </label>
+        ${isAdmin()?`<button class="modal-close" title="Excluir cliente" style="color:var(--danger);" onclick="deleteClient()">${ICONS.trash}</button>`:''}
         <button class="modal-close" onclick="closeModal(); switchView('clientes');">${ICONS.close}</button>
       </div>
       <div class="modal-body">
@@ -2963,33 +3126,81 @@ async function removePagamentoVendedor(vendedorId, pagamentoId){
 /* =========================================================
    VIEW: COMISSÕES (relatório do admin, por vendedor)
    ========================================================= */
-function viewLogs(){
-  const logs = (DB.logs || []).slice().reverse();
+let COM_FILTER = { q: '' };
+let GESTAO_FILTER = { q: '', status: '' };
+function viewGestao(){
+  const ativos = DB.clients.filter(c=>c.etapaAdesao==='ativo').filter(c=>{
+    if(GESTAO_FILTER.status && (c.statusPagamento||'em_dia')!==GESTAO_FILTER.status) return false;
+    if(GESTAO_FILTER.q){
+      const q = GESTAO_FILTER.q.toLowerCase();
+      const t = c.titular||{};
+      if(!((t.nome||'').toLowerCase().includes(q) || (t.razaoSocial||'').toLowerCase().includes(q) || (t.cnpj||'').includes(q))) return false;
+    }
+    return true;
+  });
+  const totalAtivos = DB.clients.filter(c=>c.etapaAdesao==='ativo').length;
+  const inadimplentes = DB.clients.filter(c=>c.etapaAdesao==='ativo' && c.statusPagamento==='inadimplente').length;
+  const emDia = totalAtivos - inadimplentes;
+
   return `
   <div class="view-wrap">
-    <div class="page-head">
-      <div class="page-title">Log do sistema</div>
-      <span style="font-size:11.5px;color:var(--text-muted);">${logs.length} registro(s) · visível só pro administrador</span>
+    <div class="page-head"><div class="page-title">Gestão</div></div>
+    <p style="font-size:12.5px;color:var(--text-muted);margin:-8px 0 20px;">
+      Planos de saúde já ativos. Assim que um cliente chega na etapa "Ativo", ele aparece aqui automaticamente.
+      Por enquanto dá pra acompanhar inadimplência — mais controles chegam depois.
+    </p>
+
+    <div class="stat-grid">
+      <div class="stat-card" style="--accent:#12B76A;"><div class="sc-val">${totalAtivos}</div><div class="sc-label">Planos ativos</div></div>
+      <div class="stat-card" style="--accent:#0EA5E9;"><div class="sc-val">${emDia}</div><div class="sc-label">Em dia</div></div>
+      <div class="stat-card" style="--accent:#F04438;"><div class="sc-val">${inadimplentes}</div><div class="sc-label">Inadimplentes</div></div>
     </div>
+
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center;">
+      <input class="search-input" placeholder="Buscar por nome, empresa ou CNPJ..." value="${GESTAO_FILTER.q}" oninput="GESTAO_FILTER.q=this.value; switchView('gestao')"/>
+      <select class="search-input" onchange="GESTAO_FILTER.status=this.value; switchView('gestao')">
+        <option value="">Todos</option>
+        <option value="em_dia" ${GESTAO_FILTER.status==='em_dia'?'selected':''}>Em dia</option>
+        <option value="inadimplente" ${GESTAO_FILTER.status==='inadimplente'?'selected':''}>Inadimplentes</option>
+      </select>
+    </div>
+
+    ${ativos.length===0?`<div class="empty-state">${ICONS.empty}<div>Nenhum plano ativo ainda — assim que um cliente chegar na etapa "Ativo" no CRM, ele aparece aqui.</div></div>`:`
     <table class="table-simple">
-      <thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Detalhes</th><th>IP</th><th>Localização</th></tr></thead>
+      <thead><tr><th>Empresa / Titular</th><th>Plano</th><th>Vidas</th><th>Celular</th><th>Status de pagamento</th><th></th></tr></thead>
       <tbody>
-        ${logs.map(l=>`
-          <tr>
-            <td style="white-space:nowrap;">${fmtDateTime(l.data)}</td>
-            <td><b>${l.usuario}</b><br><span style="font-size:10.5px;color:var(--text-muted);">${papelLabel(l.papel)}</span></td>
-            <td>${l.acao}</td>
-            <td style="color:var(--text-muted);font-size:11.5px;">${l.detalhes||'—'}</td>
-            <td style="font-family:monospace;font-size:11.5px;">${l.ip}</td>
-            <td style="font-size:11.5px;">${l.local}</td>
-          </tr>
-        `).join('') || `<tr><td colspan="6" style="text-align:center;color:var(--text-faint);">Nenhum registro ainda.</td></tr>`}
+        ${ativos.map(c=>{
+          const inad = c.statusPagamento==='inadimplente';
+          return `
+          <tr onclick="openClientModal('${c.id}')">
+            <td><b>${c.titular.razaoSocial||c.titular.nome}</b><br><span style="color:var(--text-muted);font-size:11.5px;">${c.titular.nome}</span></td>
+            <td>${c.planoEscolhido||'—'}</td>
+            <td>${c.qtdVidasInformada || (1+c.dependentes.length)}</td>
+            <td>${maskPhone(c.titular.celular||'')||'—'}</td>
+            <td><span class="status-pill ${inad?'inativo':'ativo'}">${inad?'Inadimplente':'Em dia'}</span></td>
+            <td><button class="btn-ghost" style="padding:6px 12px;font-size:11.5px;" onclick="event.stopPropagation(); toggleStatusPagamento('${c.id}')">${inad?'Marcar em dia':'Marcar inadimplente'}</button></td>
+          </tr>`;
+        }).join('')}
       </tbody>
-    </table>
+    </table>`}
   </div>`;
 }
+async function toggleStatusPagamento(id){
+  if(!isAdmin()){ toast('Só o administrador altera o status de pagamento.'); return; }
+  const c = DB.clients.find(x=>x.id===id);
+  const novoStatus = c.statusPagamento==='inadimplente' ? 'em_dia' : 'inadimplente';
+  c.statusPagamento = novoStatus;
+  c.historicoPagamento = c.historicoPagamento || [];
+  c.historicoPagamento.push({ data:nowISO(), status:novoStatus, por:CURRENT_USER.nome });
+  c.historico.push({ data:nowISO(), texto:`Status de pagamento alterado para "${novoStatus==='inadimplente'?'Inadimplente':'Em dia'}".` });
+  await registrarLog('Status de pagamento alterado', `${c.titular.razaoSocial||c.titular.nome} → ${novoStatus==='inadimplente'?'Inadimplente':'Em dia'}`);
+  await persist();
+  switchView('gestao');
+  toast('Status atualizado.');
+}
 function viewComissoes(){
-  const vendedores = DB.users.filter(u=>u.papel==='vendedor');
+  const q = (COM_FILTER.q||'').toLowerCase();
+  const vendedores = DB.users.filter(u=>u.papel==='vendedor' && (!q || u.nome.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)));
   const linhas = vendedores.map(v=>{
     let total = 0, qtdVendas = 0;
     DB.clients.forEach(c=>{
@@ -3007,6 +3218,7 @@ function viewComissoes(){
       <div class="page-title">Comissões</div>
       <button class="btn-ghost" onclick="exportComissoesCSV()">${ICONS.upload} Exportar CSV</button>
     </div>
+    <input class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar vendedor por nome ou e-mail..." value="${COM_FILTER.q}" oninput="COM_FILTER.q=this.value; switchView('comissoes')"/>
     <div class="stat-grid">
       <div class="stat-card"><div class="sc-val">${formatBRL(totalGeral)}</div><div class="sc-label">Total já liberado (todos os vendedores)</div></div>
       <div class="stat-card"><div class="sc-val">${vendedores.length}</div><div class="sc-label">Vendedores cadastrados</div></div>
@@ -4136,29 +4348,73 @@ async function deleteEmpresa(id){
 /* =========================================================
    VIEW: USUÁRIOS & PERMISSÕES (só admin)
    ========================================================= */
+let USUARIOS_SUBTAB = 'lista';
+let USER_FILTER = { q: '' };
+let LOG_FILTER = { q: '' };
 function viewUsuarios(){
+  const usersFiltrados = DB.users.filter(u=>{
+    if(!USER_FILTER.q) return true;
+    const q = USER_FILTER.q.toLowerCase();
+    return (u.nome||'').toLowerCase().includes(q) || (u.email||'').toLowerCase().includes(q) || papelLabel(u.papel).toLowerCase().includes(q);
+  });
   return `
   <div class="view-wrap">
     <div class="page-head">
       <div class="page-title">Usuários & Permissões</div>
-      <button class="btn-primary" onclick="openUserModal()">${ICONS.plus} Novo usuário</button>
+      ${USUARIOS_SUBTAB==='lista' ? `<button class="btn-primary" onclick="openUserModal()">${ICONS.plus} Novo usuário</button>` : ''}
+    </div>
+    <div class="person-tabs" style="margin-bottom:18px;">
+      <button class="person-tab-btn ${USUARIOS_SUBTAB==='lista'?'active':''}" onclick="USUARIOS_SUBTAB='lista'; switchView('usuarios')">Usuários</button>
+      <button class="person-tab-btn ${USUARIOS_SUBTAB==='logs'?'active':''}" onclick="USUARIOS_SUBTAB='logs'; switchView('usuarios')">Log do sistema</button>
+    </div>
+
+    ${USUARIOS_SUBTAB==='lista' ? `
+      <input class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar por nome, e-mail ou papel..." value="${USER_FILTER.q}" oninput="USER_FILTER.q=this.value; switchView('usuarios')"/>
+      <table class="table-simple">
+        <thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Status</th><th>Link pessoal</th></tr></thead>
+        <tbody>
+          ${usersFiltrados.map(u=>`
+            <tr>
+              <td onclick="openUserModal('${u.id}')" style="cursor:pointer;"><b>${u.nome}</b></td>
+              <td onclick="openUserModal('${u.id}')" style="cursor:pointer;">${u.email}</td>
+              <td onclick="openUserModal('${u.id}')" style="cursor:pointer;">${papelLabel(u.papel)}</td>
+              <td onclick="openUserModal('${u.id}')" style="cursor:pointer;"><span class="status-pill ${u.ativo?'ativo':'inativo'}">${u.ativo?'Ativo':'Inativo'}</span></td>
+              <td>${u.papel==='vendedor' && u.codigoVendedor ? `<button class="btn-ghost" style="padding:5px 10px;font-size:11.5px;" onclick="event.stopPropagation();openUserModal('${u.id}')">${ICONS.upload} Código ${u.codigoVendedor}</button>` : '—'}</td>
+            </tr>
+          `).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--text-faint);">Nenhum usuário encontrado.</td></tr>`}
+        </tbody>
+      </table>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Pra cadastrar um vendedor: clique em "Novo usuário" e escolha o papel "Vendedor" — o código e o link pessoal dele aparecem automaticamente depois de salvar.</p>
+    ` : viewLogsContent()}
+  </div>`;
+}
+function viewLogsContent(){
+  const logs = (DB.logs || []).slice().reverse().filter(l=>{
+    if(!LOG_FILTER.q) return true;
+    const q = LOG_FILTER.q.toLowerCase();
+    return (l.usuario||'').toLowerCase().includes(q) || (l.acao||'').toLowerCase().includes(q) || (l.detalhes||'').toLowerCase().includes(q) || (l.ip||'').toLowerCase().includes(q) || (l.local||'').toLowerCase().includes(q);
+  });
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+      <input class="search-input" style="max-width:340px;" placeholder="Buscar por usuário, ação, IP, local..." value="${LOG_FILTER.q}" oninput="LOG_FILTER.q=this.value; switchView('usuarios')"/>
+      <span style="font-size:11.5px;color:var(--text-muted);">${logs.length} registro(s) · visível só pro administrador</span>
     </div>
     <table class="table-simple">
-      <thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Status</th><th>Link pessoal</th></tr></thead>
+      <thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Detalhes</th><th>IP</th><th>Localização</th></tr></thead>
       <tbody>
-        ${DB.users.map(u=>`
+        ${logs.map(l=>`
           <tr>
-            <td onclick="openUserModal('${u.id}')" style="cursor:pointer;"><b>${u.nome}</b></td>
-            <td onclick="openUserModal('${u.id}')" style="cursor:pointer;">${u.email}</td>
-            <td onclick="openUserModal('${u.id}')" style="cursor:pointer;">${papelLabel(u.papel)}</td>
-            <td onclick="openUserModal('${u.id}')" style="cursor:pointer;"><span class="status-pill ${u.ativo?'ativo':'inativo'}">${u.ativo?'Ativo':'Inativo'}</span></td>
-            <td>${u.papel==='vendedor' && u.codigoVendedor ? `<button class="btn-ghost" style="padding:5px 10px;font-size:11.5px;" onclick="event.stopPropagation();openUserModal('${u.id}')">${ICONS.upload} Código ${u.codigoVendedor}</button>` : '—'}</td>
+            <td style="white-space:nowrap;">${fmtDateTime(l.data)}</td>
+            <td><b>${l.usuario}</b><br><span style="font-size:10.5px;color:var(--text-muted);">${papelLabel(l.papel)}</span></td>
+            <td>${l.acao}</td>
+            <td style="color:var(--text-muted);font-size:11.5px;">${l.detalhes||'—'}</td>
+            <td style="font-family:monospace;font-size:11.5px;">${l.ip}</td>
+            <td style="font-size:11.5px;">${l.local}</td>
           </tr>
-        `).join('')}
+        `).join('') || `<tr><td colspan="6" style="text-align:center;color:var(--text-faint);">Nenhum registro encontrado.</td></tr>`}
       </tbody>
     </table>
-    <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Pra cadastrar um vendedor: clique em "Novo usuário" e escolha o papel "Vendedor" — o código e o link pessoal dele aparecem automaticamente depois de salvar.</p>
-  </div>`;
+  `;
 }
 function openUserModal(id){
   const u = id ? DB.users.find(x=>x.id===id) : { id:null, nome:'', email:'', senha:'', papel:'atendente', ativo:true, permissoes:defaultPermissoes() };
