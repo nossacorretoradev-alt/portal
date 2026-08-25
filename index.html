@@ -2734,6 +2734,7 @@ function migrateClientShape(c){
   if(!c.comissoes) c.comissoes = [];
   if(!c.statusPagamento) c.statusPagamento = 'em_dia'; // 'em_dia' | 'inadimplente'
   if(!c.historicoPagamento) c.historicoPagamento = [];
+  if(!c.aditivoRc) c.aditivoRc = {};
   if(!c.empresaId) c.empresaId = getOrCreateEmpresaByCnpj(c.titular.cnpj, c.titular.razaoSocial).id;
 }
 function switchPersonTab(tab){ ACTIVE_PERSON_TAB = tab; renderClientModal(); }
@@ -2992,7 +2993,15 @@ function renderClientModal(){
       <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Confira os anexos (aba Documentos) e o questionário de risco antes de marcar como conferido e avançar pra "Implantação".</p>
     `;
   } else if(ACTIVE_PERSON_TAB==='enviado'){
+    const aditivoFeito = temAnexoChamado(c,'Aditivo RC.pdf');
     tabContent = `
+      <div class="doc-actions-grid" style="grid-template-columns:1fr;margin-bottom:16px;">
+        <button type="button" class="doc-action-card" onclick="openAditivoRcModal()">
+          <span class="doc-icon">${ICONS.clipboard}</span>
+          <span class="doc-text">Aditivo de Redução de Carência (RC)<small>Preenche automaticamente e deixa pronto pra baixar</small></span>
+        </button>
+      </div>
+      <div style="margin-bottom:16px;">${aditivoFeito ? `<span class="status-pill ativo">✓ Aditivo já gerado</span>` : `<span class="status-pill inativo">Aditivo ainda não gerado</span>`}</div>
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
         <span style="font-size:12.5px;color:var(--text-muted);">Status do envio:</span> ${emailStatusInline}
       </div>
@@ -4065,6 +4074,121 @@ async function gerarFichaUnimed(){
   ACTIVE_PERSON_TAB = 'documentacao';
   renderClientModal();
   toast('Ficha de Adesão Unimed gerada e anexada ao Titular.');
+}
+
+/* ---------- ADITIVO DE REDUÇÃO DE CARÊNCIA (RC 58 / RC 90) ---------- */
+function openAditivoRcModal(){
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  const pessoas = [{ label: c.titular.nome||'Titular', tipo:'Titular', key:'titular' }]
+    .concat(c.dependentes.map((d,i)=>({ label: d.nome||`Dependente ${i+1}`, tipo:`Dependente ${i+1}`, key:'dep_'+i })));
+  const rcSalvo = c.aditivoRc || {};
+  openModalHTML(`
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <div class="mh-info"><div class="mh-name">Aditivo de Redução de Carência</div><div class="mh-sub">RC 58 / RC 90 — Unimed Natal × CDL Mossoró</div></div>
+        <button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">Escolha o RC de cada pessoa. A tabela de prazos (fixa, igual pra todo mundo) é preenchida automaticamente no PDF — você só decide qual RC se aplica a cada um.</p>
+        ${pessoas.map(p=>`
+          <div class="fg" style="margin-bottom:12px;">
+            <label>${p.tipo} — ${p.label}</label>
+            <select id="rc_${p.key}">
+              <option value="RC 58" ${rcSalvo[p.key]==='RC 58'?'selected':''}>RC 58 — válido pra quem não tem débito com a Unimed</option>
+              <option value="RC 90" ${rcSalvo[p.key]==='RC 90'?'selected':''}>RC 90 — débitos pendentes ou plano fora da ANS</option>
+              <option value="RC 0" ${rcSalvo[p.key]==='RC 0'?'selected':''}>RC 0 — já cumpriu as carências (plano ativo anterior)</option>
+            </select>
+          </div>
+        `).join('')}
+        <div class="btn-row" style="margin-top:10px;">
+          <button class="btn-primary" onclick="gerarAditivoRc()">${ICONS.file} Gerar PDF e anexar ao titular</button>
+        </div>
+      </div>
+    </div>`);
+}
+async function gerarAditivoRc(){
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  const pessoas = [{ label: c.titular.nome||'Titular', tipo:'Titular', key:'titular' }]
+    .concat(c.dependentes.map((d,i)=>({ label: d.nome||`Dependente ${i+1}`, tipo:`Dependente ${i+1}`, key:'dep_'+i })));
+  const rc = {};
+  pessoas.forEach(p=>{ rc[p.key] = document.getElementById(`rc_${p.key}`).value; });
+  c.aditivoRc = rc;
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const marginX = 15;
+  let y = 18;
+
+  try{ doc.addImage(LOGO_WORDMARK, "PNG", marginX, 10, 30, 11); }catch(e){}
+  doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.setTextColor(0,4,45);
+  doc.text("ADITIVO AO CONTRATO — PESSOA JURÍDICA", 105, 16, { align:"center" });
+  doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(120,120,130);
+  doc.text("Versão: " + new Date().toLocaleDateString('pt-BR'), 195, 10, { align:"right" });
+  y = 26;
+  doc.setDrawColor(226,226,232); doc.line(marginX, y, 195, y); y += 8;
+
+  doc.setFont("helvetica","bold"); doc.setFontSize(9.5); doc.setTextColor(0,4,45);
+  doc.text("Identificação das partes contratantes", marginX, y); y += 7;
+  doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(30,30,40);
+  doc.text(`Contratante: ${c.titular.razaoSocial||''} — CNPJ ${maskCnpj(c.titular.cnpj||'')}`, marginX, y); y += 6;
+  doc.text("Operadora: UNIMED NATAL — Sociedade Cooperativa de Trabalho Médico — CNPJ 08.380.701/0001-05", marginX, y); y += 10;
+
+  doc.setFont("helvetica","bold"); doc.setFontSize(9.5); doc.setTextColor(0,4,45);
+  doc.text("Cláusula Primeira — Redução de carência concedida", marginX, y); y += 8;
+
+  const linhas = [
+    ["Urgência e Emergência","24H","24H"], ["Consultas médicas eletivas","ZERO","30 DIAS"],
+    ["Exames simples","ZERO","30 DIAS"], ["Exames especiais","ZERO","180 DIAS"],
+    ["Internações clínicas e cirurgias","ZERO","180 DIAS"], ["Internações psiquiátricas","ZERO","180 DIAS"],
+    ["Outros procedimentos ambulatoriais","ZERO","180 DIAS"], ["Terapias simples","ZERO","180 DIAS"],
+    ["Terapias especiais","ZERO","180 DIAS"], ["Partos a termo","300 DIAS","300 DIAS"],
+    ["Doença ou lesão pré-existente","24 MESES","24 MESES"],
+  ];
+  doc.setFillColor(21,148,66); doc.rect(marginX, y-4.5, 180, 7, "F");
+  doc.setFont("helvetica","bold"); doc.setFontSize(8.5); doc.setTextColor(255,255,255);
+  doc.text("Grupo de benefícios", marginX+3, y);
+  doc.text("RC 58", 145, y);
+  doc.text("RC 90", 172, y);
+  y += 6;
+  doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.setTextColor(30,30,40);
+  linhas.forEach((l,i)=>{
+    if(i%2===0){ doc.setFillColor(246,246,248); doc.rect(marginX, y-4, 180, 6, "F"); }
+    doc.text(l[0], marginX+3, y);
+    doc.text(l[1], 145, y);
+    doc.text(l[2], 172, y);
+    y += 6;
+  });
+  y += 6;
+
+  doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(0,4,45);
+  doc.text("RC de cada pessoa nesta adesão:", marginX, y); y += 7;
+  doc.setFont("helvetica","normal"); doc.setFontSize(9);
+  pessoas.forEach(p=>{
+    doc.text(`${p.tipo}: ${p.label}  —  ${rc[p.key]}`, marginX, y);
+    y += 6;
+  });
+  y += 8;
+
+  doc.setFont("helvetica","italic"); doc.setFontSize(7.5); doc.setTextColor(120,120,130);
+  const obs = doc.splitTextToSize("RC 90 aplicável a clientes com débitos pendentes em contratos anteriores junto à Unimed Natal ou provenientes de planos não regulamentados pela ANS. RC 58 válido para os demais. Cobertura Parcial Temporária (CPT) e Doenças e Lesões Preexistentes (DLP) seguem limitadas a 24 meses, conforme cláusula segunda do contrato original.", 180);
+  obs.forEach(l=>{ doc.text(l, marginX, y); y += 4; });
+  y += 12;
+
+  doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(30,30,40);
+  doc.text("Natal, " + new Date().toLocaleDateString('pt-BR'), marginX, y); y += 16;
+  doc.line(marginX, y, marginX+80, y);
+  doc.text("Assinatura do Contratante", marginX, y+5);
+
+  const blob = doc.output('blob');
+  const dataUrl = await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(blob); });
+  c.titular.anexos = c.titular.anexos || [];
+  c.titular.anexos = c.titular.anexos.filter(a=>a.nome!=='Aditivo RC.pdf');
+  c.titular.anexos.push({ id:uid('anx'), nome:'Aditivo RC.pdf', dataUrl, criadoEm:nowISO() });
+  c.historico.push({ data:nowISO(), texto:'Aditivo de Redução de Carência (RC) gerado e anexado.' });
+  await persist();
+  ACTIVE_PERSON_TAB = 'documentacao';
+  renderClientModal();
+  toast('Aditivo RC gerado e anexado ao Titular.');
 }
 
 async function setEtapaAdesao(stageId){
