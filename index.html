@@ -1172,6 +1172,26 @@ input,select,textarea{font-family:inherit;}
 
 .anexo-person-block{ border:1px solid var(--border); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
 .anexo-person-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:12.5px; font-weight:700; color:var(--text); }
+
+/* Implantação v2 — janela ampla, pessoas hierárquicas e ações fixas */
+.implantacao-modal{width:min(1180px,96vw);max-width:1180px;height:min(94vh,920px);max-height:94vh;overflow:hidden;}
+.implantacao-modal .modal-body{min-height:0;overflow-y:auto;padding:20px 28px 28px;}
+.implantacao-modal .modal-head{position:relative;top:auto;flex-shrink:0;}
+.implantacao-footer{position:sticky;bottom:0;z-index:8;display:flex;align-items:center;gap:10px;padding:14px 28px;border-top:1px solid var(--border);background:rgba(255,255,255,.97);box-shadow:0 -8px 24px rgba(8,27,49,.08);flex-shrink:0;}
+.implantacao-footer .footer-danger{margin-right:auto;}
+.people-company-list{display:grid;gap:18px;}
+.person-holder-card{border:1px solid #cbd8e8;border-radius:16px;background:var(--surface);box-shadow:0 5px 18px rgba(8,27,49,.06);overflow:hidden;}
+.person-holder-card.is-active{border-color:var(--blue);box-shadow:0 8px 24px rgba(22,107,207,.11);}
+.person-holder-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 18px;background:linear-gradient(135deg,var(--navy-tint),#fff);border-bottom:1px solid var(--border);}
+.person-holder-title{display:flex;align-items:center;gap:10px;min-width:0;}
+.person-type-badge{font-size:9.5px;font-weight:900;letter-spacing:.08em;padding:4px 8px;border-radius:999px;background:var(--navy);color:#fff;}
+.person-holder-body{padding:18px;}
+.dependents-group{margin-top:20px;padding:16px;border-radius:14px;background:var(--surface-alt);border:1px solid var(--border);}
+.dependent-person-card{margin-top:10px;padding:14px;border-radius:12px;background:#fff;border:1px solid var(--border);border-left:4px solid var(--blue);}
+.dependent-person-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;}
+.dependent-badge{font-size:9px;font-weight:900;letter-spacing:.07em;color:var(--blue);background:var(--blue-light);padding:4px 8px;border-radius:999px;}
+.add-holder-button{width:100%;justify-content:center;margin-top:16px;border-style:dashed;padding:13px;}
+@media(max-width:700px){.implantacao-modal{width:100%;height:96vh;max-height:96vh;border-radius:18px 18px 0 0}.implantacao-modal .modal-body{padding:16px}.implantacao-footer{padding:12px 16px;flex-wrap:wrap}.implantacao-footer .footer-danger{margin-right:0}.implantacao-footer button{flex:1;justify-content:center}.person-holder-head,.person-holder-body{padding:14px}}
 </style>
 
 <script>
@@ -3015,7 +3035,13 @@ function renderClientModal(){
     `;
   } else if(ACTIVE_PERSON_TAB==='pessoas'){
     tabContent = `
-      <div class="modal-section-title" style="margin-top:0;">Titular</div>
+      <div class="people-company-list">
+      <section class="person-holder-card is-active">
+      <div class="person-holder-head">
+        <div class="person-holder-title"><span class="person-type-badge">TITULAR</span><div><b>${t.nome||'Titular sem nome'}</b><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${c.planoEscolhido||'Plano ainda não selecionado'}</div></div></div>
+        <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="openQuestionarioRiscoModalFor('titular')">Questionário individual</button>
+      </div>
+      <div class="person-holder-body">
       <div class="field-grid">
         <div class="fg"><label>Nome do titular</label><input id="cl_nome" value="${t.nome||''}" onchange="updateTitular()"/></div>
         <div class="fg"><label>CPF</label><input id="cl_cpf" value="${t.cpf||''}" oninput="this.value=maskCpf(this.value)" onchange="updateTitular()"/></div>
@@ -3056,14 +3082,14 @@ function renderClientModal(){
       <div class="fg" style="margin-top:12px;"><label>Nome da mãe</label><input id="cl_nomeMae" value="${t.nomeMae||''}" onchange="updateTitular()"/></div>
       ${wppLink?`<a class="wpp-btn" style="margin-top:14px;" href="${wppLink}" target="_blank">${ICONS.wpp} Chamar titular no WhatsApp</a>`:''}
 
-      <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border);">
+      <div class="dependents-group">
         <div class="modal-section-title" style="margin-bottom:4px;">Dependentes (${c.dependentes.length})</div>
         <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">Todo dependente entra automaticamente no mesmo plano do titular acima — <b>${c.planoEscolhido||'nenhum plano escolhido ainda'}</b>.</p>
         ${c.dependentes.map((d,i)=>`
-          <div class="dep-card">
-            <div class="dep-card-head">
-              <b style="font-size:12.5px;">Dependente ${i+1}</b>
-              <button class="btn-danger" style="padding:5px 10px;" onclick="removeDependente(${i})">${ICONS.trash}</button>
+          <div class="dependent-person-card">
+            <div class="dependent-person-head">
+              <div style="display:flex;align-items:center;gap:8px;"><span class="dependent-badge">DEPENDENTE</span><b style="font-size:12.5px;">${d.nome||`Dependente ${i+1}`}</b></div>
+              <div style="display:flex;gap:7px;"><button class="btn-ghost" style="padding:5px 9px;font-size:10.5px;" onclick="openQuestionarioRiscoModalFor('dep${i}')">Questionário</button><button class="btn-danger" style="padding:5px 10px;" onclick="removeDependente(${i})">${ICONS.trash}</button></div>
             </div>
             <div class="field-grid">
               <div class="fg"><label>Nome</label><input value="${d.nome||''}" onchange="updateDependente(${i},'nome',this.value)"/></div>
@@ -3085,8 +3111,21 @@ function renderClientModal(){
             </div>
           </div>
         `).join('') || `<div style="font-size:12.5px;color:var(--text-faint);margin-bottom:10px;">Nenhum dependente cadastrado.</div>`}
-        <button class="btn-ghost" onclick="addDependente()">${ICONS.plus} Adicionar dependente</button>
+        <button class="btn-ghost" style="padding:7px 11px;font-size:11.5px;" onclick="addDependente()">${ICONS.plus} Adicionar dependente</button>
       </div>
+      </div></section>
+      ${getTitularesDaEmpresa(c.empresaId).filter(x=>x.id!==c.id).map((x,i)=>`
+        <section class="person-holder-card">
+          <div class="person-holder-head">
+            <div class="person-holder-title"><span class="person-type-badge">TITULAR</span><div><b>${x.titular.nome||`Titular ${i+2}`}</b><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${x.planoEscolhido||'Plano ainda não selecionado'} · ${x.dependentes.length} dependente(s)</div></div></div>
+            <button class="btn-ghost" style="padding:7px 11px;font-size:11.5px;" onclick="openClientModal('${x.id}');switchPersonTab('pessoas')">Abrir e editar</button>
+          </div>
+          <div class="person-holder-body" style="padding-top:12px;">
+            ${x.dependentes.length ? x.dependentes.map((d,di)=>`<div class="dependent-person-card" style="margin-top:${di?'8':'0'}px;"><div style="display:flex;align-items:center;gap:8px;"><span class="dependent-badge">DEPENDENTE</span><b>${d.nome||`Dependente ${di+1}`}</b><span style="font-size:11px;color:var(--text-muted);">${d.parentesco||''}</span></div></div>`).join('') : `<span style="font-size:12px;color:var(--text-faint);">Nenhum dependente cadastrado.</span>`}
+          </div>
+        </section>`).join('')}
+      </div>
+      <button class="btn-ghost add-holder-button" onclick="adicionarTitularNaEmpresa('${c.empresaId}')">${ICONS.plus} Adicionar titular</button>
     `;
   } else if(ACTIVE_PERSON_TAB==='documentacao'){
     const emp = getEmpresaDoCliente(c);
@@ -3216,7 +3255,7 @@ function renderClientModal(){
   ];
 
   openModalHTML(`
-    <div class="modal">
+    <div class="modal implantacao-modal">
       <div class="modal-head">
         <div class="mh-avatar" style="background:${avatarColor(t.razaoSocial||t.nome)};">${initials(t.nome||t.razaoSocial)}</div>
         <div class="mh-info">
@@ -3227,31 +3266,15 @@ function renderClientModal(){
           <input type="checkbox" ${c.status==='ativo'?'checked':''} onchange="toggleClientStatus()"/>
           <span class="toggle-slider"></span>
         </label>
-        <button class="btn-primary" style="padding:8px 16px;font-size:12.5px;flex-shrink:0;" onclick="salvarClienteManual()">${ICONS.check} Salvar</button>
-        ${isAdmin()?`<button class="modal-close" title="Excluir cliente" style="color:var(--danger);" onclick="deleteClient()">${ICONS.trash}</button>`:''}
         <button class="modal-close" onclick="closeModal(); switchView('clientes');">${ICONS.close}</button>
       </div>
       <div class="modal-body">
-
-        <div class="modal-section" style="padding-bottom:14px;">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);">Titulares desta empresa:</span>
-            ${getTitularesDaEmpresa(c.empresaId).map(x=>`
-              <button class="btn-ghost" style="padding:5px 10px;font-size:11.5px;${x.id===c.id?'background:var(--navy);color:#fff;':''}" onclick="openClientModal('${x.id}')">${x.titular.nome||'sem nome'}${x.planoEscolhido?` · ${x.planoEscolhido}`:''}</button>
-            `).join('')}
-            <button class="btn-ghost" style="padding:5px 10px;font-size:11.5px;" onclick="adicionarTitularNaEmpresa('${c.empresaId}')">${ICONS.plus} Novo titular</button>
-            <a href="#" onclick="abrirHistoricoDiscreto();return false;" style="margin-left:auto;font-size:11px;color:var(--text-faint);text-decoration:underline;">Ver histórico</a>
-          </div>
-        </div>
 
         <div class="modal-section">
           <div class="modal-section-title">Etapa da adesão</div>
           ${stageTrackerHTML}
         </div>
 
-        <div style="display:flex;justify-content:flex-end;margin:0 0 16px;">
-          ${c.etapaAdesao!=='ativo' ? `<button class="btn-primary" onclick="concluirEtapaImplantacao()">${ICONS.check} Concluir Etapa</button>` : `<span class="status-pill ativo">✓ Implantação concluída</span>`}
-        </div>
         <div class="journey-tab-content">
           ${ACTIVE_PERSON_TAB==='documentacao' ? `
             <button type="button" class="doc-action-card" style="margin-bottom:16px;" onclick="gerarLinkCliente()">
@@ -3261,6 +3284,12 @@ function renderClientModal(){
           ${tabContent}
         </div>
 
+      </div>
+      <div class="implantacao-footer">
+        <button class="btn-danger footer-danger" onclick="deleteClient()">${ICONS.trash} Excluir</button>
+        <button class="btn-ghost" onclick="abrirTarefaImplantacao()">${ICONS.plus} Adicionar tarefa</button>
+        <button class="btn-ghost" onclick="salvarClienteManual()">${ICONS.check} Salvar</button>
+        <button class="btn-primary" onclick="concluirEtapaImplantacao()" ${c.etapaAdesao==='ativo'?'disabled':''}>${ICONS.check} Concluir etapa</button>
       </div>
     </div>`);
 }
@@ -4384,6 +4413,34 @@ async function gerarAditivoRc(){
 async function toggleConferenciaItem(i, checked){
   const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID); if(!c) return;
   c.conferenciaChecklist=c.conferenciaChecklist||{}; c.conferenciaChecklist[i]=!!checked; await persist();
+}
+
+function abrirTarefaImplantacao(){
+  const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID); if(!c) return;
+  const overlay=document.getElementById('confirmOverlay');
+  overlay.innerHTML=`
+    <div class="modal modal-task">
+      <div class="modal-head"><div class="mh-info"><div class="mh-name">Adicionar tarefa</div><div class="mh-sub">Relacionada a ${c.titular.razaoSocial||c.titular.nome||'esta implantação'}</div></div><button class="modal-close" onclick="document.getElementById('confirmOverlay').classList.remove('active')">${ICONS.close}</button></div>
+      <div class="modal-body" style="padding:20px 22px;">
+        <div class="fg"><label>Tarefa</label><input id="implant_task_title" placeholder="Ex.: Cobrar documento pendente"></div>
+        <div class="field-grid" style="margin-top:12px;"><div class="fg"><label>Prazo</label><input id="implant_task_due" type="date" value="${todayISO()}"></div><div class="fg"><label>Prioridade</label><select id="implant_task_priority"><option value="normal">Normal</option><option value="alta">Alta</option><option value="urgente">Urgente</option></select></div></div>
+        <div class="fg" style="margin-top:12px;"><label>Observações</label><textarea id="implant_task_notes" rows="3" placeholder="Detalhes da tarefa"></textarea></div>
+      </div>
+      <div class="modal-foot"><button class="btn-ghost" onclick="document.getElementById('confirmOverlay').classList.remove('active')">Cancelar</button><button class="btn-primary" onclick="salvarTarefaImplantacao()">Adicionar tarefa</button></div>
+    </div>`;
+  overlay.classList.add('active');
+  setTimeout(()=>document.getElementById('implant_task_title')?.focus(),0);
+}
+
+async function salvarTarefaImplantacao(){
+  const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  const titulo=document.getElementById('implant_task_title')?.value.trim();
+  if(!c||!titulo){ toast('Informe o nome da tarefa.'); return; }
+  DB.tarefas=DB.tarefas||[];
+  const tarefa={id:uid('tar'),titulo,clienteId:c.id,empresaId:c.empresaId,clienteNome:c.titular.razaoSocial||c.titular.nome||'',implantacaoEtapa:c.etapaAdesao,prazo:document.getElementById('implant_task_due').value,prioridade:document.getElementById('implant_task_priority').value,observacoes:document.getElementById('implant_task_notes').value.trim(),status:'aberta',criadoEm:nowISO()};
+  DB.tarefas.push(tarefa); c.tarefasIds=c.tarefasIds||[]; c.tarefasIds.push(tarefa.id);
+  c.historico.push({data:nowISO(),texto:`Tarefa adicionada: ${titulo}.`});
+  await persist(); document.getElementById('confirmOverlay').classList.remove('active'); toast('✓ Tarefa adicionada a esta implantação.');
 }
 
 async function concluirEtapaImplantacao(){
