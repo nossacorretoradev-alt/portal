@@ -1898,6 +1898,7 @@ document.addEventListener('keydown',(e)=>{
 let DB = { users:[], leads:[], pipeline:[], clients:[], companies:[], logs:[] };
 let CURRENT_USER = null;
 let CURRENT_VIEW = 'inicio';
+const LAST_VIEW_KEY = 'cdlunimed_portal_last_view';
 let SESSAO_IP_INFO = null; // cache — busca só uma vez por sessão, não a cada ação
 
 async function getIpInfo(){
@@ -2086,7 +2087,10 @@ function enterApp(){
   renderSidebarBrand();
   renderSidebarFooter();
   renderNav();
-  if(isVendedor()) CURRENT_VIEW = 'minhacomissao';
+  const viewSalva = localStorage.getItem(LAST_VIEW_KEY);
+  const viewsPermitidas = getNavItems().map(item=>item.id);
+  if(viewSalva && viewsPermitidas.includes(viewSalva)) CURRENT_VIEW = viewSalva;
+  else if(isVendedor()) CURRENT_VIEW = 'orcamento';
   renderTopbar();
   switchView(CURRENT_VIEW);
 
@@ -2177,6 +2181,7 @@ function refiltrar(viewId, inputId){
 }
 function switchView(id){
   CURRENT_VIEW = id;
+  localStorage.setItem(LAST_VIEW_KEY, id);
   renderNav();
   renderTopbar();
   const views = document.getElementById('views');
@@ -2284,11 +2289,41 @@ function openPipelineLeadModal(id,isNew){
     <div class="field-grid" style="margin-top:12px"><div class="fg"><label>Contato</label><input id="pl_nome" value="${l.nome||''}"></div><div class="fg"><label>WhatsApp</label><input id="pl_celular" value="${maskPhone(l.celular||'')}"></div></div>
     <div class="field-grid" style="margin-top:12px"><div class="fg"><label>E-mail</label><input id="pl_email" value="${l.email||''}"></div><div class="fg"><label>Plano / interesse</label><input id="pl_plano" value="${l.planoInteresse||''}"></div></div>
     <div class="fg" style="margin-top:12px"><label>Etapa</label><select id="pl_etapa">${PIPELINE_STAGES.map(s=>`<option value="${s.id}" ${l.etapa===s.id?'selected':''}>${s.label}</option>`).join('')}</select></div>
+    <div class="dep-card" style="margin-top:16px;border-left:4px solid ${l.associadoValidado?'var(--success)':'var(--warning)'};"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;"><div><b>Validação de associado CDL</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">${l.associadoValidado?`✓ Validado em ${fmtDateTime(l.associadoValidadoEm)}`:'Obrigatória antes de transformar em Venda Ativa.'}</div></div><button class="${l.associadoValidado?'btn-ghost':'btn-primary'}" onclick="validarAssociadoPipeline('${l.id}')">${ICONS.check} ${l.associadoValidado?'Validar novamente':'Validar associado'}</button></div></div>
+    <div class="modal-section-title" style="margin-top:20px">Anexos do lead (${(l.anexos||[]).length})</div>
+    <div class="attachment-list">${(l.anexos||[]).map((a,i)=>`<span class="attachment-chip">${ICONS.file}${a.nome}<a href="${a.dataUrl}" target="_blank" style="color:inherit;display:flex;">${ICONS.upload}</a><button onclick="removePipelineAnexo('${l.id}',${i})">${ICONS.close}</button></span>`).join('')||'<span style="font-size:12px;color:var(--text-faint)">Nenhum anexo recebido.</span>'}</div>
+    <label class="btn-ghost" style="margin-top:10px;padding:7px 11px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Adicionar anexos<input type="file" multiple style="display:none" onchange="addPipelineAnexos('${l.id}',event)"></label>
     <div class="modal-section-title" style="margin-top:20px">Comentários</div>
     <div class="history-list" style="max-height:180px">${(l.comentarios||[]).slice().reverse().map(c=>`<div class="history-item"><span class="hi-date">${fmtDateTime(c.data)}</span><span>${c.texto}</span></div>`).join('')||'<div style="font-size:12px;color:var(--text-faint)">Nenhum comentário.</div>'}</div>
     <div style="display:flex;gap:8px;margin-top:10px"><input id="pl_comentario" class="search-input" style="flex:1" placeholder="Adicionar comentário..."><button class="btn-ghost" onclick="addPipelineComentario('${l.id}')">Adicionar</button></div>
-    <div class="btn-row"><button class="btn-primary" onclick="savePipelineLead('${l.id}')">${ICONS.check} Salvar</button>${l.celular?`<a class="wpp-btn" target="_blank" href="https://api.whatsapp.com/send?phone=55${onlyDigits(l.celular)}">${ICONS.wpp} WhatsApp</a>`:''}</div>
+    <div class="btn-row"><button class="btn-danger" onclick="excluirPipelineLead('${l.id}')">${ICONS.trash} Excluir</button><button class="btn-primary" onclick="savePipelineLead('${l.id}')">${ICONS.check} Salvar</button>${l.celular?`<a class="wpp-btn" target="_blank" href="https://api.whatsapp.com/send?phone=55${onlyDigits(l.celular)}">${ICONS.wpp} WhatsApp</a>`:''}</div>
   </div></div>`);
+}
+async function validarAssociadoPipeline(id){
+  const l=DB.pipeline.find(x=>x.id===id); if(!l)return;
+  const cnpj=onlyDigits(document.getElementById('pl_cnpj')?.value||l.cnpj); if(cnpj.length!==14){toast('Informe um CNPJ válido antes de validar.');return;}
+  try{
+    const base=await sbSelect('cdl_base',`select=cnpj,empresa,status&cnpj=eq.${encodeURIComponent(cnpj)}&limit=1`);
+    let associado=base.length>0 && (base[0].status||'ativa')!=='inativa';
+    if(!associado){ const novos=await sbSelect('affiliates',`select=cnpj,empresa&cnpj=eq.${encodeURIComponent(cnpj)}&limit=1`); associado=novos.length>0; }
+    if(!associado && l.novoAfiliado && l.contratoAssinado && (l.anexos||[]).some(a=>/contrato/i.test(a.nome))){
+      associado=await showConfirmDialog('O simulador informa uma nova filiação e enviou o contrato assinado. Após conferir o documento, deseja validar esta empresa como associada?',{confirmLabel:'Validar filiação',danger:false});
+      if(associado) await sbUpsert('cdl_base',[{cnpj,empresa:l.empresa||l.nome||'',status:'ativa',origem_site:true}], 'cnpj');
+    }
+    l.associadoValidado=associado; l.associadoValidadoEm=associado?nowISO():null; l.associadoValidadoPor=associado?(CURRENT_USER?.nome||''):null; l.cnpj=cnpj;
+    await persist(); openPipelineLeadModal(id); toast(associado?'✓ Empresa validada como associada.':'Empresa ainda não consta como associada.');
+  }catch(e){ toast('Não foi possível consultar a base de associados agora.'); }
+}
+function addPipelineAnexos(id,event){
+  const l=DB.pipeline.find(x=>x.id===id),files=Array.from(event.target.files||[]);if(!l||!files.length)return;l.anexos=l.anexos||[];let pending=files.length;
+  files.forEach(file=>{const reader=new FileReader();reader.onload=async()=>{l.anexos.push({id:uid('anx'),nome:file.name,dataUrl:reader.result,criadoEm:nowISO(),categoria:'lead'});if(--pending===0){await persist();openPipelineLeadModal(id);toast('Anexo(s) adicionado(s).');}};reader.readAsDataURL(file);});
+}
+async function removePipelineAnexo(id,index){const l=DB.pipeline.find(x=>x.id===id);if(!l)return;l.anexos.splice(index,1);await persist();openPipelineLeadModal(id);}
+async function excluirPipelineLead(id){
+  const lead=(DB.pipeline||[]).find(x=>x.id===id); if(!lead)return;
+  if(!(await showConfirmDialog(`Excluir o lead "${lead.empresa||lead.nome||'sem nome'}"?`)))return;
+  if(lead.leadOrigemId){ DB.leadsExcluidos=DB.leadsExcluidos||[]; if(!DB.leadsExcluidos.includes(lead.leadOrigemId))DB.leadsExcluidos.push(lead.leadOrigemId); }
+  DB.pipeline=DB.pipeline.filter(x=>x.id!==id); await persist(); closeModal(); switchView('pipeline'); toast('Lead excluído.');
 }
 async function addPipelineComentario(id){
   const l=DB.pipeline.find(x=>x.id===id), el=document.getElementById('pl_comentario'); if(!l||!el||!el.value.trim())return;
@@ -2298,6 +2333,7 @@ async function savePipelineLead(id){
   const l=DB.pipeline.find(x=>x.id===id); if(!l)return;
   l.empresa=document.getElementById('pl_empresa').value.trim(); l.cnpj=onlyDigits(document.getElementById('pl_cnpj').value); l.nome=document.getElementById('pl_nome').value.trim(); l.celular=onlyDigits(document.getElementById('pl_celular').value); l.email=document.getElementById('pl_email').value.trim(); l.planoInteresse=document.getElementById('pl_plano').value.trim();
   const novaEtapa=document.getElementById('pl_etapa').value; l.etapa=novaEtapa;
+  if(novaEtapa==='venda' && !l.associadoValidado){ l.etapa='potencial'; document.getElementById('pl_etapa').value='potencial'; toast('Valide a empresa como associada antes de fechar o plano.'); return; }
   if(novaEtapa==='venda'){ await converterPipelineParaImplantacao(l); return; }
   await persist(); closeModal(); switchView('pipeline'); toast('Lead salvo.');
 }
@@ -2305,7 +2341,7 @@ async function converterPipelineParaImplantacao(l){
   const emp=getOrCreateEmpresaByCnpj(l.cnpj||'',l.empresa||'');
   DB.leadCounter=(DB.leadCounter||0)+1;
   const c={id:uid('cli'),status:'ativo',origemSite:!!l.origemSite,numeroLead:DB.leadCounter,etapaAdesao:'nova',pendencia:{ativa:false,motivo:''},leadOrigemId:l.leadOrigemId||null,empresaId:emp.id,
-    titular:{nome:l.nome||'',cpf:'',dataNascimento:'',celular:l.celular||'',email:l.email||'',razaoSocial:l.empresa||'',cnpj:l.cnpj||'',anexos:l.anexos||[]},dependentes:[],planoEscolhido:l.planoInteresse||'',vendedores:l.vendedorId?[{vendedorId:l.vendedorId,percentual:100,pagamentos:[]}]:[],comissoes:[],historico:[{data:nowISO(),texto:'Venda ativada no Pipeline e transferida automaticamente para Implantação.'}],emailAdministradoraEnviadoEm:null,criadoEm:l.criadoEm||nowISO()};
+    titular:{nome:l.nome||'',cpf:'',dataNascimento:'',celular:l.celular||'',email:l.email||'',razaoSocial:l.empresa||'',cnpj:l.cnpj||'',anexos:[],codigoVida:uid('vida')},dependentes:Array.from({length:Math.max(0,(Number(l.qtdVidas)||1)-1)},(_,i)=>({id:uid('dep'),codigoVida:uid('vida'),nome:l.vidasOriginais?.[i+1]?.nome||'',cpf:l.vidasOriginais?.[i+1]?.cpf||'',dataNascimento:l.vidasOriginais?.[i+1]?.dataNascimento||'',parentesco:'',anexos:[]})),anexosLead:[...(l.anexos||[])],associadoValidado:true,associadoValidadoEm:l.associadoValidadoEm,planoEscolhido:l.planoInteresse||'',vendedores:l.vendedorId?[{vendedorId:l.vendedorId,percentual:100,pagamentos:[]}]:[],comissoes:[],historico:[{data:nowISO(),texto:'Venda ativada no Pipeline e transferida automaticamente para Implantação.'}],emailAdministradoraEnviadoEm:null,criadoEm:l.criadoEm||nowISO()};
   DB.clients.push(c); DB.pipeline=DB.pipeline.filter(x=>x.id!==l.id); await persist(); closeModal(); switchView('crm'); toast('✓ Venda ativa transferida para Implantação.');
 }
 
@@ -2348,6 +2384,14 @@ function getPublicStorageUrl(path){
   if(!path) return null;
   return `${SUPABASE_URL}/storage/v1/object/public/internal-docs/${path}`;
 }
+async function getInternalDocUrl(path){
+  if(!path)return null;
+  try{
+    const res=await fetch(`${SUPABASE_URL}/storage/v1/object/sign/internal-docs/${encodeURIComponent(path).replace(/%2F/g,'/')}`,{method:'POST',headers:supabaseHeaders({'Content-Type':'application/json'}),body:JSON.stringify({expiresIn:604800})});
+    if(res.ok){const data=await res.json();if(data.signedURL)return `${SUPABASE_URL}/storage/v1${data.signedURL}`;}
+  }catch(e){console.warn('Não foi possível assinar o anexo privado',e);}
+  return getPublicStorageUrl(path);
+}
 async function importarLeadsDoSite(opts){
   opts = opts || {};
   const silencioso = !!opts.silencioso;
@@ -2372,10 +2416,10 @@ async function importarLeadsDoSite(opts){
     const primeira=vidas[0]||{};
     const dono=lead.vendedor_codigo ? DB.users.find(u=>u.codigoVendedor===lead.vendedor_codigo) : null;
     const anexos=[];
-    if(lead.internal_pdf_path) anexos.push({id:uid('anx'),nome:'Contrato + carimbo de evidências.pdf',dataUrl:getPublicStorageUrl(lead.internal_pdf_path),criadoEm:lead.received_at||nowISO()});
-    if(lead.fatura_path) anexos.push({id:uid('anx'),nome:'Fatura atual enviada pelo cliente',dataUrl:getPublicStorageUrl(lead.fatura_path),criadoEm:lead.received_at||nowISO()});
-    if(lead.orcamento_path) anexos.push({id:uid('anx'),nome:'Orçamento gerado na simulação.pdf',dataUrl:getPublicStorageUrl(lead.orcamento_path),criadoEm:lead.received_at||nowISO()});
-    DB.pipeline.push({id:uid('lead'),leadOrigemId:lead.id,origemSite:true,etapa:'novo',nome:lead.nome||primeira.nome||'',empresa:lead.empresa||'',cnpj:onlyDigits(lead.cnpj||''),celular:onlyDigits(lead.celular||''),email:lead.email||'',planoInteresse:lead.plano_escolhido||'',vidasOriginais:vidas,anexos,comentarios:[{data:nowISO(),texto:'Lead recebido automaticamente do simulador.'}],vendedorId:dono?.id||null,criadoEm:lead.received_at||nowISO()});
+    if(lead.internal_pdf_path) anexos.push({id:uid('anx'),nome:'Contrato + carimbo de evidências.pdf',dataUrl:await getInternalDocUrl(lead.internal_pdf_path),storagePath:lead.internal_pdf_path,criadoEm:lead.received_at||nowISO()});
+    if(lead.fatura_path) anexos.push({id:uid('anx'),nome:'Fatura atual enviada pelo cliente',dataUrl:await getInternalDocUrl(lead.fatura_path),storagePath:lead.fatura_path,criadoEm:lead.received_at||nowISO()});
+    if(lead.orcamento_path) anexos.push({id:uid('anx'),nome:'Orçamento gerado na simulação.pdf',dataUrl:await getInternalDocUrl(lead.orcamento_path),storagePath:lead.orcamento_path,criadoEm:lead.received_at||nowISO()});
+    DB.pipeline.push({id:uid('lead'),leadOrigemId:lead.id,origemSite:true,etapa:'novo',nome:lead.nome||primeira.nome||'',empresa:lead.empresa||'',cnpj:onlyDigits(lead.cnpj||''),celular:onlyDigits(lead.celular||''),email:lead.email||'',planoInteresse:lead.plano_escolhido||'',vidasOriginais:vidas,qtdVidas:Number(lead.qtd_vidas)||vidas.length||1,associadoInformado:!!lead.associado,novoAfiliado:!!lead.novo_afiliado,associadoValidado:false,contratoAssinado:!!lead.contrato_assinado,anexos,comentarios:[{data:nowISO(),texto:'Lead recebido automaticamente do simulador. Validação de associado pendente no portal.'}],vendedorId:dono?.id||null,criadoEm:lead.received_at||nowISO()});
     novosPipeline++;
   }
   if(novosPipeline){ await persist(); if(CURRENT_VIEW==='pipeline') switchView('pipeline'); }
@@ -2581,8 +2625,9 @@ function viewOrcamento(){
       ${ORC_MODE==='plano' ? `<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Cada bloco representa um titular. Adicione os dependentes daquele titular e escolha o plano específico do grupo.</p><div id="orc_gruposArea"></div><button type="button" class="btn-ghost" style="margin-top:10px" onclick="adicionarGrupoOrcamento()">${ICONS.plus} Adicionar outro titular</button><div id="orc_totalGrupos" style="font-size:15px;font-weight:800;color:var(--navy);margin-top:16px;"></div>` : `<div id="orc_planosArea" class="doc-actions-grid orc-planos-grid cols-2"></div>`}
     </div>
 
-    <div class="modal-section" style="border-bottom:none;">
-      <button class="btn-primary" id="orc_submitBtn" onclick="criarOrcamentoNoPortal()" disabled>Escolha uma opção acima para continuar</button>
+    <div class="modal-section" style="border-bottom:none;display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn-primary" id="orc_submitBtn" onclick="criarOrcamentoNoPortal(false)" disabled>Escolha uma opção acima para continuar</button>
+      ${ORC_MODE==='plano'?`<button class="btn-ghost" id="orc_implantarBtn" onclick="criarOrcamentoNoPortal(true)">${ICONS.check} Implantar</button>`:''}
     </div>
   </div>`;
 }
@@ -2591,23 +2636,23 @@ let ORC_GRUPOS = [];
 function initOrcamentoForm(){
   ORC_PLANO_ESCOLHIDO = null;
   if(ORC_MODE==='plano'){
-    ORC_GRUPOS=[{id:uid('grp'),titular:'',plano:'essencial',dependentes:[]}];
+    ORC_GRUPOS=[{id:uid('grp'),titular:'',plano:'essencial',quantidadeDependentes:0}];
     renderOrcGrupos();
     const btn=document.getElementById('orc_submitBtn'); if(btn){btn.disabled=false;btn.textContent='Gerar orçamento de plano de saúde';}
   } else calcularOrcamentoCdlPortal();
 }
-function adicionarGrupoOrcamento(){ salvarGruposOrcamentoDaTela(); ORC_GRUPOS.push({id:uid('grp'),titular:'',plano:'essencial',dependentes:[]}); renderOrcGrupos(); }
+function adicionarGrupoOrcamento(){ salvarGruposOrcamentoDaTela(); ORC_GRUPOS.push({id:uid('grp'),titular:'',plano:'essencial',quantidadeDependentes:0}); renderOrcGrupos(); }
 function removerGrupoOrcamento(id){ salvarGruposOrcamentoDaTela(); if(ORC_GRUPOS.length<=1){toast('O orçamento precisa ter pelo menos um titular.');return;} ORC_GRUPOS=ORC_GRUPOS.filter(g=>g.id!==id); renderOrcGrupos(); }
 function salvarGruposOrcamentoDaTela(){
-  ORC_GRUPOS.forEach(g=>{ const n=document.getElementById('og_nome_'+g.id), p=document.getElementById('og_plano_'+g.id), d=document.getElementById('og_deps_'+g.id); if(n)g.titular=n.value.trim();if(p)g.plano=p.value;if(d)g.dependentes=d.value.split('\n').map(x=>x.trim()).filter(Boolean); });
+  ORC_GRUPOS.forEach(g=>{ const n=document.getElementById('og_nome_'+g.id), p=document.getElementById('og_plano_'+g.id), d=document.getElementById('og_deps_'+g.id); if(n)g.titular=n.value.trim();if(p)g.plano=p.value;if(d)g.quantidadeDependentes=Math.max(0,Number(d.value)||0); });
 }
 function renderOrcGrupos(){
   const area=document.getElementById('orc_gruposArea'); if(!area)return;
-  area.innerHTML=ORC_GRUPOS.map((g,idx)=>`<div class="dep-card" style="margin-bottom:12px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b>Titular ${idx+1}</b>${ORC_GRUPOS.length>1?`<button class="btn-danger" style="padding:5px 9px" onclick="removerGrupoOrcamento('${g.id}')">${ICONS.trash}</button>`:''}</div><div class="field-grid"><div class="fg"><label>Nome do titular</label><input id="og_nome_${g.id}" value="${g.titular||''}" oninput="salvarGruposOrcamentoDaTela();atualizarTotalOrcGrupos()"></div><div class="fg"><label>Plano deste titular e dependentes</label><select id="og_plano_${g.id}" onchange="salvarGruposOrcamentoDaTela();atualizarTotalOrcGrupos()">${Object.entries(PLAN_VALUES_PORTAL).map(([k,p])=>`<option value="${k}" ${g.plano===k?'selected':''}>${p.nome} — ${formatBRL(p.valor)}/vida</option>`).join('')}</select></div></div><div class="fg" style="margin-top:10px"><label>Dependentes <span class="opt">(um nome por linha)</span></label><textarea id="og_deps_${g.id}" rows="3" placeholder="Maria Silva&#10;João Silva" oninput="salvarGruposOrcamentoDaTela();atualizarTotalOrcGrupos()">${(g.dependentes||[]).join('\n')}</textarea></div></div>`).join('');
+  area.innerHTML=ORC_GRUPOS.map((g,idx)=>`<div class="dep-card" style="margin-bottom:12px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b>Titular ${idx+1}</b>${ORC_GRUPOS.length>1?`<button class="btn-danger" style="padding:5px 9px" onclick="removerGrupoOrcamento('${g.id}')">${ICONS.trash}</button>`:''}</div><div class="field-grid"><div class="fg"><label>Nome do titular</label><input id="og_nome_${g.id}" value="${g.titular||''}" oninput="salvarGruposOrcamentoDaTela();atualizarTotalOrcGrupos()"></div><div class="fg"><label>Plano deste titular e dependentes</label><select id="og_plano_${g.id}" onchange="salvarGruposOrcamentoDaTela();atualizarTotalOrcGrupos()">${Object.entries(PLAN_VALUES_PORTAL).map(([k,p])=>`<option value="${k}" ${g.plano===k?'selected':''}>${p.nome} — ${formatBRL(p.valor)}/vida</option>`).join('')}</select></div></div><div class="fg" style="margin-top:10px;max-width:260px"><label>Quantidade de dependentes</label><input id="og_deps_${g.id}" type="number" min="0" step="1" value="${Number(g.quantidadeDependentes)||0}" oninput="salvarGruposOrcamentoDaTela();atualizarTotalOrcGrupos()"></div></div>`).join('');
   atualizarTotalOrcGrupos();
 }
 function atualizarTotalOrcGrupos(){
-  salvarGruposOrcamentoDaTela(); let total=0,vidas=0; ORC_GRUPOS.forEach(g=>{const p=PLAN_VALUES_PORTAL[g.plano];const qtd=1+(g.dependentes||[]).length;vidas+=qtd;if(p)total+=p.valor*qtd;}); const el=document.getElementById('orc_totalGrupos');if(el)el.textContent=`Total estimado: ${formatBRL(total)}/mês · ${vidas} vida(s)`;
+  salvarGruposOrcamentoDaTela(); let total=0,vidas=0; ORC_GRUPOS.forEach(g=>{const p=PLAN_VALUES_PORTAL[g.plano];const qtd=1+(Number(g.quantidadeDependentes)||0);vidas+=qtd;if(p)total+=p.valor*qtd;}); const el=document.getElementById('orc_totalGrupos');if(el)el.textContent=`Total estimado: ${formatBRL(total)}/mês · ${vidas} vida(s)`;
 }
 function toggleOrcCdlTier(){
   const ehAssociado = document.getElementById('orc_associado').value === 'sim';
@@ -2705,7 +2750,7 @@ function gerarOrcamentoPDFPortal(dados){
   return { doc, filename };
 }
 
-async function criarOrcamentoNoPortal(){
+async function criarOrcamentoNoPortal(implantarDireto=false){
   const razaoSocial = document.getElementById('orc_razao').value.trim();
   const cnpj = onlyDigits(document.getElementById('orc_cnpj').value);
   const nome = document.getElementById('orc_nome').value.trim();
@@ -2729,10 +2774,16 @@ async function criarOrcamentoNoPortal(){
     const ehAssociado = document.getElementById('orc_associado').value === 'sim';
     const cdlTier = ehAssociado ? null : document.getElementById('orc_cdlTier').value;
     const linhas=[]; let total=0; let totalVidas=0;
-    ORC_GRUPOS.forEach(g=>{ const plano=PLAN_VALUES_PORTAL[g.plano]; const vidas=1+(g.dependentes||[]).length; const subtotal=plano.valor*vidas; total+=subtotal; totalVidas+=vidas; linhas.push([g.titular, plano.nome, String(vidas), formatBRL(subtotal)]); });
+    ORC_GRUPOS.forEach(g=>{ const plano=PLAN_VALUES_PORTAL[g.plano]; const vidas=1+(Number(g.quantidadeDependentes)||0); const subtotal=plano.valor*vidas; total+=subtotal; totalVidas+=vidas; linhas.push([g.titular, plano.nome, String(vidas), formatBRL(subtotal)]); });
     pdfInfo = gerarOrcamentoPDFPortal({...dadosBasePDF,tipoArquivo:'plano-saude',titulo:'Orçamento — Plano de Saúde Unimed',secaoTitulo:'Titulares e planos',colunas:['Titular','Plano','Vidas','Subtotal'],linhas,totalTexto:`${formatBRL(total)}/mês`,observacao:'Cada titular pode possuir plano próprio e seus dependentes permanecem vinculados ao mesmo grupo. Valores sujeitos a análise cadastral e confirmação da Unimed.'});
     const pdfDataUrl=pdfInfo.doc.output('datauristring');
-    const lead={id:uid('lead'),etapa:'potencial',nome:nome,empresa:razaoSocial,cnpj,celular:onlyDigits(celular),email,planoInteresse:`Orçamento com ${ORC_GRUPOS.length} titular(es) · ${totalVidas} vida(s)`,gruposOrcamento:ORC_GRUPOS.map(g=>({titular:g.titular,plano:PLAN_VALUES_PORTAL[g.plano].nome,planoKey:g.plano,dependentes:[...(g.dependentes||[])]})),anexos:[{id:uid('anx'),nome:pdfInfo.filename,dataUrl:pdfDataUrl,criadoEm:nowISO()}],comentarios:[{data:nowISO(),texto:`Orçamento criado por ${CURRENT_USER.nome}.`}],vendedorId:CURRENT_USER.id,planoCdlEscolhido:cdlTier?CDL_TIERS_PORTAL[cdlTier].nome:null,criadoEm:nowISO()};
+    const gruposSalvos=ORC_GRUPOS.map(g=>({titular:g.titular,plano:PLAN_VALUES_PORTAL[g.plano].nome,planoKey:g.plano,quantidadeDependentes:Number(g.quantidadeDependentes)||0}));
+    if(implantarDireto){
+      const empresa=getOrCreateEmpresaByCnpj(cnpj,razaoSocial); DB.leadCounter=(DB.leadCounter||0)+1;
+      const criados=gruposSalvos.map((g,idx)=>({id:uid('cli'),status:'ativo',origemSite:false,numeroLead:DB.leadCounter,etapaAdesao:'nova',pendencia:{ativa:false,motivo:''},empresaId:empresa.id,titular:{nome:g.titular,cpf:'',dataNascimento:'',celular:idx===0?onlyDigits(celular):'',email:idx===0?email:'',razaoSocial,cnpj,anexos:idx===0?[{id:uid('anx'),nome:pdfInfo.filename,dataUrl:pdfDataUrl,criadoEm:nowISO()}]:[]},dependentes:Array.from({length:g.quantidadeDependentes},()=>({id:uid('dep'),nome:'',cpf:'',dataNascimento:'',parentesco:'',anexos:[]})),planoEscolhido:g.plano,vendedores,comissoes:[],historico:[{data:nowISO(),texto:`Orçamento implantado diretamente por ${CURRENT_USER.nome}.`}],emailAdministradoraEnviadoEm:null,criadoEm:nowISO()}));
+      DB.clients.push(...criados); await registrarLog('Orçamento implantado diretamente',`${razaoSocial} (plano de saúde · ${totalVidas} vidas)`); await persist(); pdfInfo.doc.save(pdfInfo.filename); switchView('crm'); openClientModal(criados[0].id); toast('✓ Orçamento enviado diretamente para Implantação.'); return;
+    }
+    const lead={id:uid('lead'),etapa:'potencial',nome:nome,empresa:razaoSocial,cnpj,celular:onlyDigits(celular),email,planoInteresse:`Orçamento com ${ORC_GRUPOS.length} titular(es) · ${totalVidas} vida(s)`,gruposOrcamento:gruposSalvos,anexos:[{id:uid('anx'),nome:pdfInfo.filename,dataUrl:pdfDataUrl,criadoEm:nowISO()}],comentarios:[{data:nowISO(),texto:`Orçamento criado por ${CURRENT_USER.nome}.`}],vendedorId:CURRENT_USER.id,planoCdlEscolhido:cdlTier?CDL_TIERS_PORTAL[cdlTier].nome:null,criadoEm:nowISO()};
     DB.pipeline=DB.pipeline||[];DB.pipeline.push(lead);
     await registrarLog('Orçamento criado no portal',`${razaoSocial} (plano de saúde · ${totalVidas} vidas)`);await persist();pdfInfo.doc.save(pdfInfo.filename);toast('Orçamento criado e enviado para Cliente Potencial no Pipeline.');openPipelineLeadModal(lead.id);return;
   } else {
@@ -2890,7 +2941,9 @@ function migrateClientShape(c){
   }
   if(c.anexos) delete c.anexos;
   c.dependentes = c.dependentes || [];
-  c.dependentes.forEach(d=>{ if(!d.anexos) d.anexos = []; });
+  c.titular.codigoVida=c.titular.codigoVida||uid('vida');
+  c.dependentes.forEach(d=>{ if(!d.anexos) d.anexos = []; d.codigoVida=d.codigoVida||uid('vida'); });
+  c.anexosLead=c.anexosLead||[];
   if(!c.etapaAdesao) c.etapaAdesao = c.status === 'ativo' ? 'ativo' : 'nova';
   if(!c.pendencia) c.pendencia = { ativa:false, motivo:'' };
   if(c.origemSite === undefined) c.origemSite = false;
@@ -2901,6 +2954,7 @@ function migrateClientShape(c){
   if(!c.historicoPagamento) c.historicoPagamento = [];
   if(!c.aditivoRc) c.aditivoRc = {};
   if(!c.empresaId) c.empresaId = getOrCreateEmpresaByCnpj(c.titular.cnpj, c.titular.razaoSocial).id;
+  const empresaCodigo=DB.empresas.find(e=>e.id===c.empresaId); if(empresaCodigo) empresaCodigo.codigoEmpresa=empresaCodigo.codigoEmpresa||uid('emp');
   if(!c.numeroLead){ DB.leadCounter = (DB.leadCounter||0) + 1; c.numeroLead = DB.leadCounter; }
 }
 function switchPersonTab(tab){ ACTIVE_PERSON_TAB = tab; renderClientModal(); }
@@ -2938,7 +2992,7 @@ function getOrCreateEmpresaByCnpj(cnpj, razaoSocial){
   DB.empresas = DB.empresas || [];
   let emp = DB.empresas.find(e=>e.cnpj===cnpj);
   if(!emp){
-    emp = { id:uid('org'), cnpj: cnpj||'', razaoSocial: razaoSocial||'', anexos:[], criadoEm:nowISO() };
+    emp = { id:uid('org'), codigoEmpresa:uid('emp'), cnpj: cnpj||'', razaoSocial: razaoSocial||'', anexos:[], criadoEm:nowISO() };
     DB.empresas.push(emp);
   } else if(razaoSocial && !emp.razaoSocial){
     emp.razaoSocial = razaoSocial;
@@ -2958,7 +3012,7 @@ async function adicionarTitularNaEmpresa(empresaId){
   const c = {
     id:uid('cli'), status:'ativo', origemSite:false, etapaAdesao:'nova', pendencia:{ativa:false,motivo:''},
     empresaId: emp.id,
-    titular:{ nome:'', cpf:'', dataNascimento:'', celular:'', email:'', cargo:'', razaoSocial:emp.razaoSocial, cnpj:emp.cnpj, anexos:[] },
+    titular:{ codigoVida:uid('vida'), nome:'', cpf:'', dataNascimento:'', celular:'', email:'', cargo:'', razaoSocial:emp.razaoSocial, cnpj:emp.cnpj, anexos:[] },
     dependentes:[], planoEscolhido:'',
     vendedores:[], comissoes:[],
     historico:[{ data:nowISO(), texto:`Novo titular adicionado à empresa ${emp.razaoSocial||emp.cnpj}.` }],
@@ -2996,6 +3050,11 @@ async function removeAnexoEmpresa(anexoIdx){
   await persist();
   renderClientModal();
 }
+function addAnexosLeadImplantacao(event){
+  const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID),files=Array.from(event.target.files||[]);if(!c||!files.length)return;c.anexosLead=c.anexosLead||[];let pending=files.length;
+  files.forEach(file=>{const reader=new FileReader();reader.onload=async()=>{c.anexosLead.push({id:uid('anx'),nome:file.name,dataUrl:reader.result,criadoEm:nowISO(),categoria:'lead'});if(--pending===0){await persist();renderClientModal();toast('Anexo(s) do lead adicionado(s).');}};reader.readAsDataURL(file);});
+}
+async function removeAnexoLeadImplantacao(index){const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);if(!c)return;c.anexosLead.splice(index,1);await persist();renderClientModal();}
 
 function renderClientModal(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
@@ -3133,6 +3192,10 @@ function renderClientModal(){
     const pessoas = [{ label: `Titular — ${t.nome || 'sem nome'}`, anexos: t.anexos||[], type:'titular' }]
       .concat(c.dependentes.map((d,i)=>({ label: `Dependente ${i+1} — ${d.nome || 'sem nome'}`, anexos: d.anexos||[], type:'dependente', index:i })));
     tabContent = `
+      <div class="anexo-person-block" style="border-color:var(--blue);background:var(--navy-tint);">
+        <div class="anexo-person-head"><span><b>Anexos originais do lead</b> — recebidos no Pipeline</span><label class="btn-ghost" style="padding:6px 12px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" multiple style="display:none" onchange="addAnexosLeadImplantacao(event)"></label></div>
+        <div class="attachment-list">${(c.anexosLead||[]).map((a,i)=>`<span class="attachment-chip">${ICONS.file}${a.nome}<a href="${a.dataUrl}" target="_blank" style="color:inherit;display:flex;">${ICONS.upload}</a><button onclick="removeAnexoLeadImplantacao(${i})">${ICONS.close}</button></span>`).join('')||'<span style="font-size:12px;color:var(--text-faint);">Nenhum anexo original do lead.</span>'}</div>
+      </div>
       <div class="anexo-person-block" style="border-color:var(--navy);">
         <div class="anexo-person-head">
           <span><b>Documentos da empresa</b> — ${emp.razaoSocial || t.razaoSocial || 'sem nome'}</span>
@@ -3187,7 +3250,7 @@ function renderClientModal(){
     tabContent = `
       <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">O questionário de risco é individual para cada vida. Você pode preencher pelo sistema ou gerar um link exclusivo.</p>
       <div style="display:grid;gap:10px;">
-        ${listPessoas(c).map(p=>`<div class="dep-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;"><div><b>${p.label}</b><div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${p.pessoa.dsRespostas?'✓ Questionário preenchido':'Aguardando questionário'}</div></div><div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;"><button class="btn-ghost" onclick="openQuestionarioRiscoModalFor('${p.key}')">Preencher</button><button class="btn-primary" style="padding:7px 10px;font-size:11px;" onclick="gerarLinkRiscoPessoa('${p.key}')">Gerar link</button></div></div>`).join('')}
+        ${listPessoas(c).map(p=>`<div class="dep-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;"><div><b>${p.label}</b><div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${p.pessoa.dsRespostas?'✓ Questionário preenchido':'Aguardando questionário'} · Código da vida: <code>${p.pessoa.codigoVida||'será gerado'}</code></div></div><div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;"><button class="btn-ghost" onclick="openQuestionarioRiscoModalFor('${p.key}')">Preencher pelo implantador</button><button class="btn-primary" style="padding:7px 10px;font-size:11px;" onclick="gerarLinkRiscoPessoa('${p.key}')">Gerar link individual</button></div></div>`).join('')}
       </div>
     `;
   } else if(ACTIVE_PERSON_TAB==='conferencia'){
@@ -3843,9 +3906,10 @@ let DS_ANSWERS = {};
 function openQuestionarioRiscoModalFor(key){ openQuestionarioRiscoModal(); setTimeout(()=>switchDsPessoa(key),0); }
 function gerarLinkRiscoPessoa(key){
   const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID); const p=listPessoas(c).find(x=>x.key===key); if(!p) return;
+  const emp=getEmpresaDoCliente(c); emp.codigoEmpresa=emp.codigoEmpresa||uid('emp'); p.pessoa.codigoVida=p.pessoa.codigoVida||uid('vida');
   p.pessoa.linkRiscoToken=p.pessoa.linkRiscoToken||uid('ds');
   persist();
-  const base=location.href.split('#')[0].split('?')[0]; const link=base+'?ds='+encodeURIComponent(p.pessoa.linkRiscoToken);
+  const numero=getOrCreateClientNumero(c); const link=FORM_BASE_URL+'?c='+encodeURIComponent(numero)+'&e='+encodeURIComponent(emp.codigoEmpresa)+'&v='+encodeURIComponent(p.pessoa.codigoVida);
   navigator.clipboard?.writeText(link); toast('Link individual do questionário copiado.');
 }
 function openQuestionarioRiscoModal(){
@@ -4561,7 +4625,7 @@ async function toggleClientStatus(){
 }
 async function addDependente(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
-  c.dependentes.push({ id:uid('dep'), nome:'', cpf:'', dataNascimento:'', parentesco:'' });
+  c.dependentes.push({ id:uid('dep'), codigoVida:uid('vida'), nome:'', cpf:'', dataNascimento:'', parentesco:'', anexos:[] });
   c.historico.push({ data:nowISO(), texto:'Dependente adicionado.' });
   await persist();
   renderClientModal();
@@ -4621,9 +4685,10 @@ async function removeAnexoFrom(type, index, anexoIdx){
 }
 async function deleteClient(){
   if(!isAdmin()){ toast('Só o administrador pode excluir clientes.'); return; }
+  const viewDeOrigem = CURRENT_VIEW;
   if(await excluirClientePorId(ACTIVE_CLIENT_ID)){
     closeModal();
-    switchView('clientes');
+    switchView(viewDeOrigem);
   }
 }
 
