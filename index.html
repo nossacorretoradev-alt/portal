@@ -1646,6 +1646,10 @@ const SUPABASE_ANON_KEY = "sb_publishable_8mxIm8xrMLcIICWXGxtFSA_sancrabI";
 // Troque pelo endereço real assim que publicar no GitHub Pages, ex:
 // "https://seuusuario.github.io/simulador-cdl-unimed/formulario-cliente.html"
 const FORM_BASE_URL = "https://nossacorretoradev-alt.github.io/saude/formulario-cliente.html";
+// Página pública para o titular anexar documentos. Publique este arquivo no mesmo
+// repositório público do simulador/formulário.
+const DOCUMENT_UPLOAD_BASE_URL = "https://nossacorretoradev-alt.github.io/saude/documentos-cliente.html";
+const DOCUMENT_UPLOAD_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/document-uploads`;
 const STORAGE_KEY = 'cdlunimed_portal_db_v1';
 const AUTH_SESSION_KEY='cdlunimed_supabase_session_v2';
 let AUTH_SESSION=null;
@@ -2992,6 +2996,7 @@ function migrateClientShape(c){
   c.titular.codigoVida=c.titular.codigoVida||uid('vida');
   c.dependentes.forEach(d=>{ if(!d.anexos) d.anexos = []; d.codigoVida=d.codigoVida||uid('vida'); });
   c.anexosLead=c.anexosLead||[];
+  c.documentUploadRequests=c.documentUploadRequests||[];
   if(!c.etapaAdesao) c.etapaAdesao = c.status === 'ativo' ? 'ativo' : 'nova';
   if(!c.pendencia) c.pendencia = { ativa:false, motivo:'' };
   if(c.origemSite === undefined) c.origemSite = false;
@@ -3202,6 +3207,65 @@ function addAnexosLeadImplantacao(event){
 }
 async function removeAnexoLeadImplantacao(index){const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);if(!c)return;c.anexosLead.splice(index,1);await persist();renderClientModal();}
 
+async function documentUploadApi(payload){
+  const res=await fetch(DOCUMENT_UPLOAD_FUNCTION_URL,{method:'POST',headers:supabaseHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload)});
+  let data={};try{data=await res.json();}catch(e){}
+  if(!res.ok) throw new Error(data.error||'Não foi possível acessar as solicitações de documentos.');
+  return data;
+}
+function documentRequestItems(c){
+  const emp=getEmpresaDoCliente(c); emp.codigoEmpresa=emp.codigoEmpresa||uid('emp');
+  const items=[];
+  DOC_SLOTS_EMPRESA.forEach(s=>items.push({key:`empresa-${s.key}`,group:'Documentos da empresa',targetType:'empresa',targetCode:emp.codigoEmpresa,slotKey:s.key,label:s.label}));
+  DOC_SLOTS_PESSOA.forEach(s=>items.push({key:`titular-${s.key}`,group:`Titular — ${c.titular.nome||'sem nome'}`,targetType:'titular',targetCode:c.titular.codigoVida,slotKey:s.key,label:s.label}));
+  c.dependentes.forEach((d,i)=>DOC_SLOTS_PESSOA.forEach(s=>items.push({key:`dependente-${d.codigoVida}-${s.key}`,group:`Dependente ${i+1} — ${d.nome||'sem nome'}`,targetType:'dependente',targetCode:d.codigoVida,slotKey:s.key,label:s.label})));
+  return items;
+}
+async function criarSolicitacaoDocumentosTitular(){
+  const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);if(!c)return;
+  if(!c.titular.nome){toast('Preencha o nome do titular antes de gerar o link.');return;}
+  const emp=getEmpresaDoCliente(c);emp.codigoEmpresa=emp.codigoEmpresa||uid('emp');c.titular.codigoVida=c.titular.codigoVida||uid('vida');
+  try{
+    const result=await documentUploadApi({action:'create',clientId:c.id,companyCode:emp.codigoEmpresa,holderLifeCode:c.titular.codigoVida,holderName:c.titular.nome,validDays:7,items:documentRequestItems(c)});
+    const link=DOCUMENT_UPLOAD_BASE_URL+'?token='+encodeURIComponent(result.token);
+    c.documentUploadRequests=c.documentUploadRequests||[];
+    c.documentUploadRequests.push({id:result.id,link,expiresAt:result.expiresAt,status:'open',createdAt:nowISO()});
+    c.historico.push({data:nowISO(),texto:`Link individual para envio de documentos gerado para ${c.titular.nome}.`});
+    await persist();
+    try{await navigator.clipboard.writeText(link);}catch(e){}
+    renderClientModal();toast('✓ Link copiado. Envie ao titular pelo WhatsApp.');
+  }catch(e){toast(e.message);}
+}
+function solicitacaoDocumentoAtual(c){return (c.documentUploadRequests||[]).slice().reverse().find(r=>r.status==='open')||(c.documentUploadRequests||[]).slice(-1)[0];}
+async function copiarLinkDocumentos(requestId){
+  const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID),r=(c.documentUploadRequests||[]).find(x=>x.id===requestId);if(!r)return;
+  try{await navigator.clipboard.writeText(r.link);toast('Link copiado.');}catch(e){prompt('Copie o link:',r.link);}
+}
+async function cancelarLinkDocumentos(requestId){
+  if(!(await showConfirmDialog('Cancelar este link de documentos?',{confirmLabel:'Cancelar link'})))return;
+  const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  try{await documentUploadApi({action:'cancel',requestId});const r=(c.documentUploadRequests||[]).find(x=>x.id===requestId);if(r)r.status='cancelled';await persist();renderClientModal();toast('Link cancelado.');}catch(e){toast(e.message);}
+}
+async function atualizarDocumentosDoLink(requestId){
+  const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);if(!c)return;
+  try{
+    const result=await documentUploadApi({action:'status',requestId});const emp=getEmpresaDoCliente(c);let novos=0;
+    (result.uploads||[]).forEach(u=>{
+      let alvo=null;
+      if(u.target_type==='empresa'&&u.target_code===emp.codigoEmpresa)alvo=emp;
+      else if(u.target_type==='titular'&&u.target_code===c.titular.codigoVida)alvo=c.titular;
+      else if(u.target_type==='dependente')alvo=c.dependentes.find(d=>d.codigoVida===u.target_code);
+      if(!alvo||!u.signedUrl)return;alvo.documentos=alvo.documentos||{};
+      const anterior=alvo.documentos[u.slot_key];
+      if(!anterior||anterior.storagePath!==u.storage_path)novos++;
+      alvo.documentos[u.slot_key]={nome:`${u.label} - ${u.original_name}`,nomeOriginal:u.original_name,dataUrl:u.signedUrl,storagePath:u.storage_path,confirmado:u.status==='approved',criadoEm:u.uploaded_at,origemLink:true};
+    });
+    const local=(c.documentUploadRequests||[]).find(x=>x.id===requestId);if(local){local.receivedCount=(result.uploads||[]).length;local.lastSyncAt=nowISO();local.status=result.request.status;}
+    if(novos)c.historico.push({data:nowISO(),texto:`${novos} documento(s) recebido(s) pelo link individual de ${c.titular.nome}.`});
+    await persist();renderClientModal();toast(novos?`✓ ${novos} documento(s) novo(s) importado(s).`:'Nenhum documento novo no link.');
+  }catch(e){toast(e.message);}
+}
+
 function renderClientModal(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   if(!c) return;
@@ -3335,12 +3399,25 @@ function renderClientModal(){
   } else if(ACTIVE_PERSON_TAB==='documentacao'){
     const emp = getEmpresaDoCliente(c);
     const outrosTitulares = getTitularesDaEmpresa(c.empresaId).filter(x=>x.id!==c.id);
+    const solicitacaoAtual = solicitacaoDocumentoAtual(c);
     const pessoas = [{ label: `Titular — ${t.nome || 'sem nome'}`, pessoa:t, type:'titular', ehDependente:false }]
       .concat(c.dependentes.map((d,i)=>({ label: `Dependente ${i+1} — ${d.nome || 'sem nome'}`, pessoa:d, type:'dependente', index:i, ehDependente:true })));
     const totalOk = docsCompletos(c);
     tabContent = `
       <div class="pendencia-banner" style="${totalOk?'background:var(--success-light);color:var(--success);border-color:transparent;':''}margin-bottom:16px;">
         ${totalOk ? `✓ Checklist completo — todos os documentos confirmados. Já dá pra enviar pra administradora.` : `⚠️ Ainda faltam documentos confirmados — o envio pra administradora só libera quando o checklist estiver 100%.`}
+      </div>
+
+      <div class="anexo-person-block" style="border:1.5px solid var(--blue);background:linear-gradient(135deg,var(--navy-tint),#fff);padding:16px;">
+        <div class="anexo-person-head" style="align-items:flex-start;gap:12px;">
+          <div><b>Solicitar documentos por link</b><div style="font-size:11.5px;font-weight:500;color:var(--text-muted);margin-top:4px;line-height:1.45;">Gere um link exclusivo para ${t.nome||'este titular'}. Ele poderá anexar os documentos da empresa, dele e de cada dependente, todos separados.</div></div>
+          ${!solicitacaoAtual||solicitacaoAtual.status!=='open'?`<button class="btn-primary" style="white-space:nowrap;padding:8px 12px;font-size:11.5px;" onclick="criarSolicitacaoDocumentosTitular()">${ICONS.upload} Gerar link</button>`:''}
+        </div>
+        ${solicitacaoAtual?`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+          <span class="status-pill ${solicitacaoAtual.status==='open'?'ativo':'inativo'}">${solicitacaoAtual.status==='open'?'Link ativo':solicitacaoAtual.status==='cancelled'?'Link cancelado':'Solicitação encerrada'}</span>
+          <span style="font-size:11px;color:var(--text-muted);">${solicitacaoAtual.receivedCount||0} recebido(s) · validade ${fmtDate((solicitacaoAtual.expiresAt||'').slice(0,10))}</span>
+          ${solicitacaoAtual.status==='open'?`<button class="btn-ghost" style="padding:6px 9px;font-size:11px;" onclick="copiarLinkDocumentos('${solicitacaoAtual.id}')">Copiar link</button><button class="btn-ghost" style="padding:6px 9px;font-size:11px;" onclick="atualizarDocumentosDoLink('${solicitacaoAtual.id}')">Atualizar recebidos</button><button class="btn-danger" style="padding:6px 9px;font-size:11px;" onclick="cancelarLinkDocumentos('${solicitacaoAtual.id}')">Cancelar link</button>`:`<button class="btn-primary" style="padding:6px 9px;font-size:11px;" onclick="criarSolicitacaoDocumentosTitular()">Gerar novo link</button>`}
+        </div>`:''}
       </div>
 
       <div class="anexo-person-block" style="border-color:var(--blue);background:var(--navy-tint);">
