@@ -1171,6 +1171,13 @@ input,select,textarea{font-family:inherit;}
 }
 
 .anexo-person-block{ border:1px solid var(--border); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+.doc-slot-row{ display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px dashed var(--border); flex-wrap:wrap; }
+.doc-slot-row:first-child{ border-top:none; }
+.doc-slot-icon{ width:26px; height:26px; border-radius:7px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.doc-slot-icon svg{ width:14px; height:14px; }
+.doc-slot-icon.ok{ background:var(--success-light); color:var(--success); }
+.doc-slot-icon.pendente{ background:var(--surface-alt); color:var(--text-faint); }
+.doc-slot-label{ flex:1; min-width:140px; font-size:12.5px; font-weight:600; }
 .anexo-person-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:12.5px; font-weight:700; color:var(--text); }
 
 /* Implantação v2 — janela ampla, pessoas hierárquicas e ações fixas */
@@ -1640,41 +1647,36 @@ const SUPABASE_ANON_KEY = "sb_publishable_8mxIm8xrMLcIICWXGxtFSA_sancrabI";
 // "https://seuusuario.github.io/simulador-cdl-unimed/formulario-cliente.html"
 const FORM_BASE_URL = "https://nossacorretoradev-alt.github.io/saude/formulario-cliente.html";
 const STORAGE_KEY = 'cdlunimed_portal_db_v1';
+const AUTH_SESSION_KEY='cdlunimed_supabase_session_v2';
+let AUTH_SESSION=null;
 
 function supabaseHeaders(extra){
-  return Object.assign({ apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` }, extra||{});
+  return Object.assign({ apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${AUTH_SESSION?.access_token||SUPABASE_ANON_KEY}` }, extra||{});
 }
 window.storage = {
   async get(key){
-    const url = `${SUPABASE_URL}/rest/v1/portal_storage?key=eq.${encodeURIComponent(key)}&select=value`;
-    const res = await fetchComRetry(url, { headers: supabaseHeaders() });
+    const url = `${SUPABASE_URL}/rest/v1/rpc/secure_portal_get`;
+    const res = await fetchComRetry(url, {method:'POST',headers:supabaseHeaders({'Content-Type':'application/json'}),body:JSON.stringify({p_key:key})});
     if(!res.ok) throw new Error('Supabase get failed: '+res.status);
-    const rows = await res.json();
-    if(!rows.length) throw new Error('not found');
-    return { key, value: JSON.stringify(rows[0].value) };
+    const value = await res.json();
+    if(value===null) throw new Error('not found');
+    return { key, value: JSON.stringify(value) };
   },
   async set(key, value){
-    const url = `${SUPABASE_URL}/rest/v1/portal_storage`;
+    const url = `${SUPABASE_URL}/rest/v1/rpc/secure_portal_set`;
     const res = await fetchComRetry(url, {
       method: 'POST',
-      headers: supabaseHeaders({ 'Content-Type':'application/json', Prefer:'resolution=merge-duplicates,return=minimal' }),
-      body: JSON.stringify({ key, value: JSON.parse(value), updated_at: new Date().toISOString() })
+      headers: supabaseHeaders({ 'Content-Type':'application/json' }),
+      body: JSON.stringify({ p_key:key, p_value:JSON.parse(value) })
     });
     if(!res.ok) throw new Error('Supabase set failed: '+res.status);
     return { key, value };
   },
   async delete(key){
-    const url = `${SUPABASE_URL}/rest/v1/portal_storage?key=eq.${encodeURIComponent(key)}`;
-    await fetchComRetry(url, { method:'DELETE', headers: supabaseHeaders() });
-    return { key, deleted:true };
+    throw new Error('Exclusão direta do armazenamento seguro está desabilitada.');
   },
   async list(prefix){
-    let url = `${SUPABASE_URL}/rest/v1/portal_storage?select=key`;
-    if(prefix) url += `&key=like.${encodeURIComponent(prefix)}*`;
-    const res = await fetchComRetry(url, { headers: supabaseHeaders() });
-    if(!res.ok) throw new Error('Supabase list failed: '+res.status);
-    const rows = await res.json();
-    return { keys: rows.map(r=>r.key) };
+    return {keys:[STORAGE_KEY]};
   }
 };
 
@@ -1949,11 +1951,13 @@ async function loadDB(){
     const r = await window.storage.get(STORAGE_KEY);
     DB = JSON.parse(r.value);
   }catch(e){
+    if(e.message!=='not found') throw e;
     DB = seedDB();
     try{ await persist(); }catch(e2){ console.warn('Não foi possível salvar a base inicial.', e2); }
   }
   // garante que módulos novos existam mesmo em bases antigas
   DB.users = DB.users||[]; DB.pipeline = DB.pipeline||[]; DB.clients = DB.clients||[]; DB.companies = DB.companies||[]; DB.logs = DB.logs||[]; DB.tarefas=DB.tarefas||[];
+  DB.users.forEach(u=>{ if('senha' in u) delete u.senha; });
   DB.tarefas.forEach(t=>{t.membrosIds=t.membrosIds||[t.criadorId||t.usuarioId].filter(Boolean);t.comentarios=t.comentarios||[];t.historico=t.historico||[];});
   DB.comissaoLancamentos=DB.comissaoLancamentos||[]; DB.comissaoPagamentos=DB.comissaoPagamentos||[]; DB.comissaoCompetencias=DB.comissaoCompetencias||[];
   // Migra uma única vez o histórico financeiro antigo para a nova carteira.
@@ -1990,7 +1994,7 @@ function seedDB(){
   const adminId = uid('usr');
   return {
     users: [
-      { id:adminId, nome:'Administrador', email:'admin@nossacorretora.com.br', senha:'troque-esta-senha', papel:'admin', ativo:true, criadoEm:todayISO() },
+      { id:adminId, nome:'Administrador', email:'admin@nossacorretora.com.br', papel:'admin', ativo:true, criadoEm:todayISO() },
     ],
     clients: [
       { id:uid('cli'), status:'ativo', origemSite:false, etapaAdesao:'nova', pendencia:{ativa:false,motivo:''},
@@ -2061,19 +2065,27 @@ function renderLogin(msg){
 async function doLogin(){
   const email = document.getElementById('li_email').value.trim().toLowerCase();
   const pass = document.getElementById('li_pass').value;
-  const u = DB.users.find(x=>x.email.toLowerCase()===email && x.senha===pass);
   const err = document.getElementById('loginError');
-  if(!u){ err.textContent='E-mail ou senha inválidos.'; err.classList.add('show'); return; }
-  if(!u.ativo){ err.textContent='Este usuário está desativado. Fale com o administrador.'; err.classList.add('show'); return; }
+  const tent=JSON.parse(localStorage.getItem('portal_login_guard')||'{"count":0,"until":0}');
+  if(tent.until>Date.now()){err.textContent=`Muitas tentativas. Aguarde ${Math.ceil((tent.until-Date.now())/60000)} minuto(s).`;err.classList.add('show');return;}
+  try{
+    const res=await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`,{method:'POST',headers:{apikey:SUPABASE_ANON_KEY,'Content-Type':'application/json'},body:JSON.stringify({email,password:pass})});
+    if(!res.ok){const novo={count:(tent.count||0)+1,until:0};if(novo.count>=5){novo.until=Date.now()+15*60*1000;novo.count=0;}localStorage.setItem('portal_login_guard',JSON.stringify(novo));throw new Error(res.status===429?'Limite de tentativas atingido. Tente mais tarde.':'E-mail ou senha inválidos.');}
+    AUTH_SESSION=await res.json();sessionStorage.setItem(AUTH_SESSION_KEY,JSON.stringify(AUTH_SESSION));localStorage.removeItem('portal_login_guard');
+    const profileRes=await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${AUTH_SESSION.user.id}&select=*`,{headers:supabaseHeaders()});const profiles=profileRes.ok?await profileRes.json():[];const profile=profiles[0];if(!profile||!profile.ativo)throw new Error('Usuário sem acesso ativo ao portal.');
+    await loadDB();
+    let u=DB.users.find(x=>x.authId===AUTH_SESSION.user.id||x.email?.toLowerCase()===email);if(!u){u={id:AUTH_SESSION.user.id,authId:AUTH_SESSION.user.id,nome:profile.nome,email,papel:profile.papel,ativo:profile.ativo,permissoes:profile.permissoes||defaultPermissoes()};DB.users.push(u);}Object.assign(u,{authId:AUTH_SESSION.user.id,nome:profile.nome,papel:profile.papel,ativo:profile.ativo,permissoes:profile.permissoes||u.permissoes});
+    CURRENT_USER=u;
+  }catch(e){AUTH_SESSION=null;sessionStorage.removeItem(AUTH_SESSION_KEY);err.textContent=e.message||'Não foi possível entrar.';err.classList.add('show');return;}
   err.classList.remove('show');
-  CURRENT_USER = u;
-  localStorage.setItem(SESSION_KEY, u.id);
   await registrarLog('Login realizado');
   await persist();
   enterApp();
 }
 function logout(){
   if(CURRENT_USER){ registrarLog('Logout realizado').then(()=>persist()); }
+  if(AUTH_SESSION?.access_token)fetch(`${SUPABASE_URL}/auth/v1/logout`,{method:'POST',headers:supabaseHeaders()}).catch(()=>{});
+  AUTH_SESSION=null;sessionStorage.removeItem(AUTH_SESSION_KEY);
   CURRENT_USER = null;
   localStorage.removeItem(SESSION_KEY);
   if(window.__leadsPollInterval){ clearInterval(window.__leadsPollInterval); window.__leadsPollInterval = null; }
@@ -2081,12 +2093,7 @@ function logout(){
   renderLogin();
 }
 function checkSession(){
-  const id = localStorage.getItem(SESSION_KEY);
-  if(!id) return false;
-  const u = DB.users.find(x=>x.id===id && x.ativo);
-  if(!u) return false;
-  CURRENT_USER = u;
-  return true;
+  return !!(AUTH_SESSION&&CURRENT_USER&&CURRENT_USER.ativo);
 }
 
 function enterApp(){
@@ -2997,6 +3004,104 @@ function migrateClientShape(c){
   if(!c.empresaId) c.empresaId = getOrCreateEmpresaByCnpj(c.titular.cnpj, c.titular.razaoSocial).id;
   const empresaCodigo=DB.empresas.find(e=>e.id===c.empresaId); if(empresaCodigo) empresaCodigo.codigoEmpresa=empresaCodigo.codigoEmpresa||uid('emp');
   if(!c.numeroLead){ DB.leadCounter = (DB.leadCounter||0) + 1; c.numeroLead = DB.leadCounter; }
+  if(empresaCodigo && !empresaCodigo.documentos) empresaCodigo.documentos = {};
+  if(!c.titular.documentos) c.titular.documentos = {};
+  c.dependentes.forEach(d=>{ if(!d.documentos) d.documentos = {}; });
+}
+// Checklist fixo de documentos — baseado na lista oficial CDL Mossoró × Unimed
+const DOC_SLOTS_EMPRESA = [
+  { key:'cnpj', label:'CNPJ' },
+  { key:'contrato_social', label:'Contrato Social ou CCMEI' },
+  { key:'comprovante_residencia', label:'Comprovante de residência atualizado' },
+  { key:'ficha_associativa', label:'Ficha associativa da CDL' },
+];
+const DOC_SLOTS_PESSOA = [
+  { key:'rg_cpf', label:'RG/CPF ou CNH' },
+  { key:'comprovante_endereco', label:'Comprovante de endereço atualizado' },
+];
+function slugify(str){
+  return (str||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'-').replace(/(^-|-$)/g,'') || 'documento';
+}
+function docsEmpresaCompletos(emp){
+  return DOC_SLOTS_EMPRESA.every(slot => emp.documentos && emp.documentos[slot.key] && emp.documentos[slot.key].confirmado);
+}
+function docsPessoaCompletos(pessoa, ehDependente){
+  const docsOk = DOC_SLOTS_PESSOA.every(slot => pessoa.documentos && pessoa.documentos[slot.key] && pessoa.documentos[slot.key].confirmado);
+  // dependente usa o contato do titular da família — só o titular precisa ter e-mail/celular próprios
+  const contatoOk = ehDependente ? true : !!(pessoa.email && pessoa.celular);
+  return docsOk && contatoOk;
+}
+function docsCompletos(c){
+  const emp = getEmpresaDoCliente(c);
+  if(!docsEmpresaCompletos(emp)) return false;
+  if(!docsPessoaCompletos(c.titular, false)) return false;
+  return c.dependentes.every(d=>docsPessoaCompletos(d, true));
+}
+async function anexarDocSlot(event, alvoTipo, depIndex, slotKey, slotLabel){
+  const file = event.target.files && event.target.files[0];
+  if(!file) return;
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  const ext = (file.name.split('.').pop()||'pdf').toLowerCase();
+  let nomePessoaOuEmpresa, alvo;
+  if(alvoTipo==='empresa'){ alvo = getEmpresaDoCliente(c); nomePessoaOuEmpresa = alvo.razaoSocial||'empresa'; }
+  else if(alvoTipo==='titular'){ alvo = c.titular; nomePessoaOuEmpresa = alvo.nome||'titular'; }
+  else { alvo = c.dependentes[depIndex]; nomePessoaOuEmpresa = alvo.nome||`dependente-${depIndex+1}`; }
+  const nomeFinal = `${slotLabel} - ${nomePessoaOuEmpresa}.${ext}`;
+  const reader = new FileReader();
+  reader.onload = async ()=>{
+    alvo.documentos = alvo.documentos || {};
+    alvo.documentos[slotKey] = { nome: nomeFinal, nomeOriginal: file.name, dataUrl: reader.result, confirmado:false, criadoEm: nowISO() };
+    c.historico.push({ data:nowISO(), texto:`Documento anexado: ${nomeFinal}.` });
+    await persist();
+    renderClientModal();
+    toast('Documento anexado — confira e marque como OK.');
+  };
+  reader.readAsDataURL(file);
+  event.target.value = '';
+}
+async function toggleDocSlotConfirmado(alvoTipo, depIndex, slotKey){
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  let alvo;
+  if(alvoTipo==='empresa') alvo = getEmpresaDoCliente(c);
+  else if(alvoTipo==='titular') alvo = c.titular;
+  else alvo = c.dependentes[depIndex];
+  const doc = alvo.documentos && alvo.documentos[slotKey];
+  if(!doc) return;
+  doc.confirmado = !doc.confirmado;
+  c.historico.push({ data:nowISO(), texto:`"${doc.nome}" marcado como ${doc.confirmado?'confirmado':'pendente'}.` });
+  await persist();
+  renderClientModal();
+}
+async function removeDocSlot(alvoTipo, depIndex, slotKey){
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  let alvo;
+  if(alvoTipo==='empresa') alvo = getEmpresaDoCliente(c);
+  else if(alvoTipo==='titular') alvo = c.titular;
+  else alvo = c.dependentes[depIndex];
+  if(alvo.documentos) delete alvo.documentos[slotKey];
+  await persist();
+  renderClientModal();
+}
+function renderDocSlotRow(slot, alvo, alvoTipo, depIndex){
+  const doc = alvo.documentos && alvo.documentos[slot.key];
+  const inputId = `docslot_${alvoTipo}_${depIndex!==undefined?depIndex:''}_${slot.key}`;
+  if(!doc){
+    return `
+      <div class="doc-slot-row">
+        <span class="doc-slot-icon pendente">${ICONS.file}</span>
+        <span class="doc-slot-label">${slot.label}</span>
+        <span class="status-pill inativo">Não enviado</span>
+        <label class="btn-ghost" style="padding:5px 10px;font-size:11px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" id="${inputId}" style="display:none;" onchange="anexarDocSlot(event,'${alvoTipo}',${depIndex!==undefined?depIndex:'undefined'},'${slot.key}','${slot.label}')"></label>
+      </div>`;
+  }
+  return `
+    <div class="doc-slot-row">
+      <span class="doc-slot-icon ${doc.confirmado?'ok':'pendente'}">${doc.confirmado?ICONS.check:ICONS.file}</span>
+      <a href="${doc.dataUrl}" download="${doc.nome}" class="doc-slot-label" style="color:var(--navy);text-decoration:underline;">${doc.nome}</a>
+      <span class="status-pill ${doc.confirmado?'ativo':'inativo'}">${doc.confirmado?'✓ Confirmado':'Aguardando OK'}</span>
+      <button class="btn-ghost" style="padding:5px 10px;font-size:11px;" onclick="toggleDocSlotConfirmado('${alvoTipo}',${depIndex!==undefined?depIndex:'undefined'},'${slot.key}')">${doc.confirmado?'Desfazer':'Dar OK'}</button>
+      <button class="btn-danger" style="padding:5px 8px;" onclick="removeDocSlot('${alvoTipo}',${depIndex!==undefined?depIndex:'undefined'},'${slot.key}')">${ICONS.trash}</button>
+    </div>`;
 }
 function switchPersonTab(tab){ ACTIVE_PERSON_TAB = tab; renderClientModal(); }
 async function salvarClienteManual(){
@@ -3230,46 +3335,59 @@ function renderClientModal(){
   } else if(ACTIVE_PERSON_TAB==='documentacao'){
     const emp = getEmpresaDoCliente(c);
     const outrosTitulares = getTitularesDaEmpresa(c.empresaId).filter(x=>x.id!==c.id);
-    const pessoas = [{ label: `Titular — ${t.nome || 'sem nome'}`, anexos: t.anexos||[], type:'titular' }]
-      .concat(c.dependentes.map((d,i)=>({ label: `Dependente ${i+1} — ${d.nome || 'sem nome'}`, anexos: d.anexos||[], type:'dependente', index:i })));
+    const pessoas = [{ label: `Titular — ${t.nome || 'sem nome'}`, pessoa:t, type:'titular', ehDependente:false }]
+      .concat(c.dependentes.map((d,i)=>({ label: `Dependente ${i+1} — ${d.nome || 'sem nome'}`, pessoa:d, type:'dependente', index:i, ehDependente:true })));
+    const totalOk = docsCompletos(c);
     tabContent = `
+      <div class="pendencia-banner" style="${totalOk?'background:var(--success-light);color:var(--success);border-color:transparent;':''}margin-bottom:16px;">
+        ${totalOk ? `✓ Checklist completo — todos os documentos confirmados. Já dá pra enviar pra administradora.` : `⚠️ Ainda faltam documentos confirmados — o envio pra administradora só libera quando o checklist estiver 100%.`}
+      </div>
+
       <div class="anexo-person-block" style="border-color:var(--blue);background:var(--navy-tint);">
         <div class="anexo-person-head"><span><b>Anexos originais do lead</b> — recebidos no Pipeline</span><label class="btn-ghost" style="padding:6px 12px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" multiple style="display:none" onchange="addAnexosLeadImplantacao(event)"></label></div>
         <div class="attachment-list">${(c.anexosLead||[]).map((a,i)=>`<span class="attachment-chip">${ICONS.file}${a.nome}<a href="${a.dataUrl}" target="_blank" style="color:inherit;display:flex;">${ICONS.upload}</a><button onclick="removeAnexoLeadImplantacao(${i})">${ICONS.close}</button></span>`).join('')||'<span style="font-size:12px;color:var(--text-faint);">Nenhum anexo original do lead.</span>'}</div>
       </div>
+
       <div class="anexo-person-block" style="border-color:var(--navy);">
         <div class="anexo-person-head">
-          <span><b>Documentos da empresa</b> — ${emp.razaoSocial || t.razaoSocial || 'sem nome'}</span>
-          <label class="btn-ghost" style="padding:6px 12px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" multiple style="display:none;" onchange="addAnexoEmpresa(event)"></label>
+          <span><b>Documentos da empresa</b> — ${emp.razaoSocial || t.razaoSocial || 'sem nome'} ${docsEmpresaCompletos(emp)?`<span class="status-pill ativo" style="margin-left:6px;">✓ Completo</span>`:''}</span>
         </div>
-        <p style="font-size:11px;color:var(--text-muted);margin:2px 0 8px;">CNPJ · Contrato Social ou CCMEI · E-mail e telefone · RG/CPF/CNH do responsável · Comprovante de residência · Ficha associativa da CDL</p>
-        <div class="attachment-list">
-          ${(emp.anexos||[]).map((a,i)=>`
-            <span class="attachment-chip">${ICONS.file}${a.nome}
-              <a href="${a.dataUrl}" download="${a.nome}" style="color:inherit;display:flex;">${ICONS.upload}</a>
-              <button onclick="removeAnexoEmpresa(${i})">${ICONS.close}</button>
-            </span>
-          `).join('') || `<span style="font-size:12px;color:var(--text-faint);">Nenhum documento da empresa ainda.</span>`}
-        </div>
+        ${DOC_SLOTS_EMPRESA.map(slot=>renderDocSlotRow(slot, emp, 'empresa', undefined)).join('')}
         ${outrosTitulares.length ? `<p style="font-size:11px;color:var(--text-muted);margin-top:10px;">Esses documentos valem pra todos os titulares desta empresa — ${outrosTitulares.length} outro(s): ${outrosTitulares.map(x=>`<a href="#" onclick="openClientModal('${x.id}');return false;" style="color:var(--navy);font-weight:700;">${x.titular.nome||'sem nome'}</a>`).join(', ')}.</p>` : ''}
       </div>
-      ${pessoas.map(p=>`
+
+      ${pessoas.map(p=>{
+        const completo = docsPessoaCompletos(p.pessoa, p.ehDependente);
+        return `
         <div class="anexo-person-block">
           <div class="anexo-person-head">
-            <span>${p.label}</span>
-            <button class="btn-ghost" style="padding:6px 12px;font-size:11.5px;" onclick="triggerAttach('${p.type}'${p.index!==undefined?','+p.index:''})">${ICONS.upload} Anexar</button>
+            <span>${p.label} ${completo?`<span class="status-pill ativo" style="margin-left:6px;">✓ Completo</span>`:''}</span>
           </div>
-          <p style="font-size:11px;color:var(--text-muted);margin:2px 0 8px;">RG/CPF ou CNH · Comprovante de endereço · E-mail e telefone</p>
-          <div class="attachment-list">
-            ${p.anexos.map((a,i)=>`
-              <span class="attachment-chip">${ICONS.file}${a.nome}
-                <a href="${a.dataUrl}" download="${a.nome}" style="color:inherit;display:flex;">${ICONS.upload}</a>
-                <button onclick="removeAnexoFrom('${p.type}'${p.index!==undefined?','+p.index:'null'},${i})">${ICONS.close}</button>
-              </span>
-            `).join('') || `<span style="font-size:12px;color:var(--text-faint);">Nenhum anexo ainda.</span>`}
-          </div>
+          ${DOC_SLOTS_PESSOA.map(slot=>renderDocSlotRow(slot, p.pessoa, p.type, p.index)).join('')}
+          ${!p.ehDependente ? `
+            <div class="doc-slot-row">
+              <span class="doc-slot-icon ${(p.pessoa.email&&p.pessoa.celular)?'ok':'pendente'}">${(p.pessoa.email&&p.pessoa.celular)?ICONS.check:ICONS.file}</span>
+              <span class="doc-slot-label">E-mail e telefone</span>
+              <span class="status-pill ${(p.pessoa.email&&p.pessoa.celular)?'ativo':'inativo'}">${(p.pessoa.email&&p.pessoa.celular)?'✓ Preenchido':'Falta preencher na aba Pessoas'}</span>
+            </div>` : `<p style="font-size:11px;color:var(--text-faint);margin-top:8px;">Usa o e-mail e celular do titular da família.</p>`}
+        </div>`;
+      }).join('')}
+
+      <div class="anexo-person-block">
+        <div class="anexo-person-head"><span>Outros anexos (opcional)</span>
+          <label class="btn-ghost" style="padding:6px 12px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" multiple style="display:none;" onchange="PENDING_ANEXO_TARGET={type:'titular'}; handleAttachFile(event)"></label>
         </div>
-      `).join('')}
+        <p style="font-size:11px;color:var(--text-muted);margin:2px 0 8px;">Qualquer documento extra que não se encaixe no checklist acima (ex: fatura antiga, contrato anterior).</p>
+        <div class="attachment-list">
+          ${(t.anexos||[]).map((a,i)=>`
+            <span class="attachment-chip">${ICONS.file}${a.nome}
+              <a href="${a.dataUrl}" download="${a.nome}" style="color:inherit;display:flex;">${ICONS.upload}</a>
+              <button onclick="removeAnexoFrom('titular',null,${i})">${ICONS.close}</button>
+            </span>
+          `).join('') || `<span style="font-size:12px;color:var(--text-faint);">Nenhum anexo extra.</span>`}
+        </div>
+      </div>
+
       ${(c._leadFaturaPath || c._leadInternalPdfPath) ? `
         <div class="pendencia-banner" style="background:var(--navy-tint);color:var(--navy);border-color:var(--border);margin-top:12px;">
           <b>📎 Arquivos do site (Storage privado):</b>
@@ -4764,16 +4882,44 @@ async function deleteClient(){
 function openSendAdminEmailModal(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   const t = c.titular;
+  const emp = getEmpresaDoCliente(c);
+  const checklistOk = docsCompletos(c);
+
+  if(!checklistOk){
+    const faltando = [];
+    DOC_SLOTS_EMPRESA.forEach(slot=>{ if(!(emp.documentos && emp.documentos[slot.key] && emp.documentos[slot.key].confirmado)) faltando.push(`Empresa: ${slot.label}`); });
+    DOC_SLOTS_PESSOA.forEach(slot=>{ if(!(t.documentos && t.documentos[slot.key] && t.documentos[slot.key].confirmado)) faltando.push(`Titular (${t.nome||'sem nome'}): ${slot.label}`); });
+    if(!(t.email && t.celular)) faltando.push(`Titular (${t.nome||'sem nome'}): e-mail e telefone`);
+    c.dependentes.forEach((d,i)=>{
+      DOC_SLOTS_PESSOA.forEach(slot=>{ if(!(d.documentos && d.documentos[slot.key] && d.documentos[slot.key].confirmado)) faltando.push(`Dependente ${i+1} (${d.nome||'sem nome'}): ${slot.label}`); });
+    });
+    openModalHTML(`
+      <div class="modal modal-small">
+        <div class="modal-head">
+          <div class="mh-info"><div class="mh-name">Checklist incompleto</div></div>
+          <button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:12px;">Ainda falta confirmar ${faltando.length} documento(s) antes de enviar pra administradora (aba Documentos):</p>
+          <ul style="font-size:12.5px;padding-left:18px;margin:0 0 16px;">${faltando.map(f=>`<li style="margin-bottom:4px;">${f}</li>`).join('')}</ul>
+          <button class="btn-primary" onclick="switchPersonTab('documentacao')">Ir pra aba Documentos</button>
+        </div>
+      </div>`);
+    return;
+  }
+
   const depsTxt = c.dependentes.length
     ? c.dependentes.map((d,i)=>`  ${i+1}. ${d.nome||'(sem nome)'} — CPF ${maskCpf(d.cpf||'')||'—'} — Nasc. ${fmtDate(d.dataNascimento)} — ${d.parentesco||'—'}`).join('\n')
     : '  Nenhum dependente informado.';
-  const totalAnexos = countAnexos(c);
-  const anexosTxt = totalAnexos
-    ? [
-        (t.anexos||[]).length ? `  Titular — ${t.nome||'sem nome'}:\n` + t.anexos.map(a=>`    - ${a.nome}`).join('\n') : null,
-        ...c.dependentes.map((d,i)=> (d.anexos||[]).length ? `  Dependente ${i+1} — ${d.nome||'sem nome'}:\n` + d.anexos.map(a=>`    - ${a.nome}`).join('\n') : null),
-      ].filter(Boolean).join('\n')
-    : '  Nenhum anexo carregado no portal.';
+
+  const listaAnexos = [];
+  DOC_SLOTS_EMPRESA.forEach(slot=>{ const d = emp.documentos && emp.documentos[slot.key]; if(d) listaAnexos.push(`  - ${d.nome}`); });
+  DOC_SLOTS_PESSOA.forEach(slot=>{ const d = t.documentos && t.documentos[slot.key]; if(d) listaAnexos.push(`  - ${d.nome}`); });
+  c.dependentes.forEach(dep=>{ DOC_SLOTS_PESSOA.forEach(slot=>{ const d = dep.documentos && dep.documentos[slot.key]; if(d) listaAnexos.push(`  - ${d.nome}`); }); });
+  (t.anexos||[]).forEach(a=>listaAnexos.push(`  - ${a.nome}`));
+  const anexosTxt = listaAnexos.length ? listaAnexos.join('\n') : '  Nenhum anexo carregado no portal.';
+  const totalAnexos = listaAnexos.length;
+
   const subject = `Nova adesão — ${t.razaoSocial||t.nome} — CDL Mossoró x Unimed`;
   const body =
 `Empresa/Razão social: ${t.razaoSocial||'—'}
@@ -4790,7 +4936,8 @@ Plano escolhido: ${c.planoEscolhido||'—'}
 Dependentes:
 ${depsTxt}
 
-Anexos por pessoa (baixe do portal e anexe manualmente a este e-mail):
+✓ Checklist de documentos 100% confirmado.
+Anexos (baixe do portal com estes nomes já padronizados e anexe a este e-mail):
 ${anexosTxt}
 
 --
@@ -4807,7 +4954,7 @@ Enviado pelo portal interno CDL Mossoró x Unimed.`;
       <div class="modal-body">
         <div class="fg" style="margin-bottom:12px;"><label>E-mail da administradora</label><input id="admin_email_to" placeholder="comercial@unimednatal.com.br"/></div>
         <div class="email-preview">${body.replace(/</g,'&lt;')}</div>
-        ${totalAnexos?`<p style="font-size:11.5px;color:var(--text-muted);margin-bottom:10px;">⚠️ O e-mail abre com o texto pronto, mas os ${totalAnexos} anexo(s) precisam ser adicionados manualmente no seu programa de e-mail (baixe pela aba Anexos).</p>`:''}
+        ${totalAnexos?`<p style="font-size:11.5px;color:var(--text-muted);margin-bottom:10px;">⚠️ O e-mail abre com o texto pronto, mas os ${totalAnexos} anexo(s) — já com nomes padronizados — precisam ser baixados da aba Documentos e adicionados manualmente no seu programa de e-mail.</p>`:''}
         <div class="btn-row">
           <button class="btn-primary" onclick="confirmSendAdminEmail('${mailto}')">${ICONS.mail} Abrir e-mail pronto para enviar</button>
           <button class="btn-ghost" onclick="renderClientModal()">Voltar</button>
@@ -5097,7 +5244,7 @@ function viewLogsContent(){
   `;
 }
 function openUserModal(id){
-  const u = id ? DB.users.find(x=>x.id===id) : { id:null, nome:'', email:'', senha:'', papel:'atendente', ativo:true, permissoes:defaultPermissoes() };
+  const u = id ? DB.users.find(x=>x.id===id) : { id:null, nome:'', email:'', papel:'atendente', ativo:true, permissoes:defaultPermissoes() };
   const perms = u.permissoes || defaultPermissoes();
   const modLabels = { crm:'CRM', clientes:'Clientes', empresas:'Empresas Filiadas', usuarios:'Usuários & Permissões' };
   openModalHTML(`
@@ -5112,7 +5259,7 @@ function openUserModal(id){
           <div class="fg"><label>E-mail</label><input id="us_email" value="${u.email}"/></div>
         </div>
         <div class="field-grid" style="margin-top:12px;">
-          <div class="fg"><label>Senha</label><input id="us_senha" type="text" value="${u.senha||''}" placeholder="${id?'deixe assim para manter':''}"/></div>
+          <div class="fg"><label>${id?'Nova senha (opcional)':'Senha temporária'}</label><input id="us_senha" type="password" value="" autocomplete="new-password" minlength="12" placeholder="${id?'Deixe vazio para manter a atual':'Mínimo de 12 caracteres'}"/></div>
           <div class="fg"><label>Papel</label>
             <select id="us_papel" onchange="renderClientModalPermVisibility(this.value)">
               <option value="atendente" ${u.papel==='atendente'?'selected':''}>Atendente</option>
@@ -5250,13 +5397,17 @@ async function saveUser(id){
   });
   let userId = id;
   let u;
+  if(!id&&!senhaField){ toast('Defina uma senha forte para o novo usuário.'); return; }
+  if(senhaField && (senhaField.length<12 || !/[a-z]/.test(senhaField) || !/[A-Z]/.test(senhaField) || !/\d/.test(senhaField) || !/[^A-Za-z0-9]/.test(senhaField))){toast('A senha precisa ter 12+ caracteres, maiúscula, minúscula, número e símbolo.');return;}
+  const authPayload={action:id?'update':'create',id:id?(DB.users.find(x=>x.id===id)?.authId||id):undefined,nome,email,password:senhaField||undefined,papel,ativo,permissoes};
+  const authRes=await fetch(`${SUPABASE_URL}/functions/v1/admin-users`,{method:'POST',headers:supabaseHeaders({'Content-Type':'application/json'}),body:JSON.stringify(authPayload)});
+  const authResult=await authRes.json();if(!authRes.ok){toast(authResult.error||'Não foi possível salvar a conta no Auth.');return;}
   if(id){
     u = DB.users.find(x=>x.id===id);
     Object.assign(u, { nome, email, papel, ativo, permissoes, celular, ...dadosExtras });
-    if(senhaField) u.senha = senhaField;
+    u.authId=authResult.id;
   }else{
-    if(!senhaField){ toast('Defina uma senha para o novo usuário.'); return; }
-    u = { id:uid('usr'), nome, email, senha:senhaField, papel, ativo, permissoes, celular, ...dadosExtras, criadoEm:todayISO() };
+    u = { id:authResult.id, authId:authResult.id, nome, email, papel, ativo, permissoes, celular, ...dadosExtras, criadoEm:todayISO() };
     DB.users.push(u);
     userId = u.id;
   }
@@ -5298,6 +5449,8 @@ async function deleteUser(id){
   if(id===CURRENT_USER.id){ toast('Você não pode excluir seu próprio usuário.'); return; }
   if(!(await showConfirmDialog('Excluir este usuário?'))) return;
   const u = DB.users.find(x=>x.id===id);
+  const authRes=await fetch(`${SUPABASE_URL}/functions/v1/admin-users`,{method:'POST',headers:supabaseHeaders({'Content-Type':'application/json'}),body:JSON.stringify({action:'delete',id:u?.authId||id})});
+  if(!authRes.ok){const e=await authRes.json();toast(e.error||'Não foi possível excluir a conta Auth.');return;}
   DB.users = DB.users.filter(u=>u.id!==id);
   await registrarLog('Usuário excluído', u?.nome || id);
   await persist();
@@ -5311,7 +5464,15 @@ async function deleteUser(id){
 async function boot(){
   const logoEl = document.getElementById('loadingLogo');
   if(logoEl) logoEl.src = LOGO_WORDMARK;
-  await loadDB();
+  try{
+    AUTH_SESSION=JSON.parse(sessionStorage.getItem(AUTH_SESSION_KEY)||'null');
+    if(AUTH_SESSION?.access_token){
+      const userRes=await fetch(`${SUPABASE_URL}/auth/v1/user`,{headers:supabaseHeaders()});
+      if(!userRes.ok)throw new Error('expired');const authUser=await userRes.json();
+      const profileRes=await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${authUser.id}&select=*`,{headers:supabaseHeaders()});const profile=(await profileRes.json())[0];if(!profile?.ativo)throw new Error('inactive');
+      await loadDB();let u=DB.users.find(x=>x.authId===authUser.id||x.email?.toLowerCase()===authUser.email?.toLowerCase());if(!u){u={id:authUser.id,authId:authUser.id,email:authUser.email};DB.users.push(u);}Object.assign(u,{nome:profile.nome,papel:profile.papel,ativo:profile.ativo,permissoes:profile.permissoes||defaultPermissoes()});CURRENT_USER=u;
+    }
+  }catch(e){AUTH_SESSION=null;CURRENT_USER=null;sessionStorage.removeItem(AUTH_SESSION_KEY);}
   document.getElementById('loadingScreen').style.display = 'none';
   if(checkSession()){
     enterApp();
