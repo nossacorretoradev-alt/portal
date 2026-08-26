@@ -1875,7 +1875,7 @@ document.addEventListener('keydown',(e)=>{
 /* =========================================================
    BASE DE DADOS (em memória, persistida via window.storage)
    ========================================================= */
-let DB = { users:[], leads:[], clients:[], companies:[], logs:[] };
+let DB = { users:[], leads:[], pipeline:[], clients:[], companies:[], logs:[] };
 let CURRENT_USER = null;
 let CURRENT_VIEW = 'inicio';
 let SESSAO_IP_INFO = null; // cache — busca só uma vez por sessão, não a cada ação
@@ -1932,7 +1932,7 @@ async function loadDB(){
     try{ await persist(); }catch(e2){ console.warn('Não foi possível salvar a base inicial.', e2); }
   }
   // garante que módulos novos existam mesmo em bases antigas
-  DB.users = DB.users||[]; DB.clients = DB.clients||[]; DB.companies = DB.companies||[]; DB.logs = DB.logs||[];
+  DB.users = DB.users||[]; DB.pipeline = DB.pipeline||[]; DB.clients = DB.clients||[]; DB.companies = DB.companies||[]; DB.logs = DB.logs||[];
   DB.leadsExcluidos = DB.leadsExcluidos||[]; // ids de leads do site que foram excluídos de propósito — não reimportar
   DB.empresas = DB.empresas||[]; // agrupa vários titulares (clients) sob a mesma empresa/CNPJ
   DB.clients.forEach(migrateClientShape);
@@ -2099,7 +2099,7 @@ function renderSidebarFooter(){
 function toggleSidebar(){ document.getElementById('sidebarEl').classList.toggle('collapsed'); }
 
 function renderTopbar(){
-  const titles = { inicio:'Início', crm:'CRM', clientes:'Clientes', empresas:'Empresas Filiadas', comissoes:'Comissões', usuarios:'Usuários & Permissões', minhacomissao:'Minha Comissão' };
+  const titles = { inicio:'Início', pipeline:'Pipeline', crm:'Implantação', clientes:'Clientes', empresas:'Empresas Filiadas', comissoes:'Comissões', usuarios:'Usuários & Permissões', minhacomissao:'Minha Comissão', orcamento:'Novo Orçamento' };
   document.getElementById('topbar').innerHTML = `
     <div style="display:flex;align-items:center;padding:16px 26px;border-bottom:1px solid var(--border);">
       <div class="page-title" style="font-size:16px;">${titles[CURRENT_VIEW]||''}</div>
@@ -2113,12 +2113,14 @@ function getNavItems(){
   if(isVendedor()){
     return [
       {id:'orcamento', label:'Novo Orçamento', icon:ICONS.plus},
+      {id:'pipeline', label:'Pipeline', icon:ICONS.kanban},
+      {id:'crm', label:'Implantação', icon:ICONS.clipboard},
       {id:'minhacomissao', label:'Minha Comissão', icon:ICONS.money},
     ];
   }
   const items = [{id:'inicio', label:'Início', icon:ICONS.home}];
   items.push({id:'orcamento', label:'Novo Orçamento', icon:ICONS.plus});
-  if(hasPerm('crm','ver')) items.push({id:'crm', label:'CRM', icon:ICONS.kanban});
+  if(hasPerm('crm','ver')) { items.push({id:'pipeline', label:'Pipeline', icon:ICONS.kanban}); items.push({id:'crm', label:'Implantação', icon:ICONS.clipboard}); }
   if(hasPerm('clientes','ver')) items.push({id:'clientes', label:'Clientes', icon:ICONS.clients});
   if(isAdmin()) items.push({id:'empresas', label:'Empresas Filiadas', icon:ICONS.building});
   if(isAdmin()) items.push({id:'comissoes', label:'Comissões', icon:ICONS.money});
@@ -2159,6 +2161,7 @@ function switchView(id){
   renderTopbar();
   const views = document.getElementById('views');
   if(id==='inicio') views.innerHTML = viewInicio();
+  else if(id==='pipeline') views.innerHTML = viewPipeline();
   else if(id==='crm') views.innerHTML = viewCRM();
   else if(id==='clientes') views.innerHTML = viewClientes();
   else if(id==='empresas') views.innerHTML = viewEmpresas();
@@ -2188,7 +2191,7 @@ function viewInicio(){
     </div>
     <p style="font-size:12.5px;color:var(--text-muted);max-width:520px;">
       Este portal é de uso exclusivo da equipe interna. Os contatos que chegam pela landing page do simulador
-      entram direto no <b>CRM</b>, na etapa "Nova adesão" — dali, o time acompanha cada etapa até o cliente ficar <b>Ativo</b>.
+      entram no <b>Pipeline</b> para triagem do SDR. Quando a venda é marcada como ativa, o registro segue automaticamente para <b>Implantação</b>.
     </p>
   </div>`;
 }
@@ -2216,12 +2219,82 @@ function crmVisiveis(){
   }
   return list;
 }
+
+const PIPELINE_STAGES = [
+  {id:'novo', label:'Novo Lead', color:'#6366F1'},
+  {id:'contato', label:'Contato Iniciado', color:'#F79009'},
+  {id:'potencial', label:'Cliente Potencial', color:'#8B5CF6'},
+  {id:'venda', label:'Venda Ativa', color:'#12B76A'},
+];
+let PIPELINE_FILTER={q:''};
+function pipelineVisiveis(){
+  let list=DB.pipeline||[];
+  if(isVendedor()) list=list.filter(l=>!l.vendedorId || l.vendedorId===CURRENT_USER.id);
+  const q=(PIPELINE_FILTER.q||'').toLowerCase().trim();
+  if(q) list=list.filter(l=>[l.nome,l.empresa,l.cnpj,l.celular,l.email].some(v=>(v||'').toLowerCase().includes(q)));
+  return list;
+}
+function viewPipeline(){
+  const list=pipelineVisiveis();
+  return `<div class="view-wrap">
+    <div class="page-head"><div><div class="page-title">Pipeline</div><div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Triagem inicial do SDR. Ao chegar em Venda Ativa, o lead segue automaticamente para Implantação.</div></div>
+      <button class="btn-primary" onclick="openPipelineLeadModal(null,true)">${ICONS.plus} Novo lead</button>
+    </div>
+    <input id="pipelineSearch" class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar lead..." value="${PIPELINE_FILTER.q}" oninput="PIPELINE_FILTER.q=this.value;refiltrar('pipeline','pipelineSearch')">
+    <div class="kanban-board">${PIPELINE_STAGES.map(st=>`<div class="kanban-col" style="border-top:3px solid ${st.color};">
+      <div class="kanban-col-title"><span style="display:flex;align-items:center;gap:7px;"><span style="width:8px;height:8px;border-radius:50%;background:${st.color}"></span>${st.label}</span><span style="background:${st.color}22;color:${st.color};">${list.filter(l=>l.etapa===st.id).length}</span></div>
+      ${list.filter(l=>l.etapa===st.id).map(l=>`<div class="kanban-card" onclick="openPipelineLeadModal('${l.id}')">
+        <div class="kc-top"><div class="kc-avatar" style="background:${avatarColor(l.empresa||l.nome)}">${initials(l.nome||l.empresa)}</div><div class="kc-name">${l.empresa||l.nome||'Lead'}</div></div>
+        <div class="kc-sub">${l.nome||'—'} · ${maskPhone(l.celular||'')||'—'}</div>
+        ${l.planoInteresse?`<div class="kc-plan-tag">${l.planoInteresse}</div>`:''}
+        <div style="display:flex;gap:7px;margin-top:10px;" onclick="event.stopPropagation()">
+          ${l.celular?`<a class="wpp-btn" target="_blank" href="https://api.whatsapp.com/send?phone=55${onlyDigits(l.celular)}">${ICONS.wpp} WhatsApp</a>`:''}
+          <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="openPipelineLeadModal('${l.id}')">Comentários</button>
+        </div>
+      </div>`).join('')||`<div style="font-size:11.5px;color:var(--text-faint);padding:10px 6px;">Nada aqui.</div>`}
+    </div>`).join('')}</div>
+  </div>`;
+}
+function openPipelineLeadModal(id,isNew){
+  let l=(DB.pipeline||[]).find(x=>x.id===id);
+  if(isNew){ l={id:uid('lead'),etapa:'novo',nome:'',empresa:'',cnpj:'',celular:'',email:'',planoInteresse:'',comentarios:[],criadoEm:nowISO(),vendedorId:CURRENT_USER?.id||null}; DB.pipeline.push(l); }
+  if(!l)return;
+  openModalHTML(`<div class="modal"><div class="modal-head"><div class="mh-info"><div class="mh-name">${l.empresa||l.nome||'Novo lead'}</div><div class="mh-sub">Triagem SDR</div></div><button class="modal-close" onclick="closeModal();switchView('pipeline')">${ICONS.close}</button></div><div class="modal-body">
+    <div class="field-grid"><div class="fg"><label>Empresa</label><input id="pl_empresa" value="${l.empresa||''}"></div><div class="fg"><label>CNPJ</label><input id="pl_cnpj" value="${maskCnpj(l.cnpj||'')}"></div></div>
+    <div class="field-grid" style="margin-top:12px"><div class="fg"><label>Contato</label><input id="pl_nome" value="${l.nome||''}"></div><div class="fg"><label>WhatsApp</label><input id="pl_celular" value="${maskPhone(l.celular||'')}"></div></div>
+    <div class="field-grid" style="margin-top:12px"><div class="fg"><label>E-mail</label><input id="pl_email" value="${l.email||''}"></div><div class="fg"><label>Plano / interesse</label><input id="pl_plano" value="${l.planoInteresse||''}"></div></div>
+    <div class="fg" style="margin-top:12px"><label>Etapa</label><select id="pl_etapa">${PIPELINE_STAGES.map(s=>`<option value="${s.id}" ${l.etapa===s.id?'selected':''}>${s.label}</option>`).join('')}</select></div>
+    <div class="modal-section-title" style="margin-top:20px">Comentários</div>
+    <div class="history-list" style="max-height:180px">${(l.comentarios||[]).slice().reverse().map(c=>`<div class="history-item"><span class="hi-date">${fmtDateTime(c.data)}</span><span>${c.texto}</span></div>`).join('')||'<div style="font-size:12px;color:var(--text-faint)">Nenhum comentário.</div>'}</div>
+    <div style="display:flex;gap:8px;margin-top:10px"><input id="pl_comentario" class="search-input" style="flex:1" placeholder="Adicionar comentário..."><button class="btn-ghost" onclick="addPipelineComentario('${l.id}')">Adicionar</button></div>
+    <div class="btn-row"><button class="btn-primary" onclick="savePipelineLead('${l.id}')">${ICONS.check} Salvar</button>${l.celular?`<a class="wpp-btn" target="_blank" href="https://api.whatsapp.com/send?phone=55${onlyDigits(l.celular)}">${ICONS.wpp} WhatsApp</a>`:''}</div>
+  </div></div>`);
+}
+async function addPipelineComentario(id){
+  const l=DB.pipeline.find(x=>x.id===id), el=document.getElementById('pl_comentario'); if(!l||!el||!el.value.trim())return;
+  l.comentarios=l.comentarios||[]; l.comentarios.push({data:nowISO(),texto:el.value.trim(),usuario:CURRENT_USER?.nome||''}); await persist(); openPipelineLeadModal(id);
+}
+async function savePipelineLead(id){
+  const l=DB.pipeline.find(x=>x.id===id); if(!l)return;
+  l.empresa=document.getElementById('pl_empresa').value.trim(); l.cnpj=onlyDigits(document.getElementById('pl_cnpj').value); l.nome=document.getElementById('pl_nome').value.trim(); l.celular=onlyDigits(document.getElementById('pl_celular').value); l.email=document.getElementById('pl_email').value.trim(); l.planoInteresse=document.getElementById('pl_plano').value.trim();
+  const novaEtapa=document.getElementById('pl_etapa').value; l.etapa=novaEtapa;
+  if(novaEtapa==='venda'){ await converterPipelineParaImplantacao(l); return; }
+  await persist(); closeModal(); switchView('pipeline'); toast('Lead salvo.');
+}
+async function converterPipelineParaImplantacao(l){
+  const emp=getOrCreateEmpresaByCnpj(l.cnpj||'',l.empresa||'');
+  DB.leadCounter=(DB.leadCounter||0)+1;
+  const c={id:uid('cli'),status:'ativo',origemSite:!!l.origemSite,numeroLead:DB.leadCounter,etapaAdesao:'nova',pendencia:{ativa:false,motivo:''},leadOrigemId:l.leadOrigemId||null,empresaId:emp.id,
+    titular:{nome:l.nome||'',cpf:'',dataNascimento:'',celular:l.celular||'',email:l.email||'',razaoSocial:l.empresa||'',cnpj:l.cnpj||'',anexos:l.anexos||[]},dependentes:[],planoEscolhido:l.planoInteresse||'',vendedores:l.vendedorId?[{vendedorId:l.vendedorId,percentual:100,pagamentos:[]}]:[],comissoes:[],historico:[{data:nowISO(),texto:'Venda ativada no Pipeline e transferida automaticamente para Implantação.'}],emailAdministradoraEnviadoEm:null,criadoEm:l.criadoEm||nowISO()};
+  DB.clients.push(c); DB.pipeline=DB.pipeline.filter(x=>x.id!==l.id); await persist(); closeModal(); switchView('crm'); toast('✓ Venda ativa transferida para Implantação.');
+}
+
 function viewCRM(){
   const canCriar = hasPerm('crm','criar');
   return `
   <div class="view-wrap">
     <div class="page-head">
-      <div class="page-title">CRM</div>
+      <div class="page-title">Implantação</div>
       ${canCriar?`<button class="btn-primary" onclick="openClientModal(null,true)">${ICONS.plus} Novo card</button>`:''}
     </div>
     <input id="crmSearchInput" class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar por nome, empresa, CNPJ ou celular..." value="${CRM_FILTER.q}" oninput="CRM_FILTER.q=this.value; refiltrar('crm','crmSearchInput')"/>
@@ -2245,7 +2318,7 @@ function viewCRM(){
       `).join('')}
     </div>
     <p style="font-size:11.5px;color:var(--text-muted);margin-top:16px;max-width:480px;">
-      Este é o funil de adesão. Cada card é o mesmo registro de cliente — o que você editar aqui (dados, anexos, pendências)
+      Esta é a jornada de implantação. Cada card é o mesmo registro de cliente — o que você editar aqui (dados, anexos, pendências)
       aparece automaticamente na aba <b>Clientes</b>, e vice-versa.
     </p>
   </div>`;
@@ -2267,10 +2340,32 @@ async function importarLeadsDoSite(opts){
   }
   if(!leads.length){ if(!silencioso) toast('Nenhum lead encontrado no Supabase ainda.'); return; }
 
+  // Novos contatos do simulador entram primeiro no PIPELINE, nunca direto na implantação.
+  DB.pipeline = DB.pipeline || [];
+  const idsPipeline = new Set(DB.pipeline.map(l=>l.leadOrigemId).filter(Boolean));
+  const idsImplantacao = new Set(DB.clients.map(c=>c.leadOrigemId).filter(Boolean));
+  const excluidosPipeline = new Set(DB.leadsExcluidos || []);
+  let novosPipeline = 0;
+  for(const lead of leads){
+    if(idsPipeline.has(lead.id) || idsImplantacao.has(lead.id) || excluidosPipeline.has(lead.id)) continue;
+    const vidas=Array.isArray(lead.vidas)?lead.vidas:[];
+    const primeira=vidas[0]||{};
+    const dono=lead.vendedor_codigo ? DB.users.find(u=>u.codigoVendedor===lead.vendedor_codigo) : null;
+    const anexos=[];
+    if(lead.internal_pdf_path) anexos.push({id:uid('anx'),nome:'Contrato + carimbo de evidências.pdf',dataUrl:getPublicStorageUrl(lead.internal_pdf_path),criadoEm:lead.received_at||nowISO()});
+    if(lead.fatura_path) anexos.push({id:uid('anx'),nome:'Fatura atual enviada pelo cliente',dataUrl:getPublicStorageUrl(lead.fatura_path),criadoEm:lead.received_at||nowISO()});
+    if(lead.orcamento_path) anexos.push({id:uid('anx'),nome:'Orçamento gerado na simulação.pdf',dataUrl:getPublicStorageUrl(lead.orcamento_path),criadoEm:lead.received_at||nowISO()});
+    DB.pipeline.push({id:uid('lead'),leadOrigemId:lead.id,origemSite:true,etapa:'novo',nome:lead.nome||primeira.nome||'',empresa:lead.empresa||'',cnpj:onlyDigits(lead.cnpj||''),celular:onlyDigits(lead.celular||''),email:lead.email||'',planoInteresse:lead.plano_escolhido||'',vidasOriginais:vidas,anexos,comentarios:[{data:nowISO(),texto:'Lead recebido automaticamente do simulador.'}],vendedorId:dono?.id||null,criadoEm:lead.received_at||nowISO()});
+    novosPipeline++;
+  }
+  if(novosPipeline){ await persist(); if(CURRENT_VIEW==='pipeline') switchView('pipeline'); }
+  if(!silencioso) toast(novosPipeline ? `${novosPipeline} novo(s) lead(s) recebido(s) no Pipeline.` : 'Nenhum lead novo.');
+  return;
+
   const jaImportados = new Set(DB.clients.map(c=>c.leadOrigemId).filter(Boolean));
   const excluidos = new Set(DB.leadsExcluidos || []);
   const novosLeads = leads.filter(l=>!jaImportados.has(l.id) && !excluidos.has(l.id));
-  if(!novosLeads.length){ if(!silencioso) toast('Nenhum lead novo — tudo que chegou do site já está no CRM.'); return; }
+  if(!novosLeads.length){ if(!silencioso) toast('Nenhum lead novo — tudo que chegou do site foi registrado no sistema.'); return; }
 
   let criados = 0;
   let mesclados = 0;
@@ -2390,6 +2485,7 @@ const CDL_TIERS_PORTAL = {
 };
 const ADESAO_STAGES = [
   { id:'nova',          label:'Cadastro',                    short:'Cadastro',    color:'#6366F1' },
+  { id:'pessoas',       label:'Pessoas',                     short:'Pessoas',     color:'#14B8A6' },
   { id:'documentacao',  label:'Validação de Documentos',     short:'Documentos',  color:'#F79009' },
   { id:'questionario',  label:'Questionário de Risco',       short:'Questionário',color:'#EC4899' },
   { id:'conferencia',   label:'Conferência de Plano',        short:'Conferência', color:'#8B5CF6' },
@@ -2416,7 +2512,7 @@ function viewOrcamento(){
   <div class="view-wrap">
     <div class="page-head"><div class="page-title">Novo Orçamento</div></div>
     <p style="font-size:12.5px;color:var(--text-muted);margin:-8px 0 16px;">
-      Preencha os dados do cliente e gere um orçamento na hora, com PDF — já cai direto no CRM
+      Preencha os dados do cliente e gere um orçamento na hora, com PDF — entra no fluxo comercial
       ${isVendedor() ? 'identificado com o seu código de vendedor' : ''}, sem precisar do link público do site.
     </p>
 
@@ -2441,7 +2537,7 @@ function viewOrcamento(){
       </div>
       <div class="field-grid" style="margin-top:12px;">
         <div class="fg"><label>E-mail</label><input id="orc_email" placeholder="email@empresa.com.br"/></div>
-        ${ORC_MODE==='plano' ? `<div class="fg"><label>Número de vidas</label><input id="orc_vidas" type="number" min="1" value="1" oninput="calcularOrcamentoPortal()"/></div>` : `<div></div>`}
+        <div></div>
       </div>
       ${ORC_MODE==='plano' ? `
         <div class="fg" style="margin-top:16px;">
@@ -2461,8 +2557,8 @@ function viewOrcamento(){
     </div>
 
     <div class="modal-section">
-      <div class="modal-section-title">${ORC_MODE==='plano' ? 'Escolha o plano' : 'Escolha a categoria de associado'}</div>
-      <div id="orc_planosArea" class="doc-actions-grid orc-planos-grid ${ORC_MODE==='plano'?'cols-3':'cols-2'}"></div>
+      <div class="modal-section-title">${ORC_MODE==='plano' ? 'Titulares, dependentes e planos' : 'Escolha a categoria de associado'}</div>
+      ${ORC_MODE==='plano' ? `<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Cada bloco representa um titular. Adicione os dependentes daquele titular e escolha o plano específico do grupo.</p><div id="orc_gruposArea"></div><button type="button" class="btn-ghost" style="margin-top:10px" onclick="adicionarGrupoOrcamento()">${ICONS.plus} Adicionar outro titular</button><div id="orc_totalGrupos" style="font-size:15px;font-weight:800;color:var(--navy);margin-top:16px;"></div>` : `<div id="orc_planosArea" class="doc-actions-grid orc-planos-grid cols-2"></div>`}
     </div>
 
     <div class="modal-section" style="border-bottom:none;">
@@ -2471,29 +2567,33 @@ function viewOrcamento(){
   </div>`;
 }
 let ORC_PLANO_ESCOLHIDO = null;
+let ORC_GRUPOS = [];
 function initOrcamentoForm(){
   ORC_PLANO_ESCOLHIDO = null;
-  if(ORC_MODE==='plano') calcularOrcamentoPortal(); else calcularOrcamentoCdlPortal();
+  if(ORC_MODE==='plano'){
+    ORC_GRUPOS=[{id:uid('grp'),titular:'',plano:'essencial',dependentes:[]}];
+    renderOrcGrupos();
+    const btn=document.getElementById('orc_submitBtn'); if(btn){btn.disabled=false;btn.textContent='Gerar orçamento de plano de saúde';}
+  } else calcularOrcamentoCdlPortal();
+}
+function adicionarGrupoOrcamento(){ salvarGruposOrcamentoDaTela(); ORC_GRUPOS.push({id:uid('grp'),titular:'',plano:'essencial',dependentes:[]}); renderOrcGrupos(); }
+function removerGrupoOrcamento(id){ salvarGruposOrcamentoDaTela(); if(ORC_GRUPOS.length<=1){toast('O orçamento precisa ter pelo menos um titular.');return;} ORC_GRUPOS=ORC_GRUPOS.filter(g=>g.id!==id); renderOrcGrupos(); }
+function salvarGruposOrcamentoDaTela(){
+  ORC_GRUPOS.forEach(g=>{ const n=document.getElementById('og_nome_'+g.id), p=document.getElementById('og_plano_'+g.id), d=document.getElementById('og_deps_'+g.id); if(n)g.titular=n.value.trim();if(p)g.plano=p.value;if(d)g.dependentes=d.value.split('\n').map(x=>x.trim()).filter(Boolean); });
+}
+function renderOrcGrupos(){
+  const area=document.getElementById('orc_gruposArea'); if(!area)return;
+  area.innerHTML=ORC_GRUPOS.map((g,idx)=>`<div class="dep-card" style="margin-bottom:12px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b>Titular ${idx+1}</b>${ORC_GRUPOS.length>1?`<button class="btn-danger" style="padding:5px 9px" onclick="removerGrupoOrcamento('${g.id}')">${ICONS.trash}</button>`:''}</div><div class="field-grid"><div class="fg"><label>Nome do titular</label><input id="og_nome_${g.id}" value="${g.titular||''}" oninput="salvarGruposOrcamentoDaTela();atualizarTotalOrcGrupos()"></div><div class="fg"><label>Plano deste titular e dependentes</label><select id="og_plano_${g.id}" onchange="salvarGruposOrcamentoDaTela();atualizarTotalOrcGrupos()">${Object.entries(PLAN_VALUES_PORTAL).map(([k,p])=>`<option value="${k}" ${g.plano===k?'selected':''}>${p.nome} — ${formatBRL(p.valor)}/vida</option>`).join('')}</select></div></div><div class="fg" style="margin-top:10px"><label>Dependentes <span class="opt">(um nome por linha)</span></label><textarea id="og_deps_${g.id}" rows="3" placeholder="Maria Silva&#10;João Silva" oninput="salvarGruposOrcamentoDaTela();atualizarTotalOrcGrupos()">${(g.dependentes||[]).join('\n')}</textarea></div></div>`).join('');
+  atualizarTotalOrcGrupos();
+}
+function atualizarTotalOrcGrupos(){
+  salvarGruposOrcamentoDaTela(); let total=0,vidas=0; ORC_GRUPOS.forEach(g=>{const p=PLAN_VALUES_PORTAL[g.plano];const qtd=1+(g.dependentes||[]).length;vidas+=qtd;if(p)total+=p.valor*qtd;}); const el=document.getElementById('orc_totalGrupos');if(el)el.textContent=`Total estimado: ${formatBRL(total)}/mês · ${vidas} vida(s)`;
 }
 function toggleOrcCdlTier(){
   const ehAssociado = document.getElementById('orc_associado').value === 'sim';
   document.getElementById('orc_cdlTierBlock').style.display = ehAssociado ? 'none' : 'block';
 }
-function calcularOrcamentoPortal(){
-  const vidas = Math.max(1, Number(document.getElementById('orc_vidas').value || 1));
-  const area = document.getElementById('orc_planosArea');
-  area.innerHTML = Object.entries(PLAN_VALUES_PORTAL).map(([key,p])=>{
-    const total = p.valor * vidas;
-    const selecionado = ORC_PLANO_ESCOLHIDO === key;
-    return `
-      <button type="button" class="doc-action-card" style="flex-direction:column;align-items:flex-start;gap:2px;${selecionado?'border-color:var(--navy);background:var(--navy-tint);':''}" onclick="selecionarPlanoOrcamento('${key}')">
-        <b style="font-size:12.5px;">${p.nome}</b>
-        <span style="font-size:11px;color:var(--text-muted);">${p.tag}</span>
-        <span style="font-size:17px;font-weight:800;color:var(--navy);margin-top:4px;">${formatBRL(total)}<small style="font-size:10.5px;font-weight:500;">/mês</small></span>
-        <span style="font-size:10.5px;color:var(--text-muted);">${formatBRL(p.valor)}/vida × ${vidas}</span>
-      </button>`;
-  }).join('');
-}
+function calcularOrcamentoPortal(){ renderOrcGrupos(); }
 function calcularOrcamentoCdlPortal(){
   const area = document.getElementById('orc_planosArea');
   area.innerHTML = Object.entries(CDL_TIERS_PORTAL).map(([key,t])=>{
@@ -2594,7 +2694,7 @@ async function criarOrcamentoNoPortal(){
 
   if(!razaoSocial || cnpj.length!==14){ toast('Preencha a razão social e um CNPJ válido.'); return; }
   if(!nome || !celular){ toast('Preencha nome e celular do responsável.'); return; }
-  if(!ORC_PLANO_ESCOLHIDO){ toast('Escolha uma opção.'); return; }
+  if(ORC_MODE==='cdl' && !ORC_PLANO_ESCOLHIDO){ toast('Escolha uma opção.'); return; }
 
   // Qualquer usuário que crie um orçamento leva o próprio código junto — mesma regra
   // usada quando a venda chega pelo link pessoal (não é só o papel "vendedor").
@@ -2604,34 +2704,17 @@ async function criarOrcamentoNoPortal(){
   let c, pdfInfo;
 
   if(ORC_MODE==='plano'){
-    const vidas = Math.max(1, Number(document.getElementById('orc_vidas').value || 1));
+    salvarGruposOrcamentoDaTela();
+    if(!ORC_GRUPOS.length || ORC_GRUPOS.some(g=>!g.titular.trim())){ toast('Preencha o nome de todos os titulares do orçamento.'); return; }
     const ehAssociado = document.getElementById('orc_associado').value === 'sim';
     const cdlTier = ehAssociado ? null : document.getElementById('orc_cdlTier').value;
-    const plano = PLAN_VALUES_PORTAL[ORC_PLANO_ESCOLHIDO];
-    const total = plano.valor * vidas;
-
-    pdfInfo = gerarOrcamentoPDFPortal({
-      ...dadosBasePDF, tipoArquivo:'plano-saude',
-      titulo: 'Orçamento — Plano de Saúde Unimed',
-      secaoTitulo: 'Plano escolhido',
-      colunas: ['Plano', 'Vidas', 'Valor/vida', 'Total/mês'],
-      linhas: [[plano.nome, String(vidas), formatBRL(plano.valor), formatBRL(total)]],
-      totalTexto: `${formatBRL(total)}/mês`,
-      observacao: 'Valores sujeitos a análise cadastral e confirmação da Unimed. Condições exclusivas para associados CDL Mossoró — orçamento válido por 15 dias.',
-    });
-
-    c = {
-      id: uid('cli'), status:'ativo', origemSite:false, etapaAdesao:'nova', pendencia:{ativa:false,motivo:''},
-      empresaId,
-      titular:{ nome, cpf:'', dataNascimento:'', celular, email, razaoSocial, cnpj, anexos:[] },
-      dependentes:[],
-      planoEscolhido: plano.nome,
-      qtdVidasInformada: vidas,
-      planoCdlEscolhido: cdlTier ? CDL_TIERS_PORTAL[cdlTier].nome : null,
-      vendedores, comissoes:[],
-      historico:[{ data:nowISO(), texto:`Orçamento de plano de saúde criado direto no portal por ${CURRENT_USER.nome}${CURRENT_USER.codigoVendedor?' (código '+CURRENT_USER.codigoVendedor+')':''} — ${plano.nome} para ${vidas} vida(s).` }],
-      emailAdministradoraEnviadoEm:null, criadoEm:nowISO(),
-    };
+    const linhas=[]; let total=0; let totalVidas=0;
+    ORC_GRUPOS.forEach(g=>{ const plano=PLAN_VALUES_PORTAL[g.plano]; const vidas=1+(g.dependentes||[]).length; const subtotal=plano.valor*vidas; total+=subtotal; totalVidas+=vidas; linhas.push([g.titular, plano.nome, String(vidas), formatBRL(subtotal)]); });
+    pdfInfo = gerarOrcamentoPDFPortal({...dadosBasePDF,tipoArquivo:'plano-saude',titulo:'Orçamento — Plano de Saúde Unimed',secaoTitulo:'Titulares e planos',colunas:['Titular','Plano','Vidas','Subtotal'],linhas,totalTexto:`${formatBRL(total)}/mês`,observacao:'Cada titular pode possuir plano próprio e seus dependentes permanecem vinculados ao mesmo grupo. Valores sujeitos a análise cadastral e confirmação da Unimed.'});
+    const pdfDataUrl=pdfInfo.doc.output('datauristring');
+    const lead={id:uid('lead'),etapa:'potencial',nome:nome,empresa:razaoSocial,cnpj,celular:onlyDigits(celular),email,planoInteresse:`Orçamento com ${ORC_GRUPOS.length} titular(es) · ${totalVidas} vida(s)`,gruposOrcamento:ORC_GRUPOS.map(g=>({titular:g.titular,plano:PLAN_VALUES_PORTAL[g.plano].nome,planoKey:g.plano,dependentes:[...(g.dependentes||[])]})),anexos:[{id:uid('anx'),nome:pdfInfo.filename,dataUrl:pdfDataUrl,criadoEm:nowISO()}],comentarios:[{data:nowISO(),texto:`Orçamento criado por ${CURRENT_USER.nome}.`}],vendedorId:CURRENT_USER.id,planoCdlEscolhido:cdlTier?CDL_TIERS_PORTAL[cdlTier].nome:null,criadoEm:nowISO()};
+    DB.pipeline=DB.pipeline||[];DB.pipeline.push(lead);
+    await registrarLog('Orçamento criado no portal',`${razaoSocial} (plano de saúde · ${totalVidas} vidas)`);await persist();pdfInfo.doc.save(pdfInfo.filename);toast('Orçamento criado e enviado para Cliente Potencial no Pipeline.');openPipelineLeadModal(lead.id);return;
   } else {
     const tier = CDL_TIERS_PORTAL[ORC_PLANO_ESCOLHIDO];
 
@@ -2668,7 +2751,7 @@ async function criarOrcamentoNoPortal(){
   await registrarLog('Orçamento criado no portal', `${razaoSocial} (${ORC_MODE==='plano'?'plano de saúde':'adesão CDL'})`);
   await persist();
   pdfInfo.doc.save(pdfInfo.filename);
-  toast('Orçamento criado, PDF baixado e já está no CRM.');
+  toast('Orçamento criado, PDF baixado e foi registrado no sistema.');
   openClientModal(c.id);
 }
 
@@ -2786,6 +2869,7 @@ function migrateClientShape(c){
     c.titular.anexos = Array.isArray(c.anexos) ? c.anexos : [];
   }
   if(c.anexos) delete c.anexos;
+  c.dependentes = c.dependentes || [];
   c.dependentes.forEach(d=>{ if(!d.anexos) d.anexos = []; });
   if(!c.etapaAdesao) c.etapaAdesao = c.status === 'ativo' ? 'ativo' : 'nova';
   if(!c.pendencia) c.pendencia = { ativa:false, motivo:'' };
@@ -3058,35 +3142,28 @@ function renderClientModal(){
       </div>
     `;
   } else if(ACTIVE_PERSON_TAB==='ativo'){
-    tabContent = renderComissaoTab(c);
+    tabContent = `<div class="empty-state">${ICONS.check}<div><b>Implantação concluída.</b><br><span style="font-size:12px;color:var(--text-muted);">Comissões são tratadas exclusivamente no relatório de comissões.</span></div></div>`;
   } else if(ACTIVE_PERSON_TAB==='questionario'){
-    const feito = temAnexoChamado(c,'Declaracao de Saude e RC.pdf');
+    const feito = listPessoas(c).every(p=>!!p.pessoa.questionarioRiscoConcluidoEm);
     tabContent = `
-      <div class="doc-actions-grid" style="grid-template-columns:1fr;">
-        <button type="button" class="doc-action-card" onclick="openQuestionarioRiscoModal()">
-          <span class="doc-icon">${ICONS.clipboard}</span>
-          <span class="doc-text">Questionário de risco<small>Declaração de saúde do titular e dependentes</small></span>
-        </button>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">O questionário de risco é individual para cada vida. Você pode preencher pelo sistema ou gerar um link exclusivo.</p>
+      <div style="display:grid;gap:10px;">
+        ${listPessoas(c).map(p=>`<div class="dep-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;"><div><b>${p.label}</b><div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${p.pessoa.dsRespostas?'✓ Questionário preenchido':'Aguardando questionário'}</div></div><div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;"><button class="btn-ghost" onclick="openQuestionarioRiscoModalFor('${p.key}')">Preencher</button><button class="btn-primary" style="padding:7px 10px;font-size:11px;" onclick="gerarLinkRiscoPessoa('${p.key}')">Gerar link</button></div></div>`).join('')}
       </div>
-      <div style="margin-top:14px;">${feito ? `<span class="status-pill ativo">✓ Já preenchido</span>` : `<span class="status-pill inativo">Ainda não preenchido</span>`}</div>
     `;
   } else if(ACTIVE_PERSON_TAB==='conferencia'){
     const fichaFeita = temAnexoChamado(c,'Ficha de Adesao Unimed.pdf');
     const dsFeita = temAnexoChamado(c,'Declaracao de Saude e RC.pdf');
     tabContent = `
       ${!dsFeita ? `<div class="pendencia-banner" style="margin-bottom:14px;">⚠️ O questionário de risco ainda não foi preenchido — recomendamos preencher ele primeiro (aba "Questionário"), os dados de lá ajudam a preencher a Ficha Unimed.</div>` : ''}
-      <div class="doc-actions-grid">
-        <button type="button" class="doc-action-card" onclick="openFichaUnimedModal()">
-          <span class="doc-icon">${ICONS.clipboard}</span>
-          <span class="doc-text">Ficha Unimed<small>Proposta de adesão preenchida</small></span>
-        </button>
-        <button type="button" class="doc-action-card" onclick="exportarLayoutUnimed()">
-          <span class="doc-icon">${ICONS.upload}</span>
-          <span class="doc-text">Exportar layout (.xlsx)<small>Planilha padrão pra enviar à Unimed</small></span>
-        </button>
+      <div class="dep-card" style="display:grid;gap:10px;">
+        ${['Documentos pessoais conferidos','Questionários de risco individuais conferidos','Ficha Unimed gerada e conferida','Layout Unimed exportado e conferido','Todos os anexos do lead revisados'].map((txt,i)=>`<label style="display:flex;gap:10px;align-items:center;font-size:12.5px;font-weight:600;"><input type="checkbox" ${c.conferenciaChecklist&&c.conferenciaChecklist[i]?'checked':''} onchange="toggleConferenciaItem(${i},this.checked)"> ${txt}</label>`).join('')}
       </div>
-      <div style="margin-top:14px;">${fichaFeita ? `<span class="status-pill ativo">✓ Ficha já preenchida</span>` : `<span class="status-pill inativo">Ficha ainda não preenchida</span>`}</div>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Confira os anexos (aba Documentos) e o questionário de risco antes de marcar como conferido e avançar pra "Implantação".</p>
+      <div class="doc-actions-grid" style="margin-top:14px;">
+        <button type="button" class="doc-action-card" onclick="openFichaUnimedModal()"><span class="doc-icon">${ICONS.clipboard}</span><span class="doc-text">Ficha Unimed<small>${fichaFeita?'Gerada — revisar':'Gerar proposta de adesão'}</small></span></button>
+        <button type="button" class="doc-action-card" onclick="exportarLayoutUnimed()"><span class="doc-icon">${ICONS.upload}</span><span class="doc-text">Layout Unimed (.xlsx)<small>Gerar e revisar antes do envio</small></span></button>
+      </div>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Dê OK item por item. Na etapa seguinte, o envio para a Unimed deve levar ficha, layout e todos os anexos do lead.</p>
     `;
   } else if(ACTIVE_PERSON_TAB==='enviado'){
     const aditivoFeito = temAnexoChamado(c,'Aditivo RC.pdf');
@@ -3101,8 +3178,8 @@ function renderClientModal(){
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
         <span style="font-size:12.5px;color:var(--text-muted);">Status do envio:</span> ${emailStatusInline}
       </div>
-      <button class="btn-primary" onclick="openSendAdminEmailModal()">${ICONS.mail} Enviar e-mail para administradora</button>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Isso monta um e-mail com o resumo da triagem e os anexos, pronto pra você conferir e enviar pela sua caixa de e-mail.</p>
+      <button class="btn-primary" onclick="openSendAdminEmailModal()">${ICONS.mail} Enviar implantação para Unimed</button>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">O envio deve incluir a ficha Unimed, o layout e todos os anexos do lead. Confira o pacote completo antes de enviar.</p>
     `;
   }
 
@@ -3136,7 +3213,6 @@ function renderClientModal(){
     { id:'questionario', label:'Questionário' },
     { id:'conferencia', label:'Conferência' },
     { id:'enviado', label:'Implantação' },
-    ...(isAdmin()||isVendedor() ? [{ id:'ativo', label:'Comissão' }] : []),
   ];
 
   openModalHTML(`
@@ -3173,8 +3249,8 @@ function renderClientModal(){
           ${stageTrackerHTML}
         </div>
 
-        <div class="journey-tabs">
-          ${JOURNEY_TABS.map(jt=>`<button class="journey-tab-btn ${ACTIVE_PERSON_TAB===jt.id?'active':''}" onclick="switchPersonTab('${jt.id}')">${jt.label}</button>`).join('')}
+        <div style="display:flex;justify-content:flex-end;margin:0 0 16px;">
+          ${c.etapaAdesao!=='ativo' ? `<button class="btn-primary" onclick="concluirEtapaImplantacao()">${ICONS.check} Concluir Etapa</button>` : `<span class="status-pill ativo">✓ Implantação concluída</span>`}
         </div>
         <div class="journey-tab-content">
           ${ACTIVE_PERSON_TAB==='documentacao' ? `
@@ -3735,6 +3811,14 @@ const DS_FAMILY_QUESTIONS = [
 let DS_ACTIVE_PESSOA = null;
 let DS_ANSWERS = {};
 
+function openQuestionarioRiscoModalFor(key){ openQuestionarioRiscoModal(); setTimeout(()=>switchDsPessoa(key),0); }
+function gerarLinkRiscoPessoa(key){
+  const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID); const p=listPessoas(c).find(x=>x.key===key); if(!p) return;
+  p.pessoa.linkRiscoToken=p.pessoa.linkRiscoToken||uid('ds');
+  persist();
+  const base=location.href.split('#')[0].split('?')[0]; const link=base+'?ds='+encodeURIComponent(p.pessoa.linkRiscoToken);
+  navigator.clipboard?.writeText(link); toast('Link individual do questionário copiado.');
+}
 function openQuestionarioRiscoModal(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   const pessoas = listPessoas(c);
@@ -3875,7 +3959,9 @@ function atualizarIMC(key){
 async function gerarQuestionarioRisco(){
   saveDsPersonBodyToMemory();
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
-  const pessoas = listPessoas(c);
+  const todasPessoas = listPessoas(c);
+  const pessoaAtiva = todasPessoas.find(p=>p.key===DS_ACTIVE_PESSOA) || todasPessoas[0];
+  const pessoas = pessoaAtiva ? [pessoaAtiva] : [];
   const orientacao = document.getElementById('ds_orientacao')?.value || 'c';
   const orientacaoTexto = {
     a: 'Declara que foi orientado por médico referenciado da Unimed no preenchimento da Declaração de Saúde.',
@@ -3939,14 +4025,20 @@ async function gerarQuestionarioRisco(){
 
   const blob = doc.output('blob');
   const dataUrl = await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(blob); });
-  c.titular.anexos = c.titular.anexos || [];
-  c.titular.anexos = c.titular.anexos.filter(a=>a.nome!=='Declaracao de Saude e RC.pdf');
-  c.titular.anexos.push({ id:uid('anx'), nome:'Declaracao de Saude e RC.pdf', dataUrl, criadoEm:nowISO() });
-  c.historico.push({ data:nowISO(), texto:'Declaração de Saúde e Redução de Carência preenchida e anexada.' });
+  const alvo = pessoaAtiva?.pessoa;
+  if(!alvo) return;
+  alvo.dsRespostas = Object.assign({}, DS_ANSWERS[pessoaAtiva.key]||{});
+  alvo.anexos = alvo.anexos || [];
+  const nomeSeguro=(alvo.nome||pessoaAtiva.key||'pessoa').replace(/[^a-zA-Z0-9À-ÿ _-]/g,'').trim();
+  const nomeArquivo=`Declaracao de Saude e RC - ${nomeSeguro}.pdf`;
+  alvo.anexos = alvo.anexos.filter(a=>!a.nome.startsWith('Declaracao de Saude e RC - '));
+  alvo.anexos.push({ id:uid('anx'), nome:nomeArquivo, dataUrl, criadoEm:nowISO() });
+  alvo.questionarioRiscoConcluidoEm = nowISO();
+  c.historico.push({ data:nowISO(), texto:`Questionário de risco individual concluído para ${alvo.nome||pessoaAtiva.label}.` });
   await persist();
-  ACTIVE_PERSON_TAB = 'conferencia'; // próximo passo natural: preencher a Ficha Unimed
+  ACTIVE_PERSON_TAB = 'questionario';
   renderClientModal();
-  toast('✓ Declaração de Saúde anexada. Agora é só preencher a Ficha Unimed abaixo.');
+  toast(`✓ Questionário de ${alvo.nome||'pessoa'} concluído e anexado individualmente.`);
 }
 
 /* ---------- FICHA / PROPOSTA DE ADESÃO UNIMED (PME PORTE III) ---------- */
@@ -4289,9 +4381,32 @@ async function gerarAditivoRc(){
   toast('Aditivo RC gerado e anexado ao Titular.');
 }
 
+async function toggleConferenciaItem(i, checked){
+  const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID); if(!c) return;
+  c.conferenciaChecklist=c.conferenciaChecklist||{}; c.conferenciaChecklist[i]=!!checked; await persist();
+}
+
+async function concluirEtapaImplantacao(){
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  if(!c) return;
+  const idx = ADESAO_STAGES.findIndex(s=>s.id===c.etapaAdesao);
+  if(idx < 0 || idx >= ADESAO_STAGES.length-1){ toast('Esta já é a última etapa.'); return; }
+  const atual = ADESAO_STAGES[idx];
+  const proxima = ADESAO_STAGES[idx+1];
+  c.etapasConcluidas = c.etapasConcluidas || {};
+  c.etapasConcluidas[atual.id] = nowISO();
+  c.etapaAdesao = proxima.id;
+  ACTIVE_PERSON_TAB = proxima.id;
+  c.historico.push({data:nowISO(), texto:`Etapa "${atual.label}" concluída. Avançou para "${proxima.label}".`});
+  await persist();
+  renderClientModal();
+  toast(`✓ ${atual.label} concluída. Próxima etapa: ${proxima.label}.`);
+}
+
 async function setEtapaAdesao(stageId){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
   c.etapaAdesao = stageId;
+  ACTIVE_PERSON_TAB = stageId;
   if(stageId === 'ativo') c.status = 'ativo';
   c.historico.push({ data:nowISO(), texto:`Etapa da adesão alterada para "${stageLabel(stageId)}".` });
   await registrarLog('Etapa da adesão alterada', `${c.titular.razaoSocial||c.titular.nome} → ${stageLabel(stageId)}`);
@@ -4372,7 +4487,7 @@ async function updateEmpresa(){
     c.historico.push({ data:nowISO(), texto:'Dados da empresa atualizados.' });
   }
   await persist();
-  renderClientModal(); // atualiza nome/CNPJ exibidos no cabeçalho e na barra de titulares
+  // Não redesenha o modal ao sair de cada campo: evita o efeito de 'piscar' e perda de foco.
 }
 async function updatePlano(){
   const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
