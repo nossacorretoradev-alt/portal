@@ -2273,6 +2273,7 @@ async function importarLeadsDoSite(opts){
   if(!novosLeads.length){ if(!silencioso) toast('Nenhum lead novo — tudo que chegou do site já está no CRM.'); return; }
 
   let criados = 0;
+  let mesclados = 0;
   for(const lead of novosLeads){
     const cnpjLimpo = onlyDigits(lead.cnpj || '');
     const celularLimpo = onlyDigits(lead.celular || '');
@@ -2288,10 +2289,42 @@ async function importarLeadsDoSite(opts){
     if(lead.orcamento_path){
       anexosTitular.push({ id:uid('anx'), nome:'Orçamento gerado na simulação.pdf', dataUrl: getPublicStorageUrl(lead.orcamento_path), criadoEm: lead.received_at||nowISO() });
     }
+
+    // Mesma empresa + mesmo celular já enviou antes pelo site? É a mesma pessoa completando
+    // ou atualizando a simulação (ex: adicionando dependentes) — junta no MESMO lead em vez
+    // de criar um card novo. Só cria lead novo de verdade quando é uma empresa nova.
+    const existente = cnpjLimpo ? DB.clients.find(c =>
+      c.leadOrigemId && onlyDigits(c.titular.cnpj||'')===cnpjLimpo && onlyDigits(c.titular.celular||'')===celularLimpo
+    ) : null;
+
+    if(existente){
+      // mescla dependentes novos (por nome+cpf) que ainda não estavam registrados
+      let novosDeps = 0;
+      resto.forEach(v=>{
+        const cpfV = onlyDigits(v.cpf||'');
+        const jaTem = existente.dependentes.some(d=> (cpfV && onlyDigits(d.cpf||'')===cpfV) || (!cpfV && d.nome===v.nome));
+        if(!jaTem && (v.nome || cpfV)){
+          existente.dependentes.push({ id:uid('dep'), nome:v.nome||'', cpf:cpfV, dataNascimento:v.dataNascimento||'', parentesco:'', anexos:[] });
+          novosDeps++;
+        }
+      });
+      anexosTitular.forEach(a=>{
+        if(!existente.titular.anexos.some(x=>x.nome===a.nome)) existente.titular.anexos.push(a);
+      });
+      if(lead.qtd_vidas) existente.qtdVidasInformada = lead.qtd_vidas;
+      if(lead.plano_escolhido) existente.planoEscolhido = lead.plano_escolhido;
+      existente.leadOrigemId = lead.id; // passa a reconhecer esse novo envio também, sem duplicar
+      existente.historico.push({ data:nowISO(), texto:`Nova simulação do site recebida — ${novosDeps} dependente(s) novo(s) adicionado(s) no mesmo lead (nº ${existente.numeroLead}).` });
+      mesclados++;
+      continue;
+    }
+
     const donoLink = lead.vendedor_codigo ? DB.users.find(u=>u.codigoVendedor===lead.vendedor_codigo) : null;
     const empresaId = getOrCreateEmpresaByCnpj(cnpjLimpo, lead.empresa || '').id;
+    DB.leadCounter = (DB.leadCounter || 0) + 1;
     const client = {
       id: uid('cli'), status:'ativo', origemSite: !!lead.novo_afiliado,
+      numeroLead: DB.leadCounter,
       etapaAdesao: lead.contrato_assinado ? 'documentacao' : 'nova',
       pendencia:{ativa:false,motivo:''},
       leadOrigemId: lead.id,
@@ -2310,7 +2343,7 @@ async function importarLeadsDoSite(opts){
       vendedores: donoLink ? [{ vendedorId: donoLink.id, percentual: 100, pagamentos: [] }] : [],
       comissoes: [],
       historico:[
-        { data:nowISO(), texto:'Importado automaticamente do simulador (site).' },
+        { data:nowISO(), texto:`Importado automaticamente do simulador (site) — lead nº ${DB.leadCounter}.` },
         ...(donoLink ? [{ data:nowISO(), texto:`Venda identificada automaticamente com ${donoLink.nome} (código ${lead.vendedor_codigo}).` }] : []),
         ...(anexosTitular.length ? [{ data:nowISO(), texto:`${anexosTitular.length} documento(s) recebido(s) do site: ${anexosTitular.map(a=>a.nome).join(', ')}.` }] : []),
       ],
@@ -2332,7 +2365,10 @@ async function importarLeadsDoSite(opts){
   await loadCompaniesFromCdlBase();
   if(!silencioso) switchView('crm');
   else if(CURRENT_VIEW==='crm' || CURRENT_VIEW==='clientes' || CURRENT_VIEW==='inicio') switchView(CURRENT_VIEW); // atualiza a tela se a pessoa já estiver olhando pra ela
-  toast(`${criados} novo(s) lead(s) do site importado(s) pro CRM.`);
+  const partes = [];
+  if(criados) partes.push(`${criados} lead(s) novo(s)`);
+  if(mesclados) partes.push(`${mesclados} atualização(ões) em lead(s) já existente(s)`);
+  toast(partes.length ? partes.join(' · ') + ' — CRM atualizado.' : 'Nada novo do site.');
 }
 
 /* =========================================================
@@ -2761,8 +2797,30 @@ function migrateClientShape(c){
   if(!c.historicoPagamento) c.historicoPagamento = [];
   if(!c.aditivoRc) c.aditivoRc = {};
   if(!c.empresaId) c.empresaId = getOrCreateEmpresaByCnpj(c.titular.cnpj, c.titular.razaoSocial).id;
+  if(!c.numeroLead){ DB.leadCounter = (DB.leadCounter||0) + 1; c.numeroLead = DB.leadCounter; }
 }
 function switchPersonTab(tab){ ACTIVE_PERSON_TAB = tab; renderClientModal(); }
+async function salvarClienteManual(){
+  await persist();
+  toast('✓ Salvo com sucesso.');
+}
+function abrirHistoricoDiscreto(){
+  const c = DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);
+  const overlay = document.getElementById('confirmOverlay');
+  overlay.innerHTML = `
+    <div class="modal modal-small">
+      <div class="modal-head" style="padding:16px 20px;">
+        <div class="mh-info"><div class="mh-name" style="font-size:14px;">Histórico deste lead</div></div>
+        <button class="modal-close" onclick="document.getElementById('confirmOverlay').classList.remove('active');">${ICONS.close}</button>
+      </div>
+      <div class="modal-body" style="padding:14px 20px 20px;">
+        <div class="history-list" style="max-height:320px;">
+          ${c.historico.slice().reverse().map(h=>`<div class="history-item"><span class="hi-date">${fmtDateTime(h.data)}</span><span>${h.texto}</span></div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  overlay.classList.add('active');
+}
 function countAnexos(c){ return (c.titular.anexos||[]).length + c.dependentes.reduce((n,d)=>n+(d.anexos||[]).length, 0); }
 function temAnexoChamado(c, nome){ return (c.titular.anexos||[]).some(a=>a.nome===nome); }
 
@@ -3079,7 +3137,6 @@ function renderClientModal(){
     { id:'conferencia', label:'Conferência' },
     { id:'enviado', label:'Implantação' },
     ...(isAdmin()||isVendedor() ? [{ id:'ativo', label:'Comissão' }] : []),
-    { id:'historico', label:'Histórico' },
   ];
 
   openModalHTML(`
@@ -3088,12 +3145,13 @@ function renderClientModal(){
         <div class="mh-avatar" style="background:${avatarColor(t.razaoSocial||t.nome)};">${initials(t.nome||t.razaoSocial)}</div>
         <div class="mh-info">
           <div class="mh-name">${t.razaoSocial||t.nome||'Novo cliente'} ${c.origemSite?`<span class="site-tag">Novo filiado · site</span>`:''}</div>
-          <div class="mh-sub">${t.nome||''}</div>
+          <div class="mh-sub">${t.nome||''} <span style="opacity:.6;">· Lead nº ${c.numeroLead||'—'}</span></div>
         </div>
         <label class="toggle-switch" title="Ativo / Inativo">
           <input type="checkbox" ${c.status==='ativo'?'checked':''} onchange="toggleClientStatus()"/>
           <span class="toggle-slider"></span>
         </label>
+        <button class="btn-primary" style="padding:8px 16px;font-size:12.5px;flex-shrink:0;" onclick="salvarClienteManual()">${ICONS.check} Salvar</button>
         ${isAdmin()?`<button class="modal-close" title="Excluir cliente" style="color:var(--danger);" onclick="deleteClient()">${ICONS.trash}</button>`:''}
         <button class="modal-close" onclick="closeModal(); switchView('clientes');">${ICONS.close}</button>
       </div>
@@ -3106,6 +3164,7 @@ function renderClientModal(){
               <button class="btn-ghost" style="padding:5px 10px;font-size:11.5px;${x.id===c.id?'background:var(--navy);color:#fff;':''}" onclick="openClientModal('${x.id}')">${x.titular.nome||'sem nome'}${x.planoEscolhido?` · ${x.planoEscolhido}`:''}</button>
             `).join('')}
             <button class="btn-ghost" style="padding:5px 10px;font-size:11.5px;" onclick="adicionarTitularNaEmpresa('${c.empresaId}')">${ICONS.plus} Novo titular</button>
+            <a href="#" onclick="abrirHistoricoDiscreto();return false;" style="margin-left:auto;font-size:11px;color:var(--text-faint);text-decoration:underline;">Ver histórico</a>
           </div>
         </div>
 
