@@ -1650,6 +1650,8 @@ const FORM_BASE_URL = "https://nossacorretoradev-alt.github.io/saude/formulario-
 // repositório público do simulador/formulário.
 const DOCUMENT_UPLOAD_BASE_URL = "https://nossacorretoradev-alt.github.io/saude/documentos-cliente.html";
 const DOCUMENT_UPLOAD_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/document-uploads`;
+const ZAPSIGN_CREATE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/zapsign-create`;
+const ZAPSIGN_STATUS_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/zapsign-status`;
 const STORAGE_KEY = 'cdlunimed_portal_db_v1';
 const AUTH_SESSION_KEY='cdlunimed_supabase_session_v2';
 let AUTH_SESSION=null;
@@ -2468,6 +2470,7 @@ async function importarLeadsDoSite(opts){
     const primeira=vidas[0]||{};
     const dono=lead.vendedor_codigo ? DB.users.find(u=>u.codigoVendedor===lead.vendedor_codigo) : null;
     const anexos=[];
+    if(lead.zapsign?.signed_file) anexos.push({id:uid('anx'),nome:'Contrato de adesão assinado — ZapSign.pdf',dataUrl:lead.zapsign.signed_file,zapsign:{docToken:lead.zapsign.doc_token,signerToken:lead.zapsign.signer_token,signUrl:lead.zapsign.sign_url,status:lead.zapsign.status,completed:!!lead.zapsign.completed,signedFile:lead.zapsign.signed_file,signers:[{signedAt:lead.zapsign.signed_at}]},criadoEm:lead.zapsign.signed_at||lead.received_at||nowISO()});
     if(lead.internal_pdf_path) anexos.push({id:uid('anx'),nome:'Contrato + carimbo de evidências.pdf',dataUrl:await getInternalDocUrl(lead.internal_pdf_path),storagePath:lead.internal_pdf_path,criadoEm:lead.received_at||nowISO()});
     if(lead.fatura_path) anexos.push({id:uid('anx'),nome:'Fatura atual enviada pelo cliente',dataUrl:await getInternalDocUrl(lead.fatura_path),storagePath:lead.fatura_path,criadoEm:lead.received_at||nowISO()});
     if(lead.orcamento_path) anexos.push({id:uid('anx'),nome:'Orçamento gerado na simulação.pdf',dataUrl:await getInternalDocUrl(lead.orcamento_path),storagePath:lead.orcamento_path,criadoEm:lead.received_at||nowISO()});
@@ -3104,9 +3107,59 @@ function renderDocSlotRow(slot, alvo, alvoTipo, depIndex){
       <span class="doc-slot-icon ${doc.confirmado?'ok':'pendente'}">${doc.confirmado?ICONS.check:ICONS.file}</span>
       <a href="${doc.dataUrl}" download="${doc.nome}" class="doc-slot-label" style="color:var(--navy);text-decoration:underline;">${doc.nome}</a>
       <span class="status-pill ${doc.confirmado?'ativo':'inativo'}">${doc.confirmado?'✓ Confirmado':'Aguardando OK'}</span>
+      ${/\.pdf$/i.test(doc.nome||'') ? (doc.zapsign?.completed
+        ? `<a class="btn-ghost" style="padding:5px 10px;font-size:11px;" href="${doc.zapsign.signedFile||doc.dataUrl}" target="_blank" rel="noopener">✓ Assinado</a>`
+        : doc.zapsign?.docToken
+          ? `<button class="btn-primary" style="padding:5px 10px;font-size:11px;" onclick="consultarAssinaturaDocumento('${alvoTipo}',${depIndex!==undefined?depIndex:'undefined'},'${slot.key}')">Verificar assinatura</button>`
+          : `<button class="btn-primary" style="padding:5px 10px;font-size:11px;" onclick="abrirAssinaturaDocumento('${alvoTipo}',${depIndex!==undefined?depIndex:'undefined'},'${slot.key}')">Enviar para assinatura</button>`
+      ) : ''}
       <button class="btn-ghost" style="padding:5px 10px;font-size:11px;" onclick="toggleDocSlotConfirmado('${alvoTipo}',${depIndex!==undefined?depIndex:'undefined'},'${slot.key}')">${doc.confirmado?'Desfazer':'Dar OK'}</button>
       <button class="btn-danger" style="padding:5px 8px;" onclick="removeDocSlot('${alvoTipo}',${depIndex!==undefined?depIndex:'undefined'},'${slot.key}')">${ICONS.trash}</button>
     </div>`;
+}
+
+function localizarDocumentoPortal(alvoTipo, depIndex, slotKey){
+  const c=DB.clients.find(x=>x.id===ACTIVE_CLIENT_ID);if(!c)return {};
+  if(alvoTipo==='anexoTitular')return {c,alvo:c.titular,doc:(c.titular.anexos||[])[Number(slotKey)]};
+  const alvo=alvoTipo==='empresa'?getEmpresaDoCliente(c):alvoTipo==='titular'?c.titular:c.dependentes[depIndex];
+  return {c,alvo,doc:alvo?.documentos?.[slotKey]};
+}
+async function documentoParaBase64(dataUrl){
+  if(/^data:application\/pdf;base64,/i.test(dataUrl||''))return dataUrl.split(',')[1];
+  const response=await fetch(dataUrl,{headers:/supabase\.co\//.test(dataUrl||'')?supabaseHeaders():{}});
+  if(!response.ok)throw new Error('Não foi possível abrir o PDF para assinatura.');
+  const blob=await response.blob();
+  if(blob.type&&blob.type!=='application/pdf')throw new Error('Somente documentos PDF podem ser enviados para assinatura.');
+  return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=reject;reader.readAsDataURL(blob);});
+}
+function abrirAssinaturaDocumento(alvoTipo,depIndex,slotKey){
+  const {c,doc}=localizarDocumentoPortal(alvoTipo,depIndex,slotKey);if(!c||!doc)return;
+  const pessoas=listPessoas(c);
+  openModalHTML(`<div class="modal modal-small"><div class="modal-head"><div class="mh-info"><div class="mh-name">Enviar para assinatura</div><div class="mh-sub">${doc.nome}</div></div><button class="modal-close" onclick="closeModal()">${ICONS.close}</button></div><div class="modal-body"><div class="fg"><label>Quem deve assinar</label><select id="zap_portal_pessoa">${pessoas.map(p=>`<option value="${p.key}">${p.label}</option>`).join('')}</select></div><p style="font-size:11.5px;color:var(--text-muted);margin-top:12px;line-height:1.5;">O documento será enviado à ZapSign. O link também ficará salvo aqui para acompanhamento.</p></div><div class="modal-foot"><button class="btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn-primary" id="zap_portal_enviar" onclick="enviarDocumentoPortalZapSign('${alvoTipo}',${depIndex!==undefined?depIndex:'undefined'},'${slotKey}')">Enviar e abrir assinatura</button></div></div>`);
+}
+async function enviarDocumentoPortalZapSign(alvoTipo,depIndex,slotKey){
+  const {c,doc}=localizarDocumentoPortal(alvoTipo,depIndex,slotKey);if(!c||!doc)return;
+  const pessoa=listPessoas(c).find(p=>p.key===document.getElementById('zap_portal_pessoa').value)?.pessoa;
+  if(!pessoa?.nome){toast('Preencha o nome do signatário na aba Pessoas.');return;}
+  const btn=document.getElementById('zap_portal_enviar');btn.disabled=true;btn.textContent='Enviando...';
+  try{
+    const pdfBase64=await documentoParaBase64(doc.dataUrl);
+    const res=await fetch(ZAPSIGN_CREATE_FUNCTION_URL,{method:'POST',headers:supabaseHeaders({'Content-Type':'application/json'}),body:JSON.stringify({nome:pessoa.nome,email:pessoa.email||c.titular.email,celular:pessoa.celular||c.titular.celular,cpf:pessoa.cpf||'',pdfBase64,tituloDocumento:doc.nome})});
+    const data=await res.json();if(!res.ok||!data.docToken||!data.signUrl)throw new Error(data.error||'A ZapSign não devolveu o link de assinatura.');
+    doc.zapsign={docToken:data.docToken,signerToken:data.signerToken,signUrl:data.signUrl,status:data.status,completed:false,signerName:pessoa.nome,createdAt:nowISO()};
+    c.historico.push({data:nowISO(),texto:`Documento enviado para assinatura de ${pessoa.nome}: ${doc.nome}.`});
+    await persist();window.open(data.signUrl,'_blank','noopener');closeModal();renderClientModal();toast('✓ Documento enviado para assinatura.');
+  }catch(e){toast(e.message);btn.disabled=false;btn.textContent='Enviar e abrir assinatura';}
+}
+async function consultarAssinaturaDocumento(alvoTipo,depIndex,slotKey){
+  const {c,doc}=localizarDocumentoPortal(alvoTipo,depIndex,slotKey);if(!c||!doc?.zapsign?.docToken)return;
+  try{
+    const res=await fetch(ZAPSIGN_STATUS_FUNCTION_URL,{method:'POST',headers:supabaseHeaders({'Content-Type':'application/json'}),body:JSON.stringify({docToken:doc.zapsign.docToken})});
+    const data=await res.json();if(!res.ok)throw new Error(data.error||'Não foi possível consultar a assinatura.');
+    Object.assign(doc.zapsign,{status:data.status,completed:!!data.completed,signedFile:data.signedFile||null,signers:data.signers,lastUpdateAt:data.lastUpdateAt});
+    if(data.completed){doc.confirmado=true;c.historico.push({data:nowISO(),texto:`Assinatura confirmada pela ZapSign: ${doc.nome}.`});}
+    await persist();renderClientModal();toast(data.completed?'✓ Assinatura confirmada.':'A assinatura ainda está pendente.');
+  }catch(e){toast(e.message);}
 }
 function switchPersonTab(tab){ ACTIVE_PERSON_TAB = tab; renderClientModal(); }
 async function salvarClienteManual(){
@@ -3459,6 +3512,11 @@ function renderClientModal(){
           ${(t.anexos||[]).map((a,i)=>`
             <span class="attachment-chip">${ICONS.file}${a.nome}
               <a href="${a.dataUrl}" download="${a.nome}" style="color:inherit;display:flex;">${ICONS.upload}</a>
+              ${/\.pdf$/i.test(a.nome||'') ? (a.zapsign?.completed
+                ? `<a href="${a.zapsign.signedFile||a.dataUrl}" target="_blank" rel="noopener" style="color:var(--success);font-weight:800;">✓ Assinado</a>`
+                : a.zapsign?.docToken
+                  ? `<button onclick="consultarAssinaturaDocumento('anexoTitular',undefined,'${i}')">Verificar</button>`
+                  : `<button onclick="abrirAssinaturaDocumento('anexoTitular',undefined,'${i}')">Assinar</button>`) : ''}
               <button onclick="removeAnexoFrom('titular',null,${i})">${ICONS.close}</button>
             </span>
           `).join('') || `<span style="font-size:12px;color:var(--text-faint);">Nenhum anexo extra.</span>`}
