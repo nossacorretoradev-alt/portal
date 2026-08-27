@@ -3033,6 +3033,12 @@ const DOC_SLOTS_PESSOA = [
 function slugify(str){
   return (str||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'-').replace(/(^-|-$)/g,'') || 'documento';
 }
+// Somente os documentos oficiais abaixo seguem para assinatura digital.
+// Demais PDFs continuam disponíveis para anexar, baixar e conferir.
+function documentoExigeAssinatura(nome){
+  const normalizado=(nome||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  return /ficha.*(inclusao|adesao.*unimed)|declaracao.*saude|(^|[^a-z])ds([^a-z]|$)|reducao.*carencia|aditivo.*rc|(^|[^a-z])rc([^a-z]|$)/.test(normalizado);
+}
 function docsEmpresaCompletos(emp){
   return DOC_SLOTS_EMPRESA.every(slot => emp.documentos && emp.documentos[slot.key] && emp.documentos[slot.key].confirmado);
 }
@@ -3110,7 +3116,7 @@ function renderDocSlotRow(slot, alvo, alvoTipo, depIndex){
       <span class="doc-slot-icon ${doc.confirmado?'ok':'pendente'}">${doc.confirmado?ICONS.check:ICONS.file}</span>
       <a href="${doc.dataUrl}" download="${doc.nome}" class="doc-slot-label" style="color:var(--navy);text-decoration:underline;">${doc.nome}</a>
       <span class="status-pill ${doc.confirmado?'ativo':'inativo'}">${doc.confirmado?'✓ Confirmado':'Aguardando OK'}</span>
-      ${/\.pdf$/i.test(doc.nome||'') ? (doc.assinaturaDigital?.completed
+      ${/\.pdf$/i.test(doc.nome||'') && documentoExigeAssinatura(doc.nome) ? (doc.assinaturaDigital?.completed
         ? `<a class="btn-ghost" style="padding:5px 10px;font-size:11px;" href="${doc.assinaturaDigital.signedFile||doc.dataUrl}" target="_blank" rel="noopener">✓ Assinado</a>`
         : doc.assinaturaDigital?.documentId
           ? `<button class="btn-primary" style="padding:5px 10px;font-size:11px;" onclick="consultarAssinaturaDocumento('${alvoTipo}',${depIndex!==undefined?depIndex:'undefined'},'${slot.key}')">Verificar assinatura</button>`
@@ -3137,6 +3143,7 @@ async function documentoParaBase64(dataUrl){
 }
 function abrirAssinaturaDocumento(alvoTipo,depIndex,slotKey){
   const {c,doc}=localizarDocumentoPortal(alvoTipo,depIndex,slotKey);if(!c||!doc)return;
+  if(!documentoExigeAssinatura(doc.nome)){toast('Somente Ficha de Inclusão, DS e RC podem ser enviados para assinatura.');return;}
   const pessoas=listPessoas(c);
   openModalHTML(`<div class="modal modal-small"><div class="modal-head"><div class="mh-info"><div class="mh-name">Enviar para assinatura</div><div class="mh-sub">${doc.nome}</div></div><button class="modal-close" onclick="closeModal()">${ICONS.close}</button></div><div class="modal-body"><div class="fg"><label>Quem deve assinar</label><select id="aut_portal_pessoa">${pessoas.map(p=>`<option value="${p.key}">${p.label}</option>`).join('')}</select></div><p style="font-size:11.5px;color:var(--text-muted);margin-top:12px;line-height:1.5;">O documento será enviado à Autentique. O link também ficará salvo aqui para acompanhamento.</p></div><div class="modal-foot"><button class="btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn-primary" id="aut_portal_enviar" onclick="enviarDocumentoPortalAutentique('${alvoTipo}',${depIndex!==undefined?depIndex:'undefined'},'${slotKey}')">Enviar e abrir assinatura</button></div></div>`);
 }
@@ -3515,7 +3522,7 @@ function renderClientModal(){
           ${(t.anexos||[]).map((a,i)=>`
             <span class="attachment-chip">${ICONS.file}${a.nome}
               <a href="${a.dataUrl}" download="${a.nome}" style="color:inherit;display:flex;">${ICONS.upload}</a>
-              ${/\.pdf$/i.test(a.nome||'') ? (a.assinaturaDigital?.completed
+              ${/\.pdf$/i.test(a.nome||'') && documentoExigeAssinatura(a.nome) ? (a.assinaturaDigital?.completed
                 ? `<a href="${a.assinaturaDigital.signedFile||a.dataUrl}" target="_blank" rel="noopener" style="color:var(--success);font-weight:800;">✓ Assinado</a>`
                 : a.assinaturaDigital?.documentId
                   ? `<button onclick="consultarAssinaturaDocumento('anexoTitular',undefined,'${i}')">Verificar</button>`
