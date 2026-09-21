@@ -1655,13 +1655,16 @@ const AUTH_SESSION_KEY = 'cdlunimed_supabase_session_v2';
 let AUTH_SESSION = null;
 
 function supabaseHeaders(extra) {
-  return Object.assign(
-    {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${AUTH_SESSION?.access_token || SUPABASE_ANON_KEY}`,
-    },
-    extra || {}
-  );
+  // Chaves novas do Supabase (sb_publishable_/sb_secret_) NÃO são JWT — se forem
+  // mandadas no header Authorization, o Supabase tenta decodificar como JWT e
+  // rejeita com 401. A chave só pode ir no header "apikey". O header
+  // "Authorization: Bearer" só deve existir quando há sessão de usuário real
+  // (JWT de login), senão é melhor nem mandar esse header.
+  const base = { apikey: SUPABASE_ANON_KEY };
+  if (AUTH_SESSION?.access_token) {
+    base.Authorization = `Bearer ${AUTH_SESSION.access_token}`;
+  }
+  return Object.assign(base, extra || {});
 }
 window.storage = {
   async get(key) {
