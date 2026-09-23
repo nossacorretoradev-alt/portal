@@ -5049,11 +5049,17 @@ function getTitularesDaEmpresa(empresaId) {
 async function adicionarTitularNaEmpresa(empresaId) {
   const emp = DB.empresas.find((e) => e.id === empresaId);
   if (!emp) return;
+  // Um titular novo entra na MESMA etapa em que a empresa já está — senão ele
+  // nasce sempre em "Cadastro" e aparece como um card separado da empresa no
+  // kanban (que agrupa por empresa dentro de cada coluna/etapa).
+  const titularesExistentes = getTitularesDaEmpresa(empresaId);
+  const etapaDaEmpresa =
+    titularesExistentes.length > 0 ? titularesExistentes[0].etapaAdesao || 'nova' : 'nova';
   const c = {
     id: uid('cli'),
     status: 'ativo',
     origemSite: false,
-    etapaAdesao: 'nova',
+    etapaAdesao: etapaDaEmpresa,
     pendencia: {
       ativa: false,
       motivo: '',
