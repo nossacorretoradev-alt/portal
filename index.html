@@ -4669,9 +4669,14 @@ function migrateClientShape(c) {
   if (!c.statusPagamento) c.statusPagamento = 'em_dia'; // 'em_dia' | 'inadimplente'
   if (!c.historicoPagamento) c.historicoPagamento = [];
   if (!c.aditivoRc) c.aditivoRc = {};
-  if (!c.empresaId)
+  // Só vincula/cria empresa quando já existe um CNPJ de verdade. Vincular com
+  // CNPJ vazio (assim que o modal "Novo card" abre, antes de digitar nada)
+  // criava uma empresa "placeholder" que nunca era corrigida depois — mesmo
+  // digitando o CNPJ certo de uma empresa já existente, o vínculo errado ficava.
+  if (!c.empresaId && c.titular.cnpj) {
     c.empresaId = getOrCreateEmpresaByCnpj(c.titular.cnpj, c.titular.razaoSocial).id;
-  const empresaCodigo = DB.empresas.find((e) => e.id === c.empresaId);
+  }
+  const empresaCodigo = c.empresaId ? DB.empresas.find((e) => e.id === c.empresaId) : null;
   if (empresaCodigo) empresaCodigo.codigoEmpresa = empresaCodigo.codigoEmpresa || uid('emp');
   if (!c.numeroLead) {
     DB.leadCounter = (DB.leadCounter || 0) + 1;
@@ -5083,6 +5088,7 @@ async function adicionarTitularNaEmpresa(empresaId) {
   await registrarLog('Novo titular adicionado', emp.razaoSocial || emp.cnpj);
   await persist();
   openClientModal(c.id);
+  switchPersonTab('pessoas');
   toast('Novo titular criado nesta empresa — já pode preencher os dados dele.');
 }
 
@@ -7809,6 +7815,10 @@ async function updateTitular() {
 async function updateEmpresa() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   const emp = getEmpresaDoCliente(c);
+  // getEmpresaDoCliente só RETORNA a empresa certa (por id existente ou por CNPJ) —
+  // não grava esse vínculo no cliente. Sem isso, um cliente novo cujo CNPJ já bate
+  // com uma empresa existente ficava com empresaId vazio pra sempre.
+  c.empresaId = emp.id;
   const antes = JSON.stringify(emp);
   emp.razaoSocial = document.getElementById('emp_razao').value.trim();
   const cnpjNovo = onlyDigits(document.getElementById('emp_cnpj').value);
