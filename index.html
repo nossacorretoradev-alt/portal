@@ -6524,8 +6524,9 @@ function lookupIbge(cidadeNome) {
 function getOrCreateClientNumero(c) {
   if (!c.numeroCliente) {
     // número de 8 dígitos, único por cliente — usado no link em vez do id técnico
+    // Não salva aqui: quem chamar essa função precisa dar await persist() depois,
+    // senão o link pode ser copiado/enviado antes do número ser gravado no banco.
     c.numeroCliente = String(Math.floor(10000000 + Math.random() * 89999999));
-    persist(); // fire-and-forget: salva em background, não bloqueia quem chama
   }
   return c.numeroCliente;
 }
@@ -6728,10 +6729,11 @@ async function gerarLinkRiscoPessoa(key) {
   emp.codigoEmpresa = emp.codigoEmpresa || uid('emp');
   p.pessoa.codigoVida = p.pessoa.codigoVida || uid('vida');
   p.pessoa.linkRiscoToken = p.pessoa.linkRiscoToken || uid('ds');
+  const numero = getOrCreateClientNumero(c);
   try {
-    // Salva ANTES de gerar o link — sem isso o formulário não acha os códigos no banco
+    // Salva TUDO de uma vez (empresa, código da vida e número do cliente) ANTES
+    // de gerar o link — sem isso o formulário público não acha os dados no banco.
     await persist();
-    const numero = getOrCreateClientNumero(c);
     const link =
       FORM_BASE_URL +
       '?c=' +
@@ -19754,9 +19756,20 @@ async function saveUser(id) {
     toast('A senha precisa ter 12+ caracteres, maiúscula, minúscula, número e símbolo.');
     return;
   }
+  // Usuários antigos (criados antes da integração com o Supabase Auth) não têm
+  // authId de verdade — tentar "update" nesse caso falha, porque essa conta nunca
+  // existiu no Auth. Nesses casos, criamos a conta agora em vez de falhar.
+  const usuarioExistente = id ? DB.users.find((x) => x.id === id) : null;
+  const temAuthReal = !!(usuarioExistente && usuarioExistente.authId);
+  if (usuarioExistente && !temAuthReal && !senhaField) {
+    toast(
+      '⚠️ Este usuário ainda não tem conta de login de verdade (foi cadastrado antes disso existir). Defina uma senha pra ele agora, mesmo só editando o tipo — é só dessa vez.'
+    );
+    return;
+  }
   const authPayload = {
-    action: id ? 'update' : 'create',
-    id: id ? DB.users.find((x) => x.id === id)?.authId || id : undefined,
+    action: temAuthReal ? 'update' : 'create',
+    id: temAuthReal ? usuarioExistente.authId : undefined,
     nome,
     email,
     password: senhaField || undefined,
