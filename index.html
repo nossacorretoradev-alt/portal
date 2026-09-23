@@ -5093,8 +5093,10 @@ async function adicionarTitularNaEmpresa(empresaId) {
   DB.clients.push(c);
   await registrarLog('Novo titular adicionado', emp.razaoSocial || emp.cnpj);
   await persist();
-  openClientModal(c.id);
-  switchPersonTab('pessoas');
+  // Fica na mesma janela/aba — só atualiza a lista de titulares pra mostrar o
+  // novo. Antes isso trocava pra uma janela nova (a do titular recém-criado),
+  // o que dava a sensação de ter aberto outra coisa.
+  renderClientModal();
   toast('Novo titular criado nesta empresa — já pode preencher os dados dele.');
 }
 
