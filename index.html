@@ -2095,7 +2095,11 @@ async function registrarLog(acao, detalhes) {
 
 async function persist() {
   try {
-    await window.storage.set(STORAGE_KEY, JSON.stringify(DB));
+    const payload = JSON.stringify(DB);
+    await window.storage.set(STORAGE_KEY, payload);
+    // Marca essa versão como "já vista" — assim o poller de sincronização não
+    // acha que foi outra pessoa que mudou algo quando na verdade fomos nós.
+    __ultimaAssinaturaDB = payload;
   } catch (e) {
     console.warn('Não foi possível salvar no Supabase agora.', e);
     toast('⚠️ Não foi possível salvar agora — verifique sua conexão.');
@@ -2491,6 +2495,11 @@ function logout() {
     clearInterval(window.__leadsPollInterval);
     window.__leadsPollInterval = null;
   }
+  if (window.__syncPollInterval) {
+    clearInterval(window.__syncPollInterval);
+    window.__syncPollInterval = null;
+  }
+  __ultimaAssinaturaDB = null;
   document.getElementById('app').style.display = 'none';
   renderLogin();
 }
@@ -2523,6 +2532,67 @@ function enterApp() {
       silencioso: true,
     }).catch((e) => console.warn('Importação automática falhou', e));
   }, 45000);
+
+  // Sincronização entre usuários: a base é uma só — o que um usuário salva,
+  // os outros devem ver sem precisar dar F5. A cada poucos segundos, confere
+  // se alguém mais salvou algo novo e, se sim, atualiza a tela na hora.
+  if (window.__syncPollInterval) clearInterval(window.__syncPollInterval);
+  window.__syncPollInterval = setInterval(sincronizarComOutrosUsuarios, 4000);
+}
+
+let __ultimaAssinaturaDB = null;
+async function sincronizarComOutrosUsuarios() {
+  // Não interrompe quem está digitando agora — evita perder o que a pessoa
+  // já tinha começado a escrever num campo.
+  const emCampoDeTexto =
+    document.activeElement &&
+    ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+  if (emCampoDeTexto) return;
+  try {
+    const r = await window.storage.get(STORAGE_KEY);
+    const assinaturaNova = r.value;
+    if (__ultimaAssinaturaDB === null) {
+      __ultimaAssinaturaDB = assinaturaNova;
+      return;
+    }
+    if (assinaturaNova === __ultimaAssinaturaDB) return; // nada mudou
+    __ultimaAssinaturaDB = assinaturaNova;
+    DB = JSON.parse(assinaturaNova);
+    // Se tiver um modal aberto (editando um cliente/lead específico), só
+    // atualiza esse modal — não fecha nem interrompe o que a pessoa está
+    // olhando. Se estiver numa lista/kanban, atualiza a lista direto.
+    const modalAberto = document.getElementById('modalOverlay')?.classList.contains('active');
+    if (modalAberto && ACTIVE_CLIENT_ID) {
+      renderClientModal();
+    } else if (modalAberto) {
+      // modal de outra coisa (usuário, tarefa etc.) — não mexe, só atualiza quando fechar
+    } else {
+      renderCurrentView();
+    }
+    toastDiscreto('🔄 Atualizado — outra pessoa salvou uma mudança.');
+  } catch (e) {
+    // silencioso: não quero incomodar o usuário por causa de uma falha de sincronização
+    console.warn('Sincronização automática falhou', e);
+  }
+}
+
+function toastDiscreto(msg) {
+  // Toast mais discreto que o padrão — pra não interromper quem está
+  // trabalhando, só avisa no cantinho por 2 segundos.
+  let el = document.getElementById('syncToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'syncToast';
+    el.style.cssText =
+      'position:fixed;bottom:18px;left:18px;background:var(--navy,#0A1F44);color:#fff;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:600;z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.2);';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(window.__syncToastTimer);
+  window.__syncToastTimer = setTimeout(() => {
+    el.style.opacity = '0';
+  }, 2200);
 }
 
 function renderSidebarBrand() {
@@ -2757,14 +2827,15 @@ let CRM_FILTER = {
 function crmVisiveis() {
   let list = clientesVisiveisPara(DB.clients);
   if (CRM_FILTER.q) {
-    const q = CRM_FILTER.q.toLowerCase();
+    const q = CRM_FILTER.q.toLowerCase().trim();
     list = list.filter((c) => {
       const t = c.titular || {};
       return (
         (t.nome || '').toLowerCase().includes(q) ||
         (t.razaoSocial || '').toLowerCase().includes(q) ||
         (t.cnpj || '').includes(q) ||
-        (t.celular || '').includes(q)
+        (t.celular || '').includes(q) ||
+        String(c.numeroLead || '') === q.replace(/\D/g, '')
       );
     });
   }
@@ -3335,7 +3406,7 @@ function viewCRM() {
       <div class="page-title">Implantação</div>
       ${canCriar ? `<button class="btn-primary" onclick="openClientModal(null,true)">${ICONS.plus} Novo card</button>` : ''}
     </div>
-    <input id="crmSearchInput" class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar por nome, empresa, CNPJ ou celular..." value="${CRM_FILTER.q}" oninput="CRM_FILTER.q=this.value; refiltrar('crm','crmSearchInput')"/>
+    <input id="crmSearchInput" class="search-input" style="margin-bottom:16px;max-width:340px;" placeholder="Buscar por nome, empresa, CNPJ, celular ou nº do lead..." value="${CRM_FILTER.q}" oninput="CRM_FILTER.q=this.value; refiltrar('crm','crmSearchInput')"/>
     <div class="kanban-board">
       ${ADESAO_STAGES.map((st) => {
         // Agrupar por empresa: 1 card por empresa, mostrando todos os titulares dentro
@@ -4507,7 +4578,8 @@ function viewClientes() {
       if (!(
         (t.nome || '').toLowerCase().includes(q) ||
         (t.razaoSocial || '').toLowerCase().includes(q) ||
-        (t.cnpj || '').includes(q)
+        (t.cnpj || '').includes(q) ||
+        String(c.numeroLead || '') === q.replace(/\D/g, '')
       ))
         return false;
     }
@@ -4520,7 +4592,7 @@ function viewClientes() {
       ${canCriar ? `<button class="btn-primary" onclick="openClientModal(null,true)">${ICONS.plus} Novo cliente</button>` : ''}
     </div>
     <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center;">
-      <input id="clientesSearchInput" class="search-input" placeholder="Buscar por nome, empresa ou CNPJ..." value="${CLIENT_FILTER.q}" oninput="CLIENT_FILTER.q=this.value; refiltrar('clientes','clientesSearchInput')"/>
+      <input id="clientesSearchInput" class="search-input" placeholder="Buscar por nome, empresa, CNPJ ou nº do lead..." value="${CLIENT_FILTER.q}" oninput="CLIENT_FILTER.q=this.value; refiltrar('clientes','clientesSearchInput')"/>
       <select class="search-input" onchange="CLIENT_FILTER.status=this.value; switchView('clientes')">
         <option value="">Todos os status</option>
         <option value="ativo" ${CLIENT_FILTER.status === 'ativo' ? 'selected' : ''}>Ativos</option>
