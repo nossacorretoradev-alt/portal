@@ -2026,8 +2026,15 @@ function closeModal() {
 }
 
 function openModalHTML(html) {
-  document.getElementById('modalOverlay').innerHTML = html;
-  document.getElementById('modalOverlay').classList.add('active');
+  const overlay = document.getElementById('modalOverlay');
+  // Guarda a posição de rolagem de onde a pessoa estava antes de atualizar o
+  // conteúdo — sem isso, toda vez que algo mudava (tipo adicionar um
+  // titular), a tela voltava pro topo do nada, parecendo que "piscou".
+  const scrollAntigo = overlay.querySelector('.modal-body')?.scrollTop || 0;
+  overlay.innerHTML = html;
+  overlay.classList.add('active');
+  const novoBody = overlay.querySelector('.modal-body');
+  if (novoBody && scrollAntigo) novoBody.scrollTop = scrollAntigo;
 }
 // Janela de confirmação própria do sistema — fica numa camada acima do modal
 // atual, então "Cancelar" só fecha a pergunta e volta pro que já estava aberto.
@@ -2241,11 +2248,10 @@ async function loadDB() {
   );
   DB.leadsExcluidos = DB.leadsExcluidos || []; // ids de leads do site que foram excluídos de propósito — não reimportar
   DB.empresas = DB.empresas || []; // agrupa vários titulares (clients) sob a mesma empresa/CNPJ
+  DB.companies = DB.companies || []; // preenchido em segundo plano por loadCompaniesFromCdlBase() depois do boot
   DB.clients.forEach(migrateClientShape);
-  // Empresas Filiadas agora vem direto da tabela real cdl_base — a mesma que o site
-  // consulta pra saber se um CNPJ já é associado. Sem essa etapa, o que era cadastrado
-  // aqui no portal nunca aparecia pro simulador.
-  await loadCompaniesFromCdlBase();
+  // Empresas Filiadas (cdl_base, ~490 empresas) não trava mais o carregamento inicial —
+  // isso é buscado em segundo plano depois que a tela já apareceu (ver enterApp()).
   // Migração: quem já tinha "leads" salvos numa versão anterior vira cliente na etapa "Nova adesão".
   if (Array.isArray(DB.leads) && DB.leads.length) {
     DB.leads.forEach((lead) => {
@@ -2537,7 +2543,7 @@ async function doLogin() {
   err.classList.remove('show');
   await registrarLog('Login realizado');
   await persist();
-  enterApp();
+  enterApp(true);
 }
 
 function logout() {
@@ -2570,18 +2576,35 @@ function checkSession() {
   return !!(AUTH_SESSION && CURRENT_USER && CURRENT_USER.ativo);
 }
 
-function enterApp() {
+function enterApp(loginAgoraMesmo) {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   renderSidebarBrand();
   renderSidebarFooter();
   renderNav();
-  const viewSalva = localStorage.getItem(LAST_VIEW_KEY);
-  const viewsPermitidas = getNavItems().map((item) => item.id);
-  if (viewSalva && viewsPermitidas.includes(viewSalva)) CURRENT_VIEW = viewSalva;
-  else if (isVendedor()) CURRENT_VIEW = 'orcamento';
+  // Login de verdade agora (digitou usuário/senha) → sempre abre no Início.
+  // F5 / reabrir a aba com sessão ainda válida → mantém a página que a
+  // pessoa estava vendo, pra não perder o lugar no meio do trabalho.
+  if (loginAgoraMesmo) {
+    CURRENT_VIEW = 'inicio';
+    localStorage.setItem(LAST_VIEW_KEY, CURRENT_VIEW);
+  } else {
+    const viewSalva = localStorage.getItem(LAST_VIEW_KEY);
+    const viewsPermitidas = getNavItems().map((item) => item.id);
+    if (viewSalva && viewsPermitidas.includes(viewSalva)) CURRENT_VIEW = viewSalva;
+    else if (isVendedor()) CURRENT_VIEW = 'orcamento';
+  }
   renderTopbar();
   switchView(CURRENT_VIEW);
+
+  // Empresas Filiadas (~490 empresas) carrega em segundo plano, depois que a
+  // tela principal já apareceu — antes isso travava a entrada no portal
+  // inteira esperando terminar de baixar tudo.
+  loadCompaniesFromCdlBase()
+    .then(() => {
+      if (CURRENT_VIEW === 'empresas') switchView('empresas');
+    })
+    .catch((e) => console.warn('Carregamento de Empresas Filiadas falhou', e));
 
   // Importa automaticamente o que já chegou do site, sem precisar clicar em nada,
   // e continua checando por leads novos enquanto o portal ficar aberto.
