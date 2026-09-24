@@ -4555,6 +4555,7 @@ function preencherCnpjPorEmpresaExistente() {
   if (emp && emp.cnpj) {
     document.getElementById('orc_cnpj').value = maskCnpj(emp.cnpj);
     toast('Empresa já cadastrada — CNPJ preenchido automaticamente.');
+    verificarAssociacaoNoOrcamento();
   }
 }
 
@@ -4613,7 +4614,7 @@ function viewOrcamento() {
               .join('')}
           </datalist>
         </div>
-        <div class="fg"><label>CNPJ</label><input id="orc_cnpj" placeholder="00.000.000/0000-00" oninput="this.value=maskCnpj(this.value)"/></div>
+        <div class="fg"><label>CNPJ</label><input id="orc_cnpj" placeholder="00.000.000/0000-00" oninput="this.value=maskCnpj(this.value)" onchange="verificarAssociacaoNoOrcamento()"/></div>
       </div>
       <div class="field-grid" style="margin-top:12px;">
         <div class="fg"><label>Nome do responsável</label><input id="orc_nome" placeholder="Nome completo"/></div>
@@ -4627,11 +4628,8 @@ function viewOrcamento() {
         ORC_MODE === 'plano'
           ? `
         <div class="fg" style="margin-top:16px;">
-          <label>A empresa já é associada CDL Mossoró?</label>
-          <select id="orc_associado" onchange="toggleOrcCdlTier()">
-            <option value="sim">Sim, já é associada</option>
-            <option value="nao">Não — vamos filiar agora</option>
-          </select>
+          <label>Associação CDL Mossoró</label>
+          <div id="orc_statusAssociado" style="font-size:12.5px;color:var(--text-muted);padding:10px 12px;background:var(--bg-soft);border-radius:8px;">Digite um CNPJ válido pra checar automaticamente.</div>
         </div>
         <div class="fg" id="orc_cdlTierBlock" style="margin-top:12px;display:none;">
           <label>Categoria de associado desejada</label>
@@ -4755,9 +4753,40 @@ function atualizarTotalOrcGrupos() {
   if (el) el.textContent = `Total estimado: ${formatBRL(total)}/mês · ${vidas} vida(s)`;
 }
 
-function toggleOrcCdlTier() {
-  const ehAssociado = document.getElementById('orc_associado').value === 'sim';
-  document.getElementById('orc_cdlTierBlock').style.display = ehAssociado ? 'none' : 'block';
+let ORC_JA_ASSOCIADA = null; // null = ainda não checou, true/false = resultado da checagem automática
+
+async function verificarAssociacaoNoOrcamento() {
+  const cnpj = onlyDigits(document.getElementById('orc_cnpj')?.value || '');
+  const statusEl = document.getElementById('orc_statusAssociado');
+  const tierBlock = document.getElementById('orc_cdlTierBlock');
+  if (!statusEl) return;
+  if (cnpj.length !== 14) {
+    ORC_JA_ASSOCIADA = null;
+    statusEl.textContent = 'Digite um CNPJ válido pra checar automaticamente.';
+    statusEl.style.color = 'var(--text-muted)';
+    if (tierBlock) tierBlock.style.display = 'none';
+    return;
+  }
+  statusEl.textContent = 'Verificando associação...';
+  statusEl.style.color = 'var(--text-muted)';
+  const associado = await verificarCnpjAssociadoCdl(cnpj);
+  ORC_JA_ASSOCIADA = associado === true;
+  if (associado === true) {
+    statusEl.innerHTML = `${ICONS.check} <b>Já é associada da CDL Mossoró.</b>`;
+    statusEl.style.color = 'var(--success)';
+    if (tierBlock) tierBlock.style.display = 'none';
+  } else if (associado === false) {
+    statusEl.innerHTML = `⚠️ <b>Ainda não é associada</b> — escolha a categoria abaixo pra incluir a filiação no orçamento.`;
+    statusEl.style.color = 'var(--warning)';
+    if (tierBlock) tierBlock.style.display = 'block';
+  } else {
+    // associado === null: falha na checagem (rede etc.) — não trava, mas avisa
+    statusEl.textContent =
+      'Não foi possível checar agora — considerando como "ainda não associada" por segurança.';
+    statusEl.style.color = 'var(--warning)';
+    ORC_JA_ASSOCIADA = false;
+    if (tierBlock) tierBlock.style.display = 'block';
+  }
 }
 
 function calcularOrcamentoPortal() {
@@ -4994,7 +5023,10 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
       toast('Preencha o nome de todos os titulares do orçamento.');
       return;
     }
-    const ehAssociado = document.getElementById('orc_associado').value === 'sim';
+    // A checagem de associação agora é automática (verificarAssociacaoNoOrcamento,
+    // disparada quando o CNPJ é preenchido) — não depende mais de escolher
+    // manualmente "sim/não" numa lista.
+    const ehAssociado = ORC_JA_ASSOCIADA === true;
     const cdlTier = ehAssociado ? null : document.getElementById('orc_cdlTier').value;
     const linhas = [];
     let total = 0;
@@ -5145,6 +5177,7 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
     // pra outra tela. Gerar o PDF não deveria tirar quem está vendendo do
     // fluxo de orçamentos, principalmente se for gerar vários seguidos.
     ORC_GRUPOS = [];
+    ORC_JA_ASSOCIADA = null;
     switchView('orcamento');
     return;
   } else {
