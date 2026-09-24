@@ -3192,8 +3192,15 @@ async function validarAssociadoPipeline(id) {
       l.contratoAssinado &&
       (l.anexos || []).some((a) => /contrato/i.test(a.nome))
     ) {
+      // Antes só pedia pra confirmar "de boca" — agora abre o documento
+      // assinado de verdade numa aba nova, pra pessoa realmente ler e
+      // conferir antes de validar, não confiar só na palavra do sistema.
+      const contratoAnexo = (l.anexos || []).find((a) => /contrato/i.test(a.nome));
+      if (contratoAnexo?.dataUrl) {
+        window.open(contratoAnexo.dataUrl, '_blank');
+      }
       associado = await showConfirmDialog(
-        'O simulador informa uma nova filiação e enviou o contrato assinado. Após conferir o documento, deseja validar esta empresa como associada?',
+        `O simulador informa uma nova filiação e enviou o contrato assinado (abrimos ele numa aba nova — confira antes de continuar). Depois de ler o documento, deseja validar esta empresa como associada?`,
         {
           confirmLabel: 'Validar filiação',
           danger: false,
@@ -5415,174 +5422,150 @@ function renderClientModal() {
       <p style="font-size:11.5px;color:var(--text-muted);margin-top:18px;">Esses dados valem pra empresa inteira — se ela tiver mais de um titular, todos compartilham o mesmo CNPJ e endereço. Pra cadastrar as pessoas (titulares, dependentes e o plano de cada um), vá na aba "Pessoas".</p>
     `;
   } else if (ACTIVE_PERSON_TAB === 'pessoas') {
+    const todosTitulares = getTitularesDaEmpresa(c.empresaId);
     tabContent = `
       <div class="people-company-list">
-      <section class="person-holder-card is-active">
-      <div class="person-holder-head">
-        <div class="person-holder-title"><span class="person-type-badge">TITULAR</span><div><b>${t.nome || 'Titular sem nome'}</b><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${c.planoEscolhido || 'Plano ainda não selecionado'}</div></div></div>
-        <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="openQuestionarioRiscoModalFor('titular')">Questionário individual</button>
-      </div>
-      <div class="person-holder-body">
-      <div class="field-grid">
-        <div class="fg"><label>Nome do titular</label><input id="cl_nome" value="${t.nome || ''}" onchange="updateTitular()"/></div>
-        <div class="fg"><label>CPF</label><input id="cl_cpf" value="${t.cpf || ''}" oninput="this.value=maskCpf(this.value)" onchange="updateTitular()"/></div>
-      </div>
-      <div class="field-grid" style="margin-top:12px;">
-        <div class="fg"><label>Data de nascimento</label><input type="date" id="cl_nasc" value="${t.dataNascimento || ''}" onchange="updateTitular()"/></div>
-        <div class="fg"><label>Celular / WhatsApp</label><input id="cl_celular" value="${t.celular || ''}" oninput="this.value=maskPhone(this.value)" onchange="updateTitular()"/></div>
-      </div>
-      <div class="field-grid" style="margin-top:12px;">
-        <div class="fg"><label>E-mail</label><input id="cl_email" value="${t.email || ''}" onchange="updateTitular()"/></div>
-        <div class="fg"><label>Plano escolhido por este titular</label>
-          <select id="cl_plano" onchange="updatePlano()">
-            <option value="">Selecione...</option>
-            ${Object.entries(PLAN_VALUES_PORTAL)
-              .map(
-                ([k, p]) =>
-                  `<option value="${p.nome}" ${c.planoEscolhido === p.nome ? 'selected' : ''}>${p.nome} — ${formatBRL(p.valor)}/vida</option>`
-              )
-              .join('')}
-            ${c.planoEscolhido && !Object.values(PLAN_VALUES_PORTAL).some((p) => p.nome === c.planoEscolhido) ? `<option value="${c.planoEscolhido}" selected>${c.planoEscolhido}</option>` : ''}
-          </select>
-        </div>
-      </div>
-      <div class="field-grid" style="margin-top:12px;">
-        <div class="fg"><label>Sexo</label>
-          <select id="cl_sexo" onchange="updateTitular()">
-            <option value="">Selecione</option>
-            <option value="M" ${t.sexo === 'M' ? 'selected' : ''}>Masculino</option>
-            <option value="F" ${t.sexo === 'F' ? 'selected' : ''}>Feminino</option>
-          </select>
-        </div>
-        <div class="fg"><label>Estado civil</label>
-          <select id="cl_estadoCivil" onchange="updateTitular()">
-            <option value="">Selecione</option>
-            <option value="1" ${t.estadoCivil === '1' ? 'selected' : ''}>Solteiro(a)</option>
-            <option value="2" ${t.estadoCivil === '2' ? 'selected' : ''}>Casado(a)</option>
-            <option value="3" ${t.estadoCivil === '3' ? 'selected' : ''}>Divorciado(a)</option>
-            <option value="4" ${t.estadoCivil === '4' ? 'selected' : ''}>Viúvo(a)</option>
-            <option value="5" ${t.estadoCivil === '5' ? 'selected' : ''}>União estável</option>
-          </select>
-        </div>
-      </div>
-      <div class="fg" style="margin-top:12px;"><label>Nome da mãe</label><input id="cl_nomeMae" value="${t.nomeMae || ''}" onchange="updateTitular()"/></div>
-      ${wppLink ? `<a class="wpp-btn" style="margin-top:14px;" href="${wppLink}" target="_blank">${ICONS.wpp} Chamar titular no WhatsApp</a>` : ''}
-
-      <div class="dependents-group">
-        <div class="modal-section-title" style="margin-bottom:4px;">Dependentes (${c.dependentes.length})</div>
-        <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">Todo dependente entra automaticamente no mesmo plano do titular acima — <b>${c.planoEscolhido || 'nenhum plano escolhido ainda'}</b>.</p>
-        ${
-          c.dependentes
-            .map(
-              (d, i) => `
-          <div class="dependent-person-card">
-            <div class="dependent-person-head">
-              <div style="display:flex;align-items:center;gap:8px;"><span class="dependent-badge">DEPENDENTE</span><b style="font-size:12.5px;">${d.nome || `Dependente ${i + 1}`}</b></div>
-              <div style="display:flex;gap:7px;"><button class="btn-ghost" style="padding:5px 9px;font-size:10.5px;" onclick="openQuestionarioRiscoModalFor('dep${i}')">Questionário</button><button class="btn-danger" style="padding:5px 10px;" onclick="removeDependente(${i})">${ICONS.trash}</button></div>
-            </div>
-            <div class="field-grid">
-              <div class="fg"><label>Nome</label><input value="${d.nome || ''}" onchange="updateDependente(${i},'nome',this.value)"/></div>
-              <div class="fg"><label>CPF</label><input value="${d.cpf || ''}" oninput="this.value=maskCpf(this.value)" onchange="updateDependente(${i},'cpf',this.value)"/></div>
-            </div>
-            <div class="field-grid" style="margin-top:10px;">
-              <div class="fg"><label>Data de nascimento</label><input type="date" value="${d.dataNascimento || ''}" onchange="updateDependente(${i},'dataNascimento',this.value)"/></div>
-              <div class="fg"><label>Parentesco</label><input value="${d.parentesco || ''}" placeholder="Cônjuge, filho(a)..." onchange="updateDependente(${i},'parentesco',this.value)"/></div>
-            </div>
-            <div class="field-grid" style="margin-top:10px;">
-              <div class="fg"><label>Sexo</label>
-                <select onchange="updateDependente(${i},'sexo',this.value)">
-                  <option value="">Selecione</option>
-                  <option value="M" ${d.sexo === 'M' ? 'selected' : ''}>Masculino</option>
-                  <option value="F" ${d.sexo === 'F' ? 'selected' : ''}>Feminino</option>
-                </select>
-              </div>
-              <div class="fg"><label>Nome da mãe</label><input value="${d.nomeMae || ''}" onchange="updateDependente(${i},'nomeMae',this.value)"/></div>
-            </div>
-          </div>
-        `
-            )
-            .join('') ||
-          `<div style="font-size:12.5px;color:var(--text-faint);margin-bottom:10px;">Nenhum dependente cadastrado.</div>`
-        }
-        <button class="btn-ghost" style="padding:7px 11px;font-size:11.5px;" onclick="addDependente()">${ICONS.plus} Adicionar dependente</button>
-      </div>
-      </div></section>
-      ${getTitularesDaEmpresa(c.empresaId)
-        .filter((x) => x.id !== c.id)
-        .map(
-          (x, i) => `
-        <section class="person-holder-card">
+      ${todosTitulares
+        .map((x, idx) => {
+          const xt = x.titular;
+          const xWppLink = xt.celular
+            ? `https://api.whatsapp.com/send?phone=55${onlyDigits(xt.celular)}`
+            : null;
+          return `
+        <section class="person-holder-card ${x.id === c.id ? 'is-active' : ''}">
           <div class="person-holder-head">
-            <div class="person-holder-title"><span class="person-type-badge">TITULAR</span><div><b>${x.titular.nome || `Titular ${i + 2}`}</b><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${x.planoEscolhido || 'Plano ainda não selecionado'} · ${x.dependentes.length} dependente(s)</div></div></div>
-            <button class="btn-ghost" style="padding:7px 11px;font-size:11.5px;" onclick="openClientModal('${x.id}');switchPersonTab('pessoas')">Abrir e editar</button>
+            <div class="person-holder-title"><span class="person-type-badge">TITULAR ${idx + 1}</span><div><b>${xt.nome || 'Titular sem nome'}</b><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${x.planoEscolhido || 'Plano ainda não selecionado'} · ${x.dependentes.length} dependente(s)</div></div></div>
+            <div style="display:flex;gap:7px;flex-shrink:0;">
+              <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="ACTIVE_CLIENT_ID='${x.id}'; openQuestionarioRiscoModalFor('titular')">Questionário</button>
+              ${todosTitulares.length > 1 ? `<button class="btn-danger" style="padding:7px 10px;font-size:11px;" title="Excluir este titular" onclick="excluirTitularDaLista('${x.id}')">${ICONS.trash}</button>` : ''}
+            </div>
           </div>
-          <div class="person-holder-body" style="padding-top:12px;">
-            ${x.dependentes.length ? x.dependentes.map((d, di) => `<div class="dependent-person-card" style="margin-top:${di ? '8' : '0'}px;"><div style="display:flex;align-items:center;gap:8px;"><span class="dependent-badge">DEPENDENTE</span><b>${d.nome || `Dependente ${di + 1}`}</b><span style="font-size:11px;color:var(--text-muted);">${d.parentesco || ''}</span></div></div>`).join('') : `<span style="font-size:12px;color:var(--text-faint);">Nenhum dependente cadastrado.</span>`}
+          <div class="person-holder-body">
+          <div class="field-grid">
+            <div class="fg"><label>Nome do titular</label><input value="${xt.nome || ''}" onchange="updateTitularCampo('${x.id}','nome',this.value)"/></div>
+            <div class="fg"><label>CPF</label><input value="${xt.cpf || ''}" oninput="this.value=maskCpf(this.value)" onchange="updateTitularCampo('${x.id}','cpf',this.value)"/></div>
           </div>
-        </section>`
-        )
+          <div class="field-grid" style="margin-top:12px;">
+            <div class="fg"><label>Data de nascimento</label><input type="date" value="${xt.dataNascimento || ''}" onchange="updateTitularCampo('${x.id}','dataNascimento',this.value)"/></div>
+            <div class="fg"><label>Celular / WhatsApp</label><input value="${xt.celular || ''}" oninput="this.value=maskPhone(this.value)" onchange="updateTitularCampo('${x.id}','celular',this.value)"/></div>
+          </div>
+          <div class="field-grid" style="margin-top:12px;">
+            <div class="fg"><label>E-mail</label><input value="${xt.email || ''}" onchange="updateTitularCampo('${x.id}','email',this.value)"/></div>
+            <div class="fg"><label>Plano escolhido por este titular</label>
+              <select onchange="updatePlanoTitular('${x.id}',this.value)">
+                <option value="">Selecione...</option>
+                ${Object.entries(PLAN_VALUES_PORTAL)
+                  .map(
+                    ([k, p]) =>
+                      `<option value="${p.nome}" ${x.planoEscolhido === p.nome ? 'selected' : ''}>${p.nome} — ${formatBRL(p.valor)}/vida</option>`
+                  )
+                  .join('')}
+                ${x.planoEscolhido && !Object.values(PLAN_VALUES_PORTAL).some((p) => p.nome === x.planoEscolhido) ? `<option value="${x.planoEscolhido}" selected>${x.planoEscolhido}</option>` : ''}
+              </select>
+            </div>
+          </div>
+          <div class="field-grid" style="margin-top:12px;">
+            <div class="fg"><label>Sexo</label>
+              <select onchange="updateTitularCampo('${x.id}','sexo',this.value)">
+                <option value="">Selecione</option>
+                <option value="M" ${xt.sexo === 'M' ? 'selected' : ''}>Masculino</option>
+                <option value="F" ${xt.sexo === 'F' ? 'selected' : ''}>Feminino</option>
+              </select>
+            </div>
+            <div class="fg"><label>Estado civil</label>
+              <select onchange="updateTitularCampo('${x.id}','estadoCivil',this.value)">
+                <option value="">Selecione</option>
+                <option value="1" ${xt.estadoCivil === '1' ? 'selected' : ''}>Solteiro(a)</option>
+                <option value="2" ${xt.estadoCivil === '2' ? 'selected' : ''}>Casado(a)</option>
+                <option value="3" ${xt.estadoCivil === '3' ? 'selected' : ''}>Divorciado(a)</option>
+                <option value="4" ${xt.estadoCivil === '4' ? 'selected' : ''}>Viúvo(a)</option>
+                <option value="5" ${xt.estadoCivil === '5' ? 'selected' : ''}>União estável</option>
+              </select>
+            </div>
+          </div>
+          <div class="fg" style="margin-top:12px;"><label>Nome da mãe</label><input value="${xt.nomeMae || ''}" onchange="updateTitularCampo('${x.id}','nomeMae',this.value)"/></div>
+          ${xWppLink ? `<a class="wpp-btn" style="margin-top:14px;" href="${xWppLink}" target="_blank">${ICONS.wpp} Chamar titular no WhatsApp</a>` : ''}
+
+          <div class="dependents-group">
+            <div class="modal-section-title" style="margin-bottom:4px;">Dependentes (${x.dependentes.length})</div>
+            <p style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">Todo dependente entra automaticamente no mesmo plano do titular acima — <b>${x.planoEscolhido || 'nenhum plano escolhido ainda'}</b>.</p>
+            ${
+              x.dependentes
+                .map(
+                  (d, i) => `
+              <div class="dependent-person-card">
+                <div class="dependent-person-head">
+                  <div style="display:flex;align-items:center;gap:8px;"><span class="dependent-badge">DEPENDENTE</span><b style="font-size:12.5px;">${d.nome || `Dependente ${i + 1}`}</b></div>
+                  <div style="display:flex;gap:7px;"><button class="btn-ghost" style="padding:5px 9px;font-size:10.5px;" onclick="ACTIVE_CLIENT_ID='${x.id}'; openQuestionarioRiscoModalFor('dep${i}')">Questionário</button><button class="btn-danger" style="padding:5px 10px;" onclick="removeDependenteTitular('${x.id}',${i})">${ICONS.trash}</button></div>
+                </div>
+                <div class="field-grid">
+                  <div class="fg"><label>Nome</label><input value="${d.nome || ''}" onchange="updateDependenteTitular('${x.id}',${i},'nome',this.value)"/></div>
+                  <div class="fg"><label>CPF</label><input value="${d.cpf || ''}" oninput="this.value=maskCpf(this.value)" onchange="updateDependenteTitular('${x.id}',${i},'cpf',this.value)"/></div>
+                </div>
+                <div class="field-grid" style="margin-top:10px;">
+                  <div class="fg"><label>Data de nascimento</label><input type="date" value="${d.dataNascimento || ''}" onchange="updateDependenteTitular('${x.id}',${i},'dataNascimento',this.value)"/></div>
+                  <div class="fg"><label>Parentesco</label><input value="${d.parentesco || ''}" placeholder="Cônjuge, filho(a)..." onchange="updateDependenteTitular('${x.id}',${i},'parentesco',this.value)"/></div>
+                </div>
+                <div class="field-grid" style="margin-top:10px;">
+                  <div class="fg"><label>Sexo</label>
+                    <select onchange="updateDependenteTitular('${x.id}',${i},'sexo',this.value)">
+                      <option value="">Selecione</option>
+                      <option value="M" ${d.sexo === 'M' ? 'selected' : ''}>Masculino</option>
+                      <option value="F" ${d.sexo === 'F' ? 'selected' : ''}>Feminino</option>
+                    </select>
+                  </div>
+                  <div class="fg"><label>Nome da mãe</label><input value="${d.nomeMae || ''}" onchange="updateDependenteTitular('${x.id}',${i},'nomeMae',this.value)"/></div>
+                </div>
+              </div>
+            `
+                )
+                .join('') ||
+              `<div style="font-size:12.5px;color:var(--text-faint);margin-bottom:10px;">Nenhum dependente cadastrado.</div>`
+            }
+            <button class="btn-ghost" style="padding:7px 11px;font-size:11.5px;" onclick="addDependenteTitular('${x.id}')">${ICONS.plus} Adicionar dependente</button>
+          </div>
+          </div>
+        </section>`;
+        })
         .join('')}
       </div>
       <button class="btn-ghost add-holder-button" onclick="adicionarTitularNaEmpresa('${c.empresaId}')">${ICONS.plus} Adicionar titular</button>
     `;
   } else if (ACTIVE_PERSON_TAB === 'documentacao') {
     const emp = getEmpresaDoCliente(c);
-    const outrosTitulares = getTitularesDaEmpresa(c.empresaId).filter((x) => x.id !== c.id);
-    const solicitacaoAtual = solicitacaoDocumentoAtual(c);
-    const pessoas = [
-      {
-        label: `Titular — ${t.nome || 'sem nome'}`,
-        pessoa: t,
-        type: 'titular',
-        ehDependente: false,
-      },
-    ].concat(
-      c.dependentes.map((d, i) => ({
-        label: `Dependente ${i + 1} — ${d.nome || 'sem nome'}`,
-        pessoa: d,
-        type: 'dependente',
-        index: i,
-        ehDependente: true,
-      }))
-    );
+    const todosTitularesDoc = getTitularesDaEmpresa(c.empresaId);
     const totalOk = docsCompletos(c);
     tabContent = `
       <div class="pendencia-banner" style="${totalOk ? 'background:var(--success-light);color:var(--success);border-color:transparent;' : ''}margin-bottom:16px;">
         ${totalOk ? `✓ Checklist completo — todos os documentos confirmados. Já dá pra enviar pra administradora.` : `⚠️ Ainda faltam documentos confirmados — o envio pra administradora só libera quando o checklist estiver 100%.`}
       </div>
 
+      ${todosTitularesDoc
+        .map((x) => {
+          const xt = x.titular;
+          const solX = solicitacaoDocumentoAtual(x);
+          return `
       <div class="anexo-person-block" style="border:1.5px solid var(--blue);background:linear-gradient(135deg,var(--navy-tint),#fff);padding:16px;">
-        <div style="font-weight:700;font-size:13px;margin-bottom:12px;">📎 Links de envio de documentos — um por titular</div>
-        <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px;line-height:1.5;">
-          Cada titular recebe seu próprio link. Pelo link, ele envia os documentos da empresa (uma vez só, vale pra todos), os dele e de cada dependente.
+        <div class="anexo-person-head" style="align-items:flex-start;gap:12px;">
+          <div><b>Solicitar documentos por link — ${xt.nome || 'titular sem nome'}</b><div style="font-size:11.5px;font-weight:500;color:var(--text-muted);margin-top:4px;line-height:1.45;">Gere um link exclusivo para ${xt.nome || 'este titular'}. Ele poderá anexar os documentos da empresa, dele e de cada dependente, todos separados.</div></div>
+          ${!solX || solX.status !== 'open' ? `<button class="btn-primary" style="white-space:nowrap;padding:8px 12px;font-size:11.5px;" onclick="criarLinkDocumentosPorTitular('${x.id}')">${ICONS.upload} Gerar link</button>` : ''}
         </div>
-        ${getTitularesDaEmpresa(c.empresaId)
-          .map((tit) => {
-            const solAtual = solicitacaoDocumentoAtual(tit);
-            const ativo = solAtual && solAtual.status === 'open';
-            return `
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--border);">
-            <div style="flex:1;min-width:120px;">
-              <b style="font-size:12.5px;">${tit.titular.nome || '(sem nome)'}</b>
-              <div style="font-size:11px;color:var(--text-faint);margin-top:2px;">
-                ${
-                  ativo
-                    ? `Link ativo · ${solAtual.receivedCount || 0} doc(s) recebido(s) · válido até ${fmtDate((solAtual.expiresAt || '').slice(0, 10))}`
-                    : 'Sem link ativo'
-                }
-              </div>
-            </div>
-            ${
-              ativo
-                ? `<button class="btn-ghost" style="font-size:11px;padding:5px 10px;" onclick="copiarLinkDocumentosPorTitular('${tit.id}')">Copiar link</button>
-                 <button class="btn-ghost" style="font-size:11px;padding:5px 10px;" onclick="atualizarDocumentosDoLinkPorTitular('${tit.id}')">Atualizar</button>
-                 <button class="btn-danger" style="font-size:11px;padding:5px 10px;" onclick="cancelarLinkDocumentosPorTitular('${tit.id}')">Cancelar</button>`
-                : `<button class="btn-primary" style="font-size:11px;padding:5px 10px;white-space:nowrap;" onclick="criarLinkDocumentosPorTitular('${tit.id}')">${ICONS.upload} Gerar link</button>`
-            }
-          </div>`;
-          })
-          .join('')}
-      </div>
+        ${
+          solX
+            ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+          <span class="status-pill ${solX.status === 'open' ? 'ativo' : 'inativo'}">${solX.status === 'open' ? 'Link ativo' : solX.status === 'cancelled' ? 'Link cancelado' : 'Solicitação encerrada'}</span>
+          <span style="font-size:11px;color:var(--text-muted);">${solX.receivedCount || 0} recebido(s) · validade ${fmtDate((solX.expiresAt || '').slice(0, 10))}</span>
+          ${
+            solX.status === 'open'
+              ? `<button class="btn-ghost" style="padding:6px 9px;font-size:11px;" onclick="copiarLinkDocumentosPorTitular('${x.id}')">Copiar link</button><button class="btn-ghost" style="padding:6px 9px;font-size:11px;" onclick="atualizarDocumentosDoLinkPorTitular('${x.id}')">Atualizar recebidos</button><button class="btn-danger" style="padding:6px 9px;font-size:11px;" onclick="cancelarLinkDocumentosPorTitular('${x.id}')">Cancelar link</button>`
+              : `<button class="btn-primary" style="padding:6px 9px;font-size:11px;" onclick="criarLinkDocumentosPorTitular('${x.id}')">Gerar novo link</button>`
+          }
+        </div>`
+            : ''
+        }
+      </div>`;
+        })
+        .join('')}
 
       <div class="anexo-person-block" style="border-color:var(--blue);background:var(--navy-tint);">
         <div class="anexo-person-head"><span><b>Anexos originais do lead</b> — recebidos no Pipeline</span><label class="btn-ghost" style="padding:6px 12px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" multiple style="display:none" onchange="addAnexosLeadImplantacao(event)"></label></div>
@@ -5594,13 +5577,32 @@ function renderClientModal() {
           <span><b>Documentos da empresa</b> — ${emp.razaoSocial || t.razaoSocial || 'sem nome'} ${docsEmpresaCompletos(emp) ? `<span class="status-pill ativo" style="margin-left:6px;">✓ Completo</span>` : ''}</span>
         </div>
         ${DOC_SLOTS_EMPRESA.map((slot) => renderDocSlotRow(slot, emp, 'empresa', undefined)).join('')}
-        ${outrosTitulares.length ? `<p style="font-size:11px;color:var(--text-muted);margin-top:10px;">Esses documentos valem pra todos os titulares desta empresa — ${outrosTitulares.length} outro(s): ${outrosTitulares.map((x) => `<a href="#" onclick="openClientModal('${x.id}');return false;" style="color:var(--navy);font-weight:700;">${x.titular.nome || 'sem nome'}</a>`).join(', ')}.</p>` : ''}
+        <p style="font-size:11px;color:var(--text-muted);margin-top:10px;">Esses documentos valem pra empresa inteira — servem pra todos os ${todosTitularesDoc.length} titular(es) acima.</p>
       </div>
 
-      ${pessoas
-        .map((p) => {
-          const completo = docsPessoaCompletos(p.pessoa, p.ehDependente);
-          return `
+      ${todosTitularesDoc
+        .map((x) => {
+          const pessoasDeX = [
+            {
+              label: `Titular — ${x.titular.nome || 'sem nome'}`,
+              pessoa: x.titular,
+              type: 'titular',
+              ehDependente: false,
+            },
+          ].concat(
+            x.dependentes.map((d, i) => ({
+              label: `Dependente ${i + 1} de ${x.titular.nome || 'sem nome'} — ${d.nome || 'sem nome'}`,
+              pessoa: d,
+              type: 'dependente',
+              index: i,
+              ehDependente: true,
+              titularId: x.id,
+            }))
+          );
+          return pessoasDeX
+            .map((p) => {
+              const completo = docsPessoaCompletos(p.pessoa, p.ehDependente);
+              return `
         <div class="anexo-person-block">
           <div class="anexo-person-head">
             <span>${p.label} ${completo ? `<span class="status-pill ativo" style="margin-left:6px;">✓ Completo</span>` : ''}</span>
@@ -5617,6 +5619,8 @@ function renderClientModal() {
               : `<p style="font-size:11px;color:var(--text-faint);margin-top:8px;">Usa o e-mail e celular do titular da família.</p>`
           }
         </div>`;
+            })
+            .join('');
         })
         .join('')}
 
@@ -7863,6 +7867,94 @@ async function togglePendencia() {
   }
   await persist();
   renderClientModal();
+}
+
+// ─── Funções que atualizam QUALQUER titular da empresa pelo próprio id ───────
+// Usadas na aba Pessoas, onde todos os titulares da empresa ficam editáveis
+// na mesma tela — cada campo já sabe de qual titular é, sem precisar abrir
+// uma janela separada pra cada um.
+async function updateTitularCampo(clientId, campo, valor) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  if (!c) return;
+  if (campo === 'cpf') {
+    valor = onlyDigits(valor);
+    if (valor && !isValidCPF(valor)) {
+      toast('⚠️ Esse CPF não é válido — confira os números.');
+    }
+  } else if (['nome', 'email', 'nomeMae'].includes(campo)) {
+    valor = valor.trim();
+  }
+  const antes = c.titular[campo];
+  c.titular[campo] = valor;
+  if (valor !== antes) {
+    c.historico.push({ data: nowISO(), texto: 'Dados do titular atualizados.' });
+  }
+  await persist();
+}
+async function updatePlanoTitular(clientId, valor) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  if (!c) return;
+  c.planoEscolhido = valor;
+  c.historico.push({ data: nowISO(), texto: `Plano definido: ${valor || '—'}.` });
+  await persist();
+  renderClientModal();
+}
+async function addDependenteTitular(clientId) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  if (!c) return;
+  c.dependentes.push({
+    id: uid('dep'),
+    codigoVida: uid('vida'),
+    nome: '',
+    cpf: '',
+    dataNascimento: '',
+    parentesco: '',
+    anexos: [],
+  });
+  c.historico.push({ data: nowISO(), texto: 'Dependente adicionado.' });
+  await persist();
+  renderClientModal();
+}
+async function updateDependenteTitular(clientId, i, field, value) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  if (!c) return;
+  const val = field === 'cpf' ? onlyDigits(value) : value;
+  c.dependentes[i][field] = val;
+  if (field === 'cpf' && val && !isValidCPF(val)) {
+    toast('⚠️ O CPF desse dependente não é válido — confira os números.');
+  }
+  await persist();
+}
+async function removeDependenteTitular(clientId, i) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  if (!c) return;
+  const nome = c.dependentes[i].nome || 'sem nome';
+  c.dependentes.splice(i, 1);
+  c.historico.push({ data: nowISO(), texto: `Dependente removido (${nome}).` });
+  await persist();
+  renderClientModal();
+}
+async function excluirTitularDaLista(clientId) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  if (!c) return;
+  const eraOAberto = clientId === ACTIVE_CLIENT_ID;
+  // excluirClientePorId já pede confirmação por dentro — não duplica aqui.
+  const excluiu = await excluirClientePorId(clientId);
+  if (!excluiu) return;
+  if (eraOAberto) {
+    // era o titular que estava com a janela aberta — troca pra outro titular
+    // da mesma empresa que ainda exista, ou fecha se não sobrou nenhum
+    const outros = DB.clients.filter((x) => x.empresaId === c.empresaId);
+    if (outros.length) {
+      ACTIVE_CLIENT_ID = outros[0].id;
+      renderClientModal();
+    } else {
+      closeModal();
+      switchView('crm');
+    }
+  } else {
+    renderClientModal();
+  }
 }
 
 async function updateTitular() {
