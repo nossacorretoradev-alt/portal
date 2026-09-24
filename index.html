@@ -2096,6 +2096,28 @@ async function registrarLog(acao, detalhes) {
 async function persist() {
   try {
     const payload = JSON.stringify(DB);
+    // Proteção contra perda de dados: se essa aba já sabe qual era a última
+    // versão do banco (__ultimaAssinaturaDB), confere se o servidor ainda
+    // está nessa mesma versão ANTES de gravar por cima. Se alguém mais salvou
+    // algo enquanto essa aba estava aberta (às vezes por semanas!), o valor
+    // no servidor já não bate mais — nesse caso, NÃO grava (isso já causou
+    // perda real de mais de um mês de dados uma vez) e força um refresh pra
+    // essa aba pegar o estado atual antes de deixar a pessoa continuar.
+    if (__ultimaAssinaturaDB !== null) {
+      let atual;
+      try {
+        atual = await window.storage.get(STORAGE_KEY);
+      } catch (e) {
+        atual = null;
+      }
+      if (atual && atual.value !== __ultimaAssinaturaDB) {
+        toast(
+          '⚠️ Essa janela estava desatualizada — outra pessoa salvou algo enquanto você estava aqui. Atualizando a página agora pra não perder nada de ninguém...'
+        );
+        setTimeout(() => location.reload(), 2800);
+        return;
+      }
+    }
     await window.storage.set(STORAGE_KEY, payload);
     // Marca essa versão como "já vista" — assim o poller de sincronização não
     // acha que foi outra pessoa que mudou algo quando na verdade fomos nós.
@@ -2109,6 +2131,9 @@ async function loadDB() {
   try {
     const r = await window.storage.get(STORAGE_KEY);
     DB = JSON.parse(r.value);
+    // Guarda a versão que essa aba carregou — é a base de comparação usada
+    // em persist() pra saber se alguém mais mudou o banco nesse meio-tempo.
+    __ultimaAssinaturaDB = r.value;
   } catch (e) {
     if (e.message !== 'not found') throw e;
     DB = seedDB();
@@ -2567,7 +2592,7 @@ async function sincronizarComOutrosUsuarios() {
     } else if (modalAberto) {
       // modal de outra coisa (usuário, tarefa etc.) — não mexe, só atualiza quando fechar
     } else {
-      renderCurrentView();
+      switchView(CURRENT_VIEW);
     }
     toastDiscreto('🔄 Atualizado — outra pessoa salvou uma mudança.');
   } catch (e) {
