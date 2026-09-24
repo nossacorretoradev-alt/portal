@@ -2420,12 +2420,19 @@ async function doLogin() {
   const email = document.getElementById('li_email').value.trim().toLowerCase();
   const pass = document.getElementById('li_pass').value;
   const err = document.getElementById('loginError');
+  const btn = document.querySelector('.login-btn');
   const tent = JSON.parse(localStorage.getItem('portal_login_guard') || '{"count":0,"until":0}');
   if (tent.until > Date.now()) {
     err.textContent = `Muitas tentativas. Aguarde ${Math.ceil((tent.until - Date.now()) / 60000)} minuto(s).`;
     err.classList.add('show');
     return;
   }
+  // Mostra que algo está acontecendo — sem isso, a tela parecia travada
+  // enquanto o login e o carregamento dos dados rodavam por baixo dos panos.
+  const textoOriginalBtn = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML =
+    '<span style="display:inline-flex;align-items:center;gap:8px;"><span style="width:14px;height:14px;border:2px solid rgba(255,255,255,0.35);border-top-color:#fff;border-radius:50%;animation:spin 0.7s linear infinite;"></span>Entrando...</span>';
   try {
     const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
       method: 'POST',
@@ -2466,6 +2473,8 @@ async function doLogin() {
     const profiles = profileRes.ok ? await profileRes.json() : [];
     const profile = profiles[0];
     if (!profile || !profile.ativo) throw new Error('Usuário sem acesso ativo ao portal.');
+    btn.innerHTML =
+      '<span style="display:inline-flex;align-items:center;gap:8px;"><span style="width:14px;height:14px;border:2px solid rgba(255,255,255,0.35);border-top-color:#fff;border-radius:50%;animation:spin 0.7s linear infinite;"></span>Carregando seus dados...</span>';
     await loadDB();
     let u = DB.users.find(
       (x) => x.authId === AUTH_SESSION.user.id || x.email?.toLowerCase() === email
@@ -2495,6 +2504,8 @@ async function doLogin() {
     sessionStorage.removeItem(AUTH_SESSION_KEY);
     err.textContent = e.message || 'Não foi possível entrar.';
     err.classList.add('show');
+    btn.disabled = false;
+    btn.textContent = textoOriginalBtn;
     return;
   }
   err.classList.remove('show');
@@ -3169,7 +3180,32 @@ function openPipelineLeadModal(id, isNew) {
     <div class="field-grid" style="margin-top:12px"><div class="fg"><label>Contato</label><input id="pl_nome" value="${l.nome || ''}"></div><div class="fg"><label>WhatsApp</label><input id="pl_celular" value="${maskPhone(l.celular || '')}"></div></div>
     <div class="field-grid" style="margin-top:12px"><div class="fg"><label>E-mail</label><input id="pl_email" value="${l.email || ''}"></div><div class="fg"><label>Plano / interesse</label><input id="pl_plano" value="${l.planoInteresse || ''}"></div></div>
     <div class="fg" style="margin-top:12px"><label>Etapa</label><select id="pl_etapa">${PIPELINE_STAGES.map((s) => `<option value="${s.id}" ${l.etapa === s.id ? 'selected' : ''}>${s.label}</option>`).join('')}</select></div>
-    <div class="dep-card" style="margin-top:16px;border-left:4px solid ${l.associadoValidado ? 'var(--success)' : 'var(--warning)'};"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;"><div><b>Validação de associado CDL</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">${l.associadoValidado ? `✓ Validado em ${fmtDateTime(l.associadoValidadoEm)}` : 'Obrigatória antes de transformar em Venda Ativa.'}</div></div><button class="${l.associadoValidado ? 'btn-ghost' : 'btn-primary'}" onclick="validarAssociadoPipeline('${l.id}')">${ICONS.check} ${l.associadoValidado ? 'Validar novamente' : 'Validar associado'}</button></div></div>
+    <div class="dep-card" style="margin-top:16px;border-left:4px solid ${l.associadoValidado ? 'var(--success)' : 'var(--warning)'};">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div><b>Validação de associado CDL</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">${l.associadoValidado ? `✓ Validado em ${fmtDateTime(l.associadoValidadoEm)}` : 'Obrigatória antes de transformar em Venda Ativa.'}</div></div>
+        <button class="${l.associadoValidado ? 'btn-ghost' : 'btn-primary'}" onclick="validarAssociadoPipeline('${l.id}')">${ICONS.check} ${l.associadoValidado ? 'Validar novamente' : 'Validar associado'}</button>
+      </div>
+      ${
+        !l.associadoValidado
+          ? `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div><b style="font-size:12.5px;">Empresa ainda não é associada?</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">${
+          l.filiacao?.assinaturaDigital?.completed
+            ? `✓ Contrato de filiação assinado em ${fmtDateTime(l.filiacao.assinaturaDigital.confirmedAt || l.filiacao.assinaturaDigital.createdAt)} — pode validar acima.`
+            : l.filiacao?.assinaturaDigital?.documentId
+              ? `Contrato enviado para assinatura em ${fmtDateTime(l.filiacao.assinaturaDigital.createdAt)} — status: ${l.filiacao.assinaturaDigital.status || 'pendente'}.`
+              : 'Gere o contrato de filiação e mande assinar pela Autentique, direto daqui.'
+        }</div></div>
+        ${
+          l.filiacao?.assinaturaDigital?.completed
+            ? ''
+            : l.filiacao?.assinaturaDigital?.documentId
+              ? `<div style="display:flex;gap:8px;"><button class="btn-ghost" onclick="consultarAssinaturaFiliacao('${l.id}')">Conferir assinatura</button>${l.filiacao.assinaturaDigital.signUrl ? `<a class="btn-ghost" target="_blank" href="${l.filiacao.assinaturaDigital.signUrl}">Reabrir link</a>` : ''}</div>`
+              : `<button class="btn-primary" onclick="iniciarAssociacaoPipeline('${l.id}')">${ICONS.plus} Associar</button>`
+        }
+      </div>`
+          : ''
+      }
+    </div>
     <div class="modal-section-title" style="margin-top:20px">Anexos do lead (${(l.anexos || []).length})</div>
     <div class="attachment-list">${(l.anexos || []).map((a, i) => `<span class="attachment-chip">${ICONS.file}${a.nome}<a href="${a.dataUrl}" target="_blank" style="color:inherit;display:flex;">${ICONS.upload}</a><button onclick="removePipelineAnexo('${l.id}',${i})">${ICONS.close}</button></span>`).join('') || '<span style="font-size:12px;color:var(--text-faint)">Nenhum anexo recebido.</span>'}</div>
     <label class="btn-ghost" style="margin-top:10px;padding:7px 11px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Adicionar anexos<input type="file" multiple style="display:none" onchange="addPipelineAnexos('${l.id}',event)"></label>
@@ -3189,6 +3225,28 @@ function openPipelineLeadModal(id, isNew) {
     <div style="display:flex;gap:8px;margin-top:10px"><input id="pl_comentario" class="search-input" style="flex:1" placeholder="Adicionar comentário..."><button class="btn-ghost" onclick="addPipelineComentario('${l.id}')">Adicionar</button></div>
     <div class="btn-row"><button class="btn-danger" onclick="excluirPipelineLead('${l.id}')">${ICONS.trash} Excluir</button><button class="btn-primary" onclick="savePipelineLead('${l.id}')">${ICONS.check} Salvar</button>${l.celular ? `<a class="wpp-btn" target="_blank" href="https://api.whatsapp.com/send?phone=55${onlyDigits(l.celular)}">${ICONS.wpp} WhatsApp</a>` : ''}</div>
   </div></div>`);
+}
+// Checa se um CNPJ já é associado da CDL (cdl_base ou affiliates) — mesma
+// checagem que já existia dentro de validarAssociadoPipeline, só que
+// reaproveitável em qualquer lugar que precise saber isso antes de agir.
+async function verificarCnpjAssociadoCdl(cnpj) {
+  try {
+    const base = await sbSelect(
+      'cdl_base',
+      `select=cnpj,empresa,status&cnpj=eq.${encodeURIComponent(cnpj)}&limit=1`
+    );
+    if (base.length > 0 && (base[0].status || 'ativa') !== 'inativa') return true;
+    const novos = await sbSelect(
+      'affiliates',
+      `select=cnpj,empresa&cnpj=eq.${encodeURIComponent(cnpj)}&limit=1`
+    );
+    return novos.length > 0;
+  } catch (e) {
+    console.warn('Falha ao checar associação CDL', e);
+    // Se a checagem falhar (rede, etc.), não bloqueia — mas avisa no console
+    // pra não travar o vendedor por causa de instabilidade momentânea.
+    return null;
+  }
 }
 async function validarAssociadoPipeline(id) {
   const l = DB.pipeline.find((x) => x.id === id);
@@ -3244,6 +3302,32 @@ async function validarAssociadoPipeline(id) {
           ],
           'cnpj'
         );
+    } else if (!associado && l.filiacao?.assinaturaDigital?.completed) {
+      // Contrato gerado e assinado aqui mesmo no portal (via Autentique) —
+      // mesma lógica: abre o documento assinado antes de confirmar.
+      if (l.filiacao.assinaturaDigital.signedFile) {
+        window.open(l.filiacao.assinaturaDigital.signedFile, '_blank');
+      }
+      associado = await showConfirmDialog(
+        'O contrato de filiação foi assinado pela Autentique (abrimos ele numa aba nova — confira antes de continuar). Deseja validar esta empresa como associada?',
+        {
+          confirmLabel: 'Validar filiação',
+          danger: false,
+        }
+      );
+      if (associado)
+        await sbUpsert(
+          'cdl_base',
+          [
+            {
+              cnpj,
+              empresa: l.empresa || l.nome || '',
+              status: 'ativa',
+              origem_site: false,
+            },
+          ],
+          'cnpj'
+        );
     }
     l.associadoValidado = associado;
     l.associadoValidadoEm = associado ? nowISO() : null;
@@ -3256,6 +3340,169 @@ async function validarAssociadoPipeline(id) {
     );
   } catch (e) {
     toast('Não foi possível consultar a base de associados agora.');
+  }
+}
+
+// Abre o formulário com os dados que faltam pra gerar o contrato de
+// filiação (o lead já tem nome/CNPJ/celular/e-mail — aqui só pede o resto).
+function iniciarAssociacaoPipeline(id) {
+  const l = DB.pipeline.find((x) => x.id === id);
+  if (!l) return;
+  const f = l.filiacao || {};
+  openModalHTML(`<div class="modal"><div class="modal-head"><div class="mh-info"><div class="mh-name">Associar ${l.empresa || l.nome || ''} à CDL</div><div class="mh-sub">Preencha os dados que faltam para gerar o contrato de filiação</div></div><button class="modal-close" onclick="closeModal()">${ICONS.close}</button></div><div class="modal-body">
+    <div class="field-grid">
+      <div class="fg"><label>Nome fantasia</label><input id="fil_nomeFantasia" value="${f.nomeFantasia || ''}"></div>
+      <div class="fg"><label>Inscrição estadual</label><input id="fil_inscricaoEstadual" value="${f.inscricaoEstadual || ''}"></div>
+    </div>
+    <div class="field-grid" style="margin-top:12px"><div class="fg"><label>Ramo de atividade</label><input id="fil_ramoAtividade" value="${f.ramoAtividade || ''}"></div><div class="fg"><label>Categoria de associado</label><select id="fil_cdlTier">${Object.entries(
+      CDL_TIERS_PORTAL
+    )
+      .map(
+        ([k, t]) =>
+          `<option value="${k}" ${f.cdlTier === k ? 'selected' : ''}>${t.nome} — ${formatBRL(t.valor)}/mês</option>`
+      )
+      .join('')}</select></div></div>
+    <div class="modal-section-title" style="margin-top:16px">Diretor/responsável</div>
+    <div class="field-grid"><div class="fg"><label>Nome do diretor/responsável</label><input id="fil_diretorResponsavel" value="${f.diretorResponsavel || l.nome || ''}"></div><div class="fg"><label>CPF</label><input id="fil_cpfDiretor" value="${f.cpfDiretor || ''}" oninput="this.value=maskCpf(this.value)"></div></div>
+    <div class="field-grid" style="margin-top:12px"><div class="fg"><label>Data de aniversário (empresa)</label><input id="fil_dataAniversario" type="date" value="${f.dataAniversario || ''}"></div><div class="fg"><label>E-mail do diretor</label><input id="fil_emailDiretor" value="${f.emailDiretor || l.email || ''}"></div></div>
+    <div class="modal-section-title" style="margin-top:16px">Endereço</div>
+    <div class="field-grid"><div class="fg"><label>CEP</label><input id="fil_cep" value="${f.cep || ''}"></div><div class="fg"><label>Endereço</label><input id="fil_enderecoRua" value="${f.enderecoRua || ''}"></div></div>
+    <div class="field-grid" style="margin-top:12px"><div class="fg"><label>Número</label><input id="fil_enderecoNumero" value="${f.enderecoNumero || ''}"></div><div class="fg"><label>Complemento</label><input id="fil_enderecoComplemento" value="${f.enderecoComplemento || ''}"></div></div>
+    <div class="field-grid" style="margin-top:12px"><div class="fg"><label>Bairro</label><input id="fil_bairro" value="${f.bairro || ''}"></div><div class="fg"><label>Cidade</label><input id="fil_cidade" value="${f.cidade || 'Mossoró'}"></div></div>
+    <div class="fg" style="margin-top:12px;max-width:120px"><label>UF</label><input id="fil_uf" value="${f.uf || 'RN'}" maxlength="2"></div>
+    <div class="modal-section-title" style="margin-top:16px">Contato adicional (opcional)</div>
+    <div class="field-grid"><div class="fg"><label>Telefone fixo</label><input id="fil_telFixo" value="${f.telFixo || ''}"></div><div class="fg"><label>Whatsapp</label><input id="fil_whatsapp" value="${f.whatsapp || l.celular || ''}"></div></div>
+    <div class="field-grid" style="margin-top:12px"><div class="fg"><label>E-mail financeiro</label><input id="fil_emailFinanceiro" value="${f.emailFinanceiro || ''}"></div><div></div></div>
+    <div class="field-grid" style="margin-top:12px"><div class="fg"><label>Nome do contador</label><input id="fil_nomeContador" value="${f.nomeContador || ''}"></div><div class="fg"><label>Telefone do contador</label><input id="fil_telContador" value="${f.telContador || ''}"></div></div>
+  </div><div class="modal-foot"><button class="btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn-primary" id="fil_enviarBtn" onclick="gerarEEnviarContratoFiliacao('${id}')">${ICONS.check} Gerar contrato e enviar para assinatura</button></div></div>`);
+}
+
+async function gerarEEnviarContratoFiliacao(id) {
+  const l = DB.pipeline.find((x) => x.id === id);
+  if (!l) return;
+  const g = (fieldId) => document.getElementById(fieldId)?.value.trim() || '';
+  const diretorResponsavel = g('fil_diretorResponsavel');
+  const emailDiretor = g('fil_emailDiretor');
+  const cpfDiretor = onlyDigits(g('fil_cpfDiretor'));
+  if (!diretorResponsavel || !emailDiretor) {
+    toast('Preencha ao menos o nome e e-mail do diretor/responsável.');
+    return;
+  }
+  const dados = {
+    razaoSocial: l.empresa || l.nome || '',
+    cnpj: l.cnpj || '',
+    celular: l.celular || '',
+    nomeFantasia: g('fil_nomeFantasia'),
+    inscricaoEstadual: g('fil_inscricaoEstadual'),
+    ramoAtividade: g('fil_ramoAtividade'),
+    cdlTier: g('fil_cdlTier'),
+    diretorResponsavel,
+    cpfDiretor,
+    dataAniversario: g('fil_dataAniversario'),
+    emailDiretor,
+    cep: g('fil_cep'),
+    enderecoRua: g('fil_enderecoRua'),
+    enderecoNumero: g('fil_enderecoNumero'),
+    enderecoComplemento: g('fil_enderecoComplemento'),
+    bairro: g('fil_bairro'),
+    cidade: g('fil_cidade'),
+    uf: g('fil_uf'),
+    telFixo: g('fil_telFixo'),
+    whatsapp: g('fil_whatsapp'),
+    emailFinanceiro: g('fil_emailFinanceiro'),
+    nomeContador: g('fil_nomeContador'),
+    telContador: g('fil_telContador'),
+  };
+  l.filiacao = Object.assign({}, l.filiacao, dados);
+  await persist();
+
+  const btn = document.getElementById('fil_enviarBtn');
+  btn.disabled = true;
+  btn.textContent = 'Gerando contrato...';
+  try {
+    const pdfInfo = gerarContratoFiliacaoPDFPortal(dados);
+    const pdfBase64 = pdfInfo.doc.output('datauristring').split(',')[1];
+    btn.textContent = 'Enviando para assinatura...';
+    const res = await fetch(AUTENTIQUE_CREATE_FUNCTION_URL, {
+      method: 'POST',
+      headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        nome: diretorResponsavel,
+        email: emailDiretor,
+        celular: dados.whatsapp || dados.celular || '',
+        cpf: cpfDiretor,
+        pdfBase64,
+        tituloDocumento: pdfInfo.filename,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.documentId || !data.signUrl) {
+      throw new Error(data.error || 'A Autentique não devolveu o link de assinatura.');
+    }
+    l.filiacao.assinaturaDigital = {
+      documentId: data.documentId,
+      signatureId: data.signatureId,
+      signUrl: data.signUrl,
+      status: data.status,
+      completed: false,
+      signerName: diretorResponsavel,
+      createdAt: nowISO(),
+    };
+    l.novoAfiliado = true;
+    l.comentarios = l.comentarios || [];
+    l.comentarios.push({
+      data: nowISO(),
+      texto: `Contrato de filiação gerado e enviado para assinatura de ${diretorResponsavel}.`,
+      usuario: CURRENT_USER?.nome || '',
+    });
+    await persist();
+    window.open(data.signUrl, '_blank', 'noopener');
+    closeModal();
+    openPipelineLeadModal(id);
+    toast('✓ Contrato enviado para assinatura.');
+  } catch (e) {
+    toast(e.message || 'Não foi possível gerar/enviar o contrato agora.');
+    btn.disabled = false;
+    btn.textContent = 'Gerar contrato e enviar para assinatura';
+  }
+}
+
+async function consultarAssinaturaFiliacao(id) {
+  const l = DB.pipeline.find((x) => x.id === id);
+  if (!l?.filiacao?.assinaturaDigital?.documentId) return;
+  try {
+    const res = await fetch(AUTENTIQUE_STATUS_FUNCTION_URL, {
+      method: 'POST',
+      headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ documentId: l.filiacao.assinaturaDigital.documentId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Não foi possível consultar a assinatura.');
+    Object.assign(l.filiacao.assinaturaDigital, {
+      status: data.status,
+      completed: !!data.completed,
+      signedFile: data.signedFile || null,
+      lastUpdateAt: data.lastUpdateAt,
+      confirmedAt: data.completed ? nowISO() : l.filiacao.assinaturaDigital.confirmedAt,
+    });
+    if (data.completed) {
+      l.contratoAssinado = true;
+      l.comentarios = l.comentarios || [];
+      l.comentarios.push({
+        data: nowISO(),
+        texto: 'Assinatura do contrato de filiação confirmada pela Autentique.',
+        usuario: CURRENT_USER?.nome || '',
+      });
+    }
+    await persist();
+    openPipelineLeadModal(id);
+    toast(
+      data.completed
+        ? '✓ Assinatura confirmada — já pode validar o associado.'
+        : 'A assinatura ainda está pendente.'
+    );
+  } catch (e) {
+    toast(e.message || 'Não foi possível consultar a assinatura agora.');
   }
 }
 
@@ -3930,6 +4177,253 @@ const CDL_TIERS_PORTAL = {
     valor: 145.0,
   },
 };
+// ═══════════════════════════════════════════════════════════════════════
+// CONTRATO DE FILIAÇÃO CDL — mesmo texto usado no simulador público,
+// trazido pro portal pra dar pra gerar e mandar assinar direto da tela
+// de Pipeline, sem precisar que o cliente preencha o formulário sozinho.
+// ═══════════════════════════════════════════════════════════════════════
+const LOGO_CDL_DATAURI_PORTAL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAANcAAABNCAYAAAA1gPGQAAAklElEQVR42u2de5hcRZn/P3W6p2cySaYTCHcIJJqQRlDkqqArIqCIdiMICgoi3hfba4u6Iu7qCrtr+xPtFUVAfl6j6KrdKiC6CxgXwi0Qbk2E3ENCbpP05DKXPqdq/zh1uqtPn+4+PdMzgTDv88wzfak6Ved0fet932+99ZZQShFWEskcwJGABMJXnBS/RIB1xUJ61wuhM4lk7nDgaOAE4HRgATATsIG1wF3AbcD9xUJ64xjbmtJGcQXYxULa3oPPZg7QB0wFhoASsLxYSLesK0YBrh8Bp1Xu3qsujMfRsLXO37x4cYJLALcVC+mP7sFB83LgHA2mY4B99ACKBhSXwE5gA/AocAfwx2IhvbmN9s4BPggcoa8XFlxSD+odwFZgHfAMsAwoFgvpbePwbLqALwJnAocCMf1cHGAEWAPcWCykf9IxcOmGLwV+JAQ4jmJ4xEYIc8yo6pD3ve0YUASIDsBKNPtCNSrU/KZEiJuJRiyAYWBesZBeO8GgOhX4JJAEusdwqS3AD4FrioV0qUWblwG3jMPtbATuA34FFIqF9M4OPaPzgV+3KLa4WEi/tlmB6CjazgNbdu4emfXW18/nzNe8jIHdw6D0NKMUKIXS75V+DQopQemCSikUupz3vVuhrq5b1v2PctvQVaplUEZ5jQ2lKmW9umabletW+lX7vlKmYXvUvHbbo3qdyn/3dSRisWXbLp5esYVo1OoG3gl8awJNv68D7+nQJWcBVwLnJpK584qF9JMN2o0BV43TbR0AnKv/ViaSueuBXLGQHh7jdU8KUebujpqFxgP72eBQ+eJXHnkA13zyTHYPlVHSHWDSGIzuZ3qA6wEmVe3glgqUkkZdD2DV60ljkEvpB58Gra9OZfBLty9S+r6vKV9b3+xnpawPcObn0uuL8QzQE43XvvecR8oOix5ew0jZxrLEg8BJYez3MQLr/cA3gH3HqYm/AqcVC2kV0PZ84CntZ06ELAE+UiykHxrD87odeEuLYu8qFtK3dlpzAfy2pzt68ZPLN/PY3zcy+8A+BodtAyzmrE8dwGo0jfQNRl+5CpgMwEhV1X51IKhoE6nBFXBdfH2S1T5V+m+AIugepKlFA+4Vqn33tLKUiliXxayZU1i7oYRlRY4HXgk8Nk6gigDXAx8e5wE9T/trQWbZMRMILIDjgL8mkrn3Fgvp34zimXVrQqeZ2MATra5ljfIG/kcI0T80bLPkqfVELAvbltiOwrEljiNxHAfbkZU/R/+Zn9m2qvnOcaR7HfPPKysljv7MsSVl26HsVMu49ZVxHVXzXW271es4Rv8qn9m+/jhOtS9GXds226y9F9u4Rtnox8iIwz7xXixLeM///HECVg/wuwkAFsCAJh2C5NV7gK+ZAvw6kcylRlH35cDsFmWeA1aOC7iKhXQ/8LdYNMLSZc+za6iMI/Wgki7IbHOgB4DMsSWOrH5etqsD2JESRyoXUAYgytIAmlRGe16b3munFrABryv17CowbOP6tiNd8HqA0n1x+yaxdf/8bXr3XvudBqMjGR5x6O3pYkpPl6fh3p5I5kSHgRUDfgO8bZSX2AVs15ooDLP3bBO6/Ng9yMj+WLOi7cgrQuDiyWIhPdjqQtExdP727lgkuWZDiXXPD7DfPr2Ubdvwf6ommKwzs6qOv2xgUilZ/a7e1DRMO2n6dz7TzlfHJExqyzSq42vf6xdV/6qW3FC630afwGdCKiKWRd/UbnYPlrGi4lX6B32igwPrZuDsNuvcARSAh4H1QFmPjxnAXE1LX6hJBL880oTSbmViSeByYLke1CZP262XCF6uzb03tOk39gHXtTnJhNG0j4S50FjAdbcQwt41OBJdtmoLB846nLIt6webMomN+u/8/pAMYOrqgdjK9/EGdbXt+n4Z/po0fb4WvmKDfpttSOn5WT7ypkKuOEzrjSGsivXwlk6BK5HMZYD3tklGfLFYSN/bxAR6Evh9Ipn7KvAp4PO+sfOnBnXnAoe3aH8T8LMwC8WJZO4A4FIgA+wf8v7OSSRzJxcL6ftDln/VCwFcfweWWUK8YtmqLZz66sNwHP8gqyUgpE/r+Add8AAO1igyUBsFAKmiaQI+80AbyAT6wR0wERivUVSu6WosVQU3tfdgA7GuCLFoBNuRCCHeDGQ7AKyTgH9vo8pXi4X0V9pwB7YAVyWSuT8CN2qNuxS4t4mJ1WqMPRU2AkNHh3wjkcwtBH4OvD5k1z8M3B/i+fUAR4UgM54M0+hoCQ2KhbQE7o3FIqzZsJ3+gSGUUtp/qjrxzQgFW5erISEc0xfykRoV/8wkMpwa/8jxtVGu+DtOtV2DHCnbtb5a2WzbvJbj649dS8SUndp7KvsJGbva93LZQQE9PV1opXlSIpnbrwN+1s1t/KZXtAMs329/nx7Y1wKX6bEwWn/r0VG0vw43uuSRkFXelkjm+kKUmwMc0qLMWmDFeGsugEURy/rQtoEh1m8aYPaBcWxH1vsqjcwras22ILq+olWC1tEarj8R6G81Nu0MbSebaEwC7ksGmMHeskGTazlS0NMVZYBhzzd4rfZ5RiufwY0PDCOZYiF9/Vh+eB129E8dMLGWjLL9HYlk7hLgIaCnRfH99cLwX1qUOyakph0ZV82l5WEhcMq2ZO2GEkKImtnasWsZuVrKWgVqpUpdWaslKiyhSbnbARoxSFPq8rWfOca1VGB9x2Qgpdlfp579dAK0nd1kGaLsEIlYRKwKUXjaGLTWAdoPCiM/KBbS3xxvqk6vF7UCuxyLr6mjQn4ZsvgJHSIzQk8GY9Vcy4HVliXmrt04wEjZqWouGhERnrYJWPhVKpAw8EKq/NeTgJKyGmIkDY0B1fAnFeT7Ge+lCqd9DD+yVtuZ7GVt3RqtKr3noirhiRHL0n4Xrx2j1poRotwzmpCYCDkcOKxFmfXadx+L/BR4X4hy8zpEZoQ2Y8ekuXQM15NdEYtN/bvYOTjirk8Zs7rrexj+jl1dA6rxjxyn6vMELEB7PlXN97ZTWbiuajmtGc02tZb0axanTiP6NJNtrHX5/Cy/trSb+Fh+39P8H4lUooSP0hqoXQ2xH+EXiv8pzPpMh+RooKvVEOpAf5bqNblWcuBEkhmd0FwAj0Yi4u0DO4coDQwxbWpMa68A/8abzQMYNzOwt+Y76Wmp4HCjOiayBZVeCSymPrRKmqFQvnCr6jpWVfvU+1JBywO1TKgZ4wgKSwi9pEOftvnb3S91aUit9b/FQvrXTJyMm7/lk61aA7Z6Bq32kc3F3V7STNYQIjKjk+B6UgjB0LDNlu27mdobDK5mZEMNeeEf1LI+gt40E1sTFwGf0ThuUQUE7NbGPgaZrw3uKWBtrqbver3UCM84LoTTbc62ArgkLO3OxEoY/+XRsTZSLKRlIpkLs+m0lZV2FK1jIJ8IS2Z0ClzPuKSfElu37+awg+I4tqxdW5K1M3qtRmi8SCwD/LE6TeeP1vAxew0jPBqto1EfZa+CNF1N5EbAojlNfDlf+wa6jm3z2R+HG/jbSh4sFtJ3ThSqEslcFEiEMLE6FbAcZmvHyERPBp0A11pgm0Dss21gsOIXKRVMEARFYDReOA6KaFf1IVZBAGkEJNnA3Guy7aSuLxiLw1IZ5An14U+VvWDmonIt4A2Z3+azfyvh9pjeMsFaK0xkxnNh14tCSFeIMjs7AK6lEw2ubcAmyxL7DOwaZmTEpbhr1o0MRs0boNQN+MYhRY1CkJTyD2TDH5K+tTQa+2hSh2DIUGFOjVnDmjhHAuITZZW9bLSImUjm9tGB0WHkjJCDqjDB4EqEGPBPFAvpoQ5pyd4QRde3WDZopWlH2tW0YwZXsZC2E8ncWssSC3YNlhkatt0NjlKFN8uojUFUELxPS6q63b2qYcwhgWFRdXvBtPnWKD7RDJUKjoFs7lvWhEi1ln30jN8fYlDtH5I0uK9YSD+3N/pbWqaHJHRWd4DMWD3RmgtgrSUEwyMOg8NlolGrEmdo7i6WPjYtGGQmmdFkg2NNXGLAWllljap5bGKNL0XwuptsFClfFzdY//ko5FDChfUcA8RDlLuLiZeORZaHkP0IFym/qsl3YWIgnywW0uU9Aa5NQkDZdsHVK7qwnWb+Sz11HUTT12zPx7dIq+o1R/NtI0FsYwABIoOAV59aoGLuGq9RowaUKUd0cAADPDih9qAb49hqvajcQTLjsBDjWAHPTrSm7RS4tgohcBzF0LBDT6wLx5E1WqV2W0ezdaH6FAB1Eer41oww/RmDocSXe4NwrGHD/WPSZDjbMvfakUNCljs+JEO2fIK11uG03sm7uoUmaUdODDM+W5h0YVjaJXsMXHrIMzxiVyIUpC9ESDYKG5K1flYrurzhHq5KSFSTTZUBIVDNmMd6/6mO4eu0hN2nFGaH7SrcPH8TTWbEOm1ijZHUWdaIJAoZmVGmjciMToNrO3rgDo/YlXAlfGtGUtWmOPMng6ndsdxkQ6VqHK3RcgnAICJqIu59LF9QMpoJkpZbTxLJ3DTgoBDX2tDBQfyCIzN0NtxTQxT9WwszvJW1sHI0mrZT4KqskJuxdKrV1g0ZABZ85IdBNqD8PlCjCIh6yr2hP6YpdALSuO0hCeOcz9TMYivp3wP9DwOuhzvU1iW03m4CbgqDZmRGq2WDp4qFtLOnwFWugsupBKU2CkOqocl9miOIQpf+2ENppAzwU+INtE8gxT46uny8ZVoimaNFLsM+wmXLndBc9CHJjJHRmFgN2ro0RNE1NN+FHMbfGhWz2SlwVVBtRsXXmoLBGwsb5qIIJBoab/dwKXCdXJQqQKsBwEY5X9jVC0xieiYttygTZkeDNcF9PywEmbFSD/ixykXAy0KU+32LyPvjXujgUuDmb5dKVbZf1EVk+LIhhdsl7GXkFfXECL7kNyo4ENcDniYsXygaqpF0hQCX98xbhT7NnOC+vyKERn1yrKeWJJK5XiBsioKftNB+rbJTDTHKDZ2dApc7QwoXQJ7fhY9IkEFb6vGFQ0mFQvhSXCsXXEr6QFSbChtFw9QCLyKxQoBmCFdBt4riPiSRzImgNNN70N/qxDaTf8HNd9FK7m6R9Wku4ZYN1u1JcFUdQmWahS2Cc6ndUlJjQtZFPKjmkRYBZuReLNuB3bihP81kvh48qyeoX+Pmvxja5izgsyGL/3OryzEOkRmdBlc3gBACqcC2q8G7jeP6aJgcxtR4dds/6vICVsvsJSJNH7aBbAGeDwGuHtwsSdePd6dDbjPZPRYyI5HMHQfcSridAL8uFtL3tChz3HhOBp1yePtccLmaKzCtWmWbvVNJiVa/Xd6p3RpvV1OnOWZaNccx8q/vdVpqBHevU0PRM2nYyIsrEsncRBAbh4cw1VaO1sTSORlvJ1w85Y6Q2i2Mph21GdspzbWvdrncczYdN5d7sx3D7cQD+hnFvVmGy9GhFbd/LIzDfy+tj7kBlxr/EvC1MWgM7xorioX0l5uYWK0iM54YzXqRTqH2PdyTVMLIp4uF9JoW1wyzzWQIKL4gwGUJUSE0quSEGSdo5sMwMtlW1qakj4ZXlZjEvV2EUOwe6mb+7I1hT0e8nfBb97+aSOa2FwvpXJuDegFutqjLtOm/DGgErjCxjg+32f7rgS/gbgoNKz8sFtI3hyg3m9bZqZYXC+mVexpc+yvAslwqXtpOG3nXa/dVKSMw96UiQigGdk0hMWc9//+fb+yHqwk5UB8hfHT8dzQZ8B3gnka5IBLJXBw3pOgi4AJqqfVmR8y22lumaHEao86KOxc4GffUzTPafJR3Ej4T1itDaNpnE8nczFG4T06xkN7eKXAdinIJDcdpZg76QKbJCW8n8EtRhGsKEo04fOtTv+TgA7c+H6ZesZBWiWTuu8BNbTT3Nv23LJHMPaRZxEENoH2BI7UZ2SgNWbEBKLpw17hayTWJZG4HtUsIQpt7ceBgwsVMBsn/AO9ow+wM42+dgZsjRrT5k9qJZO6PYwaXzkB0uHdVR8qaAxhapZB+qYsjLQZ2TeGGL/yYoxesYmjjrOd7Dg5d/SfacU+02eyR+q9dearh5Np6vUiMQhOFlV8Bl7R5FnKYXdxT2/Dz/HJZJ1ikuDfTVdJZ2+ZhcOYBBU51n9cksADYvH0aV73vNs578/2o/ji2FKvC1tWm3UcmsLuLG3x+DOECaDs+NwFXFQvpC9sBlta0R41jvxSwqBPgOhSYJYRr5nnZn8yTPhwpK7n/JqU6jW/s7+Mjqb/yyffcAf19KCnAsdpyoIuF9CLgYxPQ5WdovEb1qj3wCP8KnFIspL8+irpzQmjasUgZ+EMnfK75ng0tHYXDXh8d0REC4/n+Pi44/SGu/cf/goGp4FgoJYYHdvWsnNbm9YqF9PcTyZyDu1gcHaduf6VJpMLxE/j4HgauKxbSPx3DNcKk2h6LlIC7OqG5KrOWVJPACgOsjdv6ePspj/HdzyyEwR4oR0EJlLRW3ffEglEtshYL6RtxjzV9qMNdXgKcUyykF7aYYMdTNuEeuPBW4MQxAgvC7eIeizwNLOnELHfCJGTCAss1Bc855XFu/PxPiZajMNKFF+Du2Fbx/At/54z2+sVC+l4dyfB+7YudNMpLbQMWAT8Cfhsi8PeOUZAqjUQCm3EjUB7EZQH/1kYux7AmpT2OWv76YiHtiLFoGh36/zStF+MmBdi4bTrnvm4pP/jsz4g6ERdYQlVc4KFy9Ms9c1f+a6faSyRzJ+AePH6q1i4HaOLBMhzvYWCD/h0fx91YuLhYSK9vox2BuyY2W4MjrNOvtH8yhLuxcxNuzOTzHQZTUJ9fC2M6tilIIsDqYiF9K8BYwXW8nl3EJHSajCIFm7ZP571nPsB1V/waq0ZjeSa1YOdQ7Ky+I5/58zgNppgG1wyqzN4IboT9hnYOGJiUcDJWtXjqJLCamIFA2bHo3zGVT513F1e/7zbY3Q12RAdiikpBJcW20s4pD/eNU180eNbSPMpiUl5A4HrT5CNsTFwMjnQxONzFtR/I8+HkIhjoBWlVjSLDQHIc68HDjn+sf/LJTYKLRDI3Azhl8hHWiyUU23dNYWrPMNdnbuXskx+HbdObRnjZ5ehfYpOPbhJcWl4HzJp8hPWyqTSdo2Zv4Psfv5XEEeuhv6+p8SyVkIND3Xf0Tj66vWuSHUPdcycfX60ZaDsWG0vTOO+Upfz+6ptIHLwZtvW5vpVs8KcEjh1ZmvnhOx+ffIp72ZgYDVuYSOam4p7CfvDkI9RbRnb3EBGKL1z4Fz721r/BUHcdI9hIBstdV085pvi1ySc5aRaCG938kgeWwN0Auqk0nWOO2ED2sgInHLnaDWdSQpuCzclUKYW9azD2qymTY3ESXFoueckDSyh2DsUYtqN8+Iz7+fL5f6G3ewS29KGECg1O24ksmnXS0qcnh+IkuEgkc4firvq/ZLWVowRbd0xl3gFb+eo7/8SZxy6DXT3IwamEy9XpigKGh7tummQJJ8Flaq2XJLElhGJgsAcFfPgND/D5s+8h3juI2jLd8KzCr6k7Uqxdu2lm/qjJcfiik3g21Qd8n2rG3itKmfx9owaXDqH5wEsRVMN2lO27p3DiEWu5+uy7OGX+Ctg9BWfbtGp8YDuiYMSO3nTUuffs6uAPfhbu+V4ObozfY6VMvhiy7um4W+y9TL7PljL5xZMwaig53Dwj4AY5L6sbN+2whYlk7l3AL15qJmD/7l4OmL6T9OsW84GTlxCNODi7e9oO/PIMxoiQIK2BdTumHXnoO+57vkPA+hTwLd/Hg8DpzUASz6YE7naOi31flYG5pUx+3SSO6p7Z24GCfvsI8A+lTH7nWM3Cz7xUQKWA/qEeuiOSy09YwidOXcwhM7fB7l5s2d22thJAFAlItdieLu4eid/whfPufL6D3X5XwGdTgPNpvD0f4IMBwAIYwM2QOym1wDoC+KV+uwZIBgGrLXAlkrk3M/r9QS8qKQ134yjBmXNX8OlTFnPcIetguJty/3TwGPYQaktp+8rCAZR8XPbK68qzxE/KM3eWd8/+f1/orP3vZbuVuDthZ+hOHt6kXhz3UAO0KbmNatTNU6VMfjLWsV66cfe5lYAbm2n2djTXl/b2p7ajHGPEiXDKwev4xAkPcPqclSAtytumYy4GqxCgiqFASEDIRXK68z1nX3Wr7Is4wopgOTn1wWs7qbXmUT1LeZc23b28GvPi2ZQoZfJB3b6KaiqzP+mB4wVjL20B6DhuZiQb2Nzg+v46UQ1eAWwrZfJDLczV/fT8VCpl8rtDXH86bv58G9hayuSdNiepXqCvlMk3+23WAZ8GhlvdcyifK5HMnQ3ctreafztGYozICCcfuJ6PHbuEt855FoTCHuoJvfPPnakUlnvkuepXMSfPdHkLM8Qi1RtBYLlgU88DC9S7F5Y6aKpcBtyi367V5vsvccPbtgALSpn8Vl+d+cBjGlC2Nh+/jXtGMMAHS5n8zQHguAy4EDfj0xRddz1uBuBvlDL5LQH9m4Obufcs3D1lAvdI2XuBa0zSJZ5N7acH7zm4yY8iWks8APxHKZN/MACE79HkwrEa8A6wEfgz8M1SJr/GV2cacCPuBtL7Spn8x+PZ1GeAK3DPNLuplMlf6QPth3BD/o7Uz6yMe07y73QbQ21rLp3E/2t7G6gkUBruQSp4zcHP8cFjHuGcOSsQlmwLVF0ohD7LckhF5N/UdPlL1acKTLc2ia4oQlqImgn06k4CS4t5Wsca3A2su4FpuMk+ZwNbfXW+QTWb7k16oBxhKN+lAWD8GcFpHfbVYDs3nk29yTSV4tnUa7Xz7w/ynoGbXXcT+tCEeDZ1pJ7E5/rxSTVb0wXGtQ/VZMwbAvq0D27qgfPj2dQZpUzeXKh/FfBuTxPFs6lv+viEGUYbrwNuJjhPyCz9PN4Wz6bOKmXyO9o1Cy9hYrP7jCOoFLaKsH24m27L5o2HreIDRy/l9MNWgyWxh7uRqrkvZQFRVwMBqJKKysVqqvyDmqZuY5q1QsQiCGGBBFF3nsKDkQg3j8OtvdJ4/bQGWL8Gl9Cz7SPGgDkLSBqM4peN91DNYeGVn42by8I89X6x1lgnG5/PB/4NeK+hIX5uAOsR4Mf64b0RNxjhfl02on0ZD1jPatDvxN3adB7wv0afZgH/7Rv0D+tJ4tXGdQ7RLOrZPnB5cozv3gHu0m0cpzXyNN93JQ1o7+TO1wCfw5eHPNpCa03dG7SWAAbtKDtGYszqHeTdC57kkgVPcOJB60EJF1TNwORmssfdsG+p5TIm71W96k9qKnfTK54TXS5vUTlaKxCgEkjbFyyUnbw3TWaYyWGWljJ5Fc+m1hqz/TyjfATIGuVzpUx+Szyber3x2d9Lmfw24/0PDACNAJeXMvmf6esdoAe5l876zHg2FS9l8iXgdEMbbqGWsv52PJtagHuskKd9T9avh4C3lDJ5D+DfjWdT83BzfXhynQ9YaeA/S5m8B+o7cHfKA7w+nk0dXMrkvbwgxxr15hjX+52+5h/i2VRMTwQesErABaVM/s+GJr+Haurvc+PZ1FdMP6yV5voyL9LkM94a1c5yjLITYf7MraRevox3zlvGnBlbwYlS1tEWZp2oUIhK7hSlUJZapbrkUnrUItXLInp5VHVbIyJigdJ+VCi/+Tvq3QvvH4dbnacdf08eN3wvT8xzfz+mZ2u0SXaNfn20UeYJA4xnAG82vvuqByyAUia/MZ5N/ZcBrj7dn5IBLG+sHaV9J6+uaarN9f0UC0ztWcrknzH6dLz2szz5dimT/0+j7M54NnWrAa6pGgTrDW1VQ9aVMnnvOdyj27ic2vz3V3jA0m38PZ5N/bfRj/00mTLQElyJZO5o7YS+6AiKQTvKrnKMabER3njoKi6Y9zRnzl5Fb88glGOUB3uxtL9USUIklEIJVZJRtVJ1qSWqRz1ADw+rHlEkJnYRsRCWQEjhAqqtM7OfGUe29WhDVe7QZiG4W4JqBm48m5pB7UHdXytl8qV4NrW/TwuYuQ/fZ7zehHtKil+GfGSpp51X+fyYRfFs6gfAd0ywBJTtBgrxbOqnwHWlTP6RAFfFk53Avwf0qRxgORDPpvYxNTlwrwEsU95vTjbmhGLIoO/6KqxZ+F1an8z+ggHViIywcyQGQjF/Rj/nHPEsqbnPsGDfzS4lXu52E3CiVBcOSllqMxG1UnWpp1VMPUoPj6lulqmYWCeiAqwIKOEuFnvaaVQWnQI+pC5aOF4LsqaJs1yzZFB78uTceDblUe+e/1MEbjA0W59fc8WzqR5j9ge4y++0G34NBsA9k/J2/ef5OzHg48Bl8Wzqi6a20RrtFmNQW8ClwEXxbOraUib/FYMd/Aej3v2lTH5DQJ8O8AHQI3QSmoDx5JsBpvZBvuf6xwbP3tx2tVW30xxciWTuH3038IIUR1rsLndhIThs2gAXzV3G+XOe4diDnlN0D0I5poaGe9QmGVHrVZQVqkstkzGKqovlxFgpusQ2TyO5CxOiOvF2zDW6Rl208J5xfAzH+f2tBprgEuCjxmdfLGXy5QBCZLOh9fxH+jQ6H9hkEJ/1/LVSJl+OZ1Pv0O7FR41BPQ3IxbOpFaVM/jZdVgGXx7Opp7XFdFCFkIWr49nUqlImf4ueHExzs9F63Ik+BjXIJNxhkiQ+P2xagKltArDbb0r7172iAcCaC1y7p3WRUOjUY0KPee+/q3olqH17hjjt4DXqpNkrWXDwc6qnd1Cttrv44659WT4QE6tVlNVE2aKioiQs4Zp1GkSWNiKFHF3gbThZRCTcSXajJDOm+UycR30DajfuDoZe3DUs7zicu0uZfL6B9nvWIDPi1J5esi2gD6/wscl3mt+XMvlh4Kp4NvVdbZJ+iGp6ifPxrZ+WMvn/iGdTNwIZ4EpjjF6oNVsf7vqaaar6+3SIj56/y1hQfnUDTd9I66GZV7+cTu1hDnf4C9SAa8HnrkCw4GafiTA6Q035woRMoOj37kh34aJQCuH6PsqSSlqOUpaDjNhKdpWV7BrBjo1gdw8rOzYiZM8Q1j5brSf7doi7VITndu4nBge6LAQCC/c8I6HAUu5PKSSW0J0SoAxGb5ygtRnFJerCzrKDPplP7UF1S32DbjNu+FOXQRsr4PPGQPRT0+Y1/EzNvgF9+LoxjoY0w1Yn2nT7aDybOtWY8VWDstuAL8WzqZOpRoxIo09mvaCD+v6V2nO1bvRR76a2IYS/tq8PvP613+c109gYXF2PH/8lGRk5reofC//tK5M40JBRylUpSnnqRkhHCWVJIaUSUijLcZTlWMqypbQcoSK2kpEyMmIrJ1oWKjqCE7WV7CoLJ1pGddnCidrIaFmoqBROVFrKkgILoYQSCCEEFv0yArvceD/LUkQsB6HBgxBG98WeOLfyverihavHuY2jDDJjp0FmUMrkd8ezqeeojy38eSmTf8B4vx+1BxOYpt86PWvvo99/NJ5N3al9sgNw13VSRvlsKZNfqQfgvwErgB9p7eUtKB9qkgn68y/qAf29Uia/S3/mP6DPY1o36InDu6+L49nUb7XPNkNPHJcZ9b5fyuSX6mvO8l2z0RnNy6jd9fqZeDb1kL6fObgL8Ka2vqqUyQ80BNchl6dPjc2c+S8IOaIsaYNCCdmlhBRYzogSSighu5TlOEo4NkJ2yYiDshzbLedIadkKoSIqYjvKkkIJByUkynIsFxQyooR0lZcLFJQlhBsMK4SyLFe7CUtrFle7WU4EnAhYoopuIYgJXM0k6nJs7mn5nLp44Z0T0I7p6/w9wLFfTm1uyUFNauCj6WcY7x8zANofz6Z+RfWAvdl6kK/QGmO6Ua/gMZF67etK/Ut9Np5NPa5NudMNM/Mp4Bd6PenTGuRXxLOpR3BDnt6gzVK06XaDZ2ZqFtFjX/fX9PlyPQnMNPr0V2ojL+YZE0XNvQawu3/GDdfyTMklerI5zGcq3+APE6sBV/zKs2cwi5/ISNljyDzQeVbcFMPAi2rWByWEQBEzTT9tCnYhREXPuW4OoCIIIighXCUvcF97SWgtUaN1KgleXlwJs29UFy/Mjncj2px7o29A+GWN7/11pUx+le+zU33mkP86n9ez/Wn6fcTn543gngv2uVImLw1W0IvMn0996NBi4GKtXafj5qvfTxMVR/jKPgVcWsrkN/pM0VdQm97vZb759RbgE6VMfrDBvWJqep9ZSjyb+pCeMDyTeYrvvncA15Yy+Yb8RDR+5dkztE06x3K6wJ/LUDRkv2kaKfTSzCD/G0QNIzfe8h09yIZx4/78cpP2UaZr9vCGgDL3aDpaaFp7q2+gleLZ1Js0+XCmnrm7tLn4KPC7Uib/lK/O2ng2daKu82rN8I3gHnB+J1DwCIZSJr8jnk2dpgmLE7S5aWstcRfwG39QrAbMO+LZVFLT/LM1I1rS2qgQsDbmabKsHuMPGQxiEMDWxLOp1+DukztNM6eWNkkfBH5byuSbmv2i73Nvyem1h7ZBMlpwKUMzNdJcyvCdlAd3n1nompfatzL9LP9rS9R8VmnXfN2o78L3hWh4n/3AAvWeX2xmUiYF+D9C9LgaRJorfwAAAABJRU5ErkJggg==';
+const CONTRACT_CLAUSES_PORTAL = [
+  {
+    h: 'CLÁUSULA 1ª – DO OBJETO',
+    p: [
+      '1.1 O objeto do presente contrato tem por objetivo regular a Associação entre a CDL MOSSORÓ e a ASSOCIADA, nos termos do Estatuto, Regimentos, Políticas Internas e Conduta, subordinando-se a elas e às cláusulas abaixo.',
+      'a) Este Instrumento também trata a respeito do DISCIPLINAMENTO DE USO DE BANCO DE DADOS ao qual se compromete a CDL MOSSORÓ em colocar à disposição ASSOCIADA todas as informações localizadas no Base de Dados formado pelo compartilhamento de informações em nível nacional e que compõem o SPC Brasil.',
+      'Parágrafo único. O banco de dados do SPC Brasil contempla a visualização de informações da base da SERASA, em consultas 02 (dois) bureau, nos termos do contrato/aditivo firmado entre ambos, enquanto perdurar aquela avença.',
+      '1.2 A CDL Mossoró é uma entidade de classe, pautada pelo associativismo, instrumento importante para que os Empresários da Capital potiguar tenham maior expressão econômica, social e política.',
+    ],
+  },
+  {
+    h: 'CLÁUSULA 2ª – DIREITOS DO TITULAR DOS DADOS',
+    p: [
+      '2.1 A ASSOCIADA autoriza o tratamento de dados pessoais e de sua empresa, nos limites das finalidades institucionais da CDL MOSSORÓ, observando o norteamento jurídico da Lei nº 13.709/2018 (LGPD), incluindo envio de comunicações internas, execução de contrato, exercício regular de direitos e proteção do crédito.',
+      '2.2 Os dados coletados por esta ENTIDADE NÃO serão compartilhados com terceiros, conforme Políticas Internas, salvo nos casos em que a ASSOCIADA autorize.',
+      '2.3 A ASSOCIADA tem o direito de saber quais Dados Pessoais mantemos, podendo acessar, corrigir, solicitar exclusão ou restrição do tratamento, conforme a legislação aplicável.',
+      '2.6 Dúvidas sobre esses direitos podem ser enviadas à OUVIDORIA: gerencia@cdlmossoro.com.br / (84) 3422.0300.',
+    ],
+  },
+  {
+    h: 'CLÁUSULA 3ª – DA ADESÃO, FORMAS DE PAGAMENTOS E VENCIMENTOS',
+    p: [
+      '3.1 A ASSOCIADA pagará à CDL MOSSORÓ uma taxa de adesão, no ato da assinatura deste termo. O acesso aos Benefícios, Sistemas da Entidade e Sistema do SPC Brasil é liberado após o pagamento.',
+      '3.2 A data de vencimento ocorrerá sempre no dia 12 de cada mês, podendo ser alterada conforme necessidade da ENTIDADE.',
+      '3.3 A ASSOCIADA efetuará o pagamento da fatura enviada pela CDL MOSSORÓ, sujeitando-se a multa de 2% e juros de 3% a.m. em caso de atraso.',
+      'c) O atraso a partir de 1 fatura mensal permite à CDL MOSSORÓ suspender a disponibilidade dos serviços. O atraso de 3 mensalidades resulta na inclusão da ASSOCIADA perante os órgãos de proteção ao crédito.',
+      '3.4 Em dia com suas obrigações, a ASSOCIADA tem direito aos benefícios, convênios e descontos exclusivos da CDL MOSSORÓ, incluindo planos de saúde, entre outros serviços.',
+    ],
+  },
+  {
+    h: 'CLÁUSULA 4ª – DO REAJUSTE, VIGÊNCIA E DA RESCISÃO',
+    p: [
+      '4.1 Os valores serão reajustados anualmente, no mês de Janeiro, conforme regulamentos do SPC Brasil.',
+      '4.2 O cancelamento poderá ser realizado após o prazo mínimo de vigência, mediante comunicação por escrito.',
+      '4.3 A rescisão antes do prazo mínimo de vigência acarreta o pagamento do valor correspondente aos meses restantes até o prazo mínimo.',
+      '4.5 A CDL MOSSORÓ poderá rescindir o presente Termo em caso de descumprimento de cláusulas ou conduta indigna da condição de associada.',
+    ],
+  },
+  {
+    h: 'CLÁUSULA 5ª – DAS RESPONSABILIDADES DA ASSOCIADA',
+    p: [
+      '5.1 Constituem obrigações da ASSOCIADA, entre outras: efetuar o pontual pagamento; não repassar a terceiros as informações cadastrais transmitidas pela CDL MOSSORÓ; responsabilizar-se pelas informações cadastradas no SPC Brasil; registrar apenas débitos legalmente reconhecidos; comunicar fiador/avalista sobre inadimplência antes da abertura de cadastro; e manter a CDL informada sobre operadores desligados ou novos.',
+    ],
+  },
+  {
+    h: 'CLÁUSULA 6ª – DAS CONDIÇÕES GERAIS',
+    p: [
+      '6.1 A ASSOCIADA e a CDL MOSSORÓ declaram estar cientes de seus respectivos direitos e deveres, incluindo eventuais condições para uso de benefícios e aceite de modificações nos regulamentos dos serviços.',
+      '6.7 O uso das marcas do Serviço de Proteção ao Crédito é exclusivo da CDL MOSSORÓ, sendo proibida sua reprodução pela ASSOCIADA.',
+      '6.8 As informações, consultas e serviços prestados são CONFIDENCIAIS e de uso exclusivo da ASSOCIADA.',
+      '6.9 Em caso de alteração de CNPJ, a ASSOCIADA deverá celebrar um novo contrato.',
+      '6.10 A ASSOCIADA declara que neste ato recebe: Anexo I – Tabela de Preços; Anexo II – Termo de Tratamento de Dados Pessoais; via deste Instrumento de Associação.',
+    ],
+  },
+  {
+    h: 'CLÁUSULA 7ª – DO FORO',
+    p: [
+      '7.1 Para dirimir qualquer dúvida decorrente deste Termo, as partes elegem o foro da cidade de Mossoró, como único e competente, renunciando a qualquer outro.',
+      '7.2 Por estarem assim justas e acordadas, as partes assinam este instrumento eletronicamente, para um só efeito de Direito.',
+    ],
+  },
+];
+
+// Gera o PDF do contrato de filiação a partir de um objeto de dados (não de
+// IDs de tela, como no simulador) — assim dá pra chamar de qualquer lugar
+// do portal, passando os dados do lead direto.
+function gerarContratoFiliacaoPDFPortal(dados, signatureDataUrl, signedAt) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const marginX = 15,
+    maxW = 180;
+  let y = 18;
+
+  function ensureSpace(need) {
+    if (y + need > 280) {
+      doc.addPage();
+      y = 18;
+    }
+  }
+  function writeParagraph(text, opts = {}) {
+    doc.setFont('helvetica', opts.bold ? 'bold' : 'normal');
+    doc.setFontSize(opts.size || 9.5);
+    const linhas = doc.splitTextToSize(text, maxW);
+    linhas.forEach((linha) => {
+      ensureSpace(5);
+      doc.text(linha, marginX, y);
+      y += 5;
+    });
+    y += opts.gapAfter !== undefined ? opts.gapAfter : 2;
+  }
+  function writeHeading(text) {
+    ensureSpace(10);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10.5);
+    doc.setTextColor(0, 4, 45);
+    doc.text(text, marginX, y);
+    y += 6;
+    doc.setTextColor(20, 20, 20);
+  }
+  const v = (val) => (val && String(val).trim()) || 'não informado';
+  const hoje = new Date().toLocaleDateString('pt-BR');
+
+  try {
+    doc.addImage(LOGO_CDL_DATAURI_PORTAL || LOGO_WORDMARK, 'PNG', marginX, 10, 32, 15);
+  } catch (e) {}
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(0, 4, 45);
+  doc.text(
+    dados.cdlTier === 'associado'
+      ? 'ASSOCIADO CDL ( X )   USUÁRIO SPC ( X )'
+      : 'ASSOCIADO CDL (      )   USUÁRIO SPC ( X )',
+    marginX + 38,
+    17
+  );
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(90, 90, 100);
+  const subLines = doc.splitTextToSize(
+    'Instrumento de Associação entre a Câmara de Dirigentes Lojistas de Mossoró e a Associada, na forma descrita abaixo:',
+    140
+  );
+  doc.text(subLines, marginX + 38, 22);
+  doc.setTextColor(20, 20, 20);
+  y = 34;
+
+  writeParagraph(
+    'Pelo presente Instrumento de Associação, doravante designada CDL MOSSORÓ, inscrita no CNPJ/MF sob o nº 08.302.325/0001-30, com sede à Rua Alfredo Fernandes, nº 292, Centro, Mossoró/RN, CEP 59.600-180, neste ato representada pelo seu Presidente, na forma do seu Estatuto Social, e de outro lado a empresa:',
+    { gapAfter: 3 }
+  );
+
+  const rows = [
+    ['Razão Social / Associada', v(dados.razaoSocial)],
+    ['Nome Fantasia', v(dados.nomeFantasia)],
+    ['CNPJ', v(maskCnpj(dados.cnpj || ''))],
+    ['Inscrição Estadual', v(dados.inscricaoEstadual)],
+    ['Ramo de Atividade', v(dados.ramoAtividade)],
+    ['Diretor/Responsável', v(dados.diretorResponsavel)],
+    ['Data de Aniversário', v(dados.dataAniversario)],
+    ['CPF', v(dados.cpfDiretor)],
+    ['Endereço', v(dados.enderecoRua)],
+    ['Número', v(dados.enderecoNumero)],
+    ['Complemento', v(dados.enderecoComplemento)],
+    ['Bairro', v(dados.bairro)],
+    ['Cidade', v(dados.cidade)],
+    ['UF', v(dados.uf)],
+    ['CEP', v(dados.cep)],
+    ['Telefone Fixo', v(dados.telFixo)],
+    ['Celular', v(dados.celular)],
+    ['Whatsapp', v(dados.whatsapp)],
+    ['E-mail (Diretor)', v(dados.emailDiretor)],
+    ['E-mail (Financeiro)', v(dados.emailFinanceiro)],
+    ['Nome do Contador', v(dados.nomeContador)],
+    ['Telefone Contador', v(dados.telContador)],
+    [
+      'Categoria de associado escolhida',
+      dados.cdlTier
+        ? `${CDL_TIERS_PORTAL[dados.cdlTier].nome} — ${formatBRL(CDL_TIERS_PORTAL[dados.cdlTier].valor)}/mês`
+        : 'não informado',
+    ],
+  ];
+  doc.setFontSize(9);
+  rows.forEach(([label, val], i) => {
+    ensureSpace(6.5);
+    if (i % 2 === 0) {
+      doc.setFillColor(246, 246, 248);
+      doc.rect(marginX, y - 4.3, maxW, 6.2, 'F');
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 4, 45);
+    doc.text(label + ':', marginX + 2, y);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(30, 30, 30);
+    const valLines = doc.splitTextToSize(String(val), maxW - 62);
+    doc.text(valLines, marginX + 62, y);
+    y += Math.max(6.2, valLines.length * 4.5);
+  });
+  y += 4;
+
+  writeParagraph(
+    'doravante denominada ASSOCIADA, neste ato representada na forma da documentação legal da Empresa e seu representante, ajustam a celebração do presente negócio jurídico, a se reger pelas seguintes cláusulas e condições:',
+    { gapAfter: 3 }
+  );
+
+  CONTRACT_CLAUSES_PORTAL.forEach((clause) => {
+    writeHeading(clause.h);
+    clause.p.forEach((par) => writeParagraph(par));
+  });
+
+  ensureSpace(14);
+  y += 2;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(20, 20, 20);
+  doc.text(`Mossoró/RN, ${hoje}.`, marginX, y);
+  y += 14;
+
+  ensureSpace(45);
+  const colW = 80;
+  const col1X = marginX,
+    col2X = marginX + 95;
+  if (signatureDataUrl) {
+    try {
+      doc.addImage(signatureDataUrl, 'PNG', col1X + 5, y - 14, 60, 20);
+    } catch (e) {}
+  }
+  doc.setDrawColor(60, 60, 60);
+  doc.line(col1X, y + 8, col1X + colW, y + 8);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(0, 4, 45);
+  doc.text(v(dados.diretorResponsavel), col1X, y + 13);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(90, 90, 100);
+  doc.text('ASSOCIADA' + (signatureDataUrl ? ' — assinado eletronicamente' : ''), col1X, y + 17);
+  if (signatureDataUrl && signedAt) {
+    doc.text(`em ${signedAt}`, col1X, y + 21);
+  }
+  doc.line(col2X, y + 8, col2X + colW, y + 8);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(0, 4, 45);
+  doc.text('CDL Mossoró', col2X, y + 13);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(90, 90, 100);
+  doc.text('CONTRATADA', col2X, y + 17);
+
+  const empresaSlug = (v(dados.razaoSocial) || 'contrato')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+  const filename =
+    (signatureDataUrl ? 'contrato-filiacao-assinado-' : 'contrato-filiacao-') +
+    empresaSlug +
+    '.pdf';
+  return { doc, filename };
+}
+
 const ADESAO_STAGES = [
   {
     id: 'nova',
@@ -3983,7 +4477,7 @@ const ADESAO_STAGES = [
 let ORC_MODE = 'plano'; // 'plano' | 'cdl'
 function preencherCnpjPorEmpresaExistente() {
   const nomeDigitado = document.getElementById('orc_razao').value.trim();
-  const emp = (DB.empresas || []).find((e) => e.razaoSocial === nomeDigitado);
+  const emp = empresasParaAutocomplete().find((e) => e.razaoSocial === nomeDigitado);
   if (emp && emp.cnpj) {
     document.getElementById('orc_cnpj').value = maskCnpj(emp.cnpj);
     toast('Empresa já cadastrada — CNPJ preenchido automaticamente.');
@@ -3999,6 +4493,27 @@ function preencherCnpjPorEmpresaExistentePipeline() {
   }
 }
 
+// Junta as empresas já viradas lead/cliente no portal (DB.empresas) com a
+// lista grande importada da CDL (DB.companies, ~490 empresas) — sem isso, a
+// busca de "já cadastrada" só achava quem já tinha passado pelo portal,
+// mesmo quando a empresa já existia na base de associados.
+function empresasParaAutocomplete() {
+  const porCnpj = new Map();
+  (DB.empresas || [])
+    .filter((e) => e.razaoSocial)
+    .forEach((e) =>
+      porCnpj.set(e.cnpj || e.razaoSocial, { razaoSocial: e.razaoSocial, cnpj: e.cnpj || '' })
+    );
+  (DB.companies || [])
+    .filter((c) => (c.razaoSocial || c.nome) && !porCnpj.has(c.cnpj))
+    .forEach((c) =>
+      porCnpj.set(c.cnpj || c.razaoSocial || c.nome, {
+        razaoSocial: c.razaoSocial || c.nome,
+        cnpj: c.cnpj || '',
+      })
+    );
+  return Array.from(porCnpj.values());
+}
 function viewOrcamento() {
   return `
   <div class="view-wrap">
@@ -4019,8 +4534,7 @@ function viewOrcamento() {
           <label>Razão social / Empresa <span class="opt">(busque uma já cadastrada ou digite uma nova)</span></label>
           <input id="orc_razao" list="orc_empresasList" placeholder="Digite ou escolha uma empresa já cadastrada" oninput="preencherCnpjPorEmpresaExistente()"/>
           <datalist id="orc_empresasList">
-            ${(DB.empresas || [])
-              .filter((e) => e.razaoSocial)
+            ${empresasParaAutocomplete()
               .map((e) => `<option value="${e.razaoSocial}" data-cnpj="${e.cnpj}"></option>`)
               .join('')}
           </datalist>
@@ -4267,20 +4781,43 @@ function gerarOrcamentoPDFPortal(dados) {
   doc.text(dados.secaoTitulo, marginX, y);
   y += 9;
 
-  // tabela simples
+  // tabela — larguras por coluna (mm), não mais um valor fixo que estourava
+  // com nomes longos de titular e derrubava tudo em cima da coluna seguinte
+  const larguraUtil = 210 - 2 * marginX;
+  const larguraPorColuna = {
+    2: [90, 84], // Titular, Plano (orçamento CDL)
+    3: [58, 50, 30, 36], // Titular, Plano, Vidas, Subtotal
+    4: [50, 44, 40, 20, 20], // caso apareça alguma variação com mais colunas
+  };
+  const colWidths =
+    larguraPorColuna[dados.colunas.length - 1] ||
+    dados.colunas.map(() => larguraUtil / dados.colunas.length);
+  const colX = [];
+  let acumulado = marginX + 4;
+  colWidths.forEach((w) => {
+    colX.push(acumulado);
+    acumulado += w;
+  });
+
   doc.setFillColor(246, 246, 248);
-  doc.rect(marginX, y - 5, 210 - 2 * marginX, 8, 'F');
+  doc.rect(marginX, y - 5, larguraUtil, 8, 'F');
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
   doc.setTextColor(90, 90, 100);
-  dados.colunas.forEach((col, i) => doc.text(col, marginX + 4 + i * 45, y));
+  dados.colunas.forEach((col, i) => doc.text(col, colX[i], y));
   y += 9;
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.5);
+  doc.setFontSize(9);
   doc.setTextColor(30, 30, 40);
   dados.linhas.forEach((linha) => {
-    linha.forEach((val, i) => doc.text(String(val), marginX + 4 + i * 45, y));
-    y += 7;
+    // quebra o texto se não couber na largura da coluna, em vez de deixar
+    // vazar e sobrepor a coluna vizinha
+    const linhasQuebradas = linha.map((val, i) =>
+      doc.splitTextToSize(String(val), colWidths[i] - 4)
+    );
+    const alturaLinha = Math.max(...linhasQuebradas.map((l) => l.length)) * 5;
+    linhasQuebradas.forEach((textoColuna, i) => doc.text(textoColuna, colX[i], y));
+    y += Math.max(alturaLinha, 7);
   });
   y += 4;
   doc.setDrawColor(226, 226, 232);
@@ -4329,6 +4866,31 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
   if (ORC_MODE === 'cdl' && !ORC_PLANO_ESCOLHIDO) {
     toast('Escolha uma opção.');
     return;
+  }
+
+  // "Implantar" direto só pode acontecer se a empresa já for associada da
+  // CDL — sem isso, a implantação fica "solta" sem a filiação por trás.
+  // Se ainda não for associada, bloqueia e explica o que fazer, em vez de
+  // implantar mesmo assim.
+  if (implantarDireto) {
+    const btnImplantar = document.getElementById('orc_implantarBtn');
+    if (btnImplantar) {
+      btnImplantar.disabled = true;
+      btnImplantar.textContent = 'Verificando associação...';
+    }
+    const associado = await verificarCnpjAssociadoCdl(cnpj);
+    if (btnImplantar) {
+      btnImplantar.disabled = false;
+      btnImplantar.innerHTML = `${ICONS.check} Implantar`;
+    }
+    if (associado === false) {
+      toast(
+        '⚠️ Essa empresa ainda não é associada da CDL — associe primeiro (aba Pipeline) antes de implantar direto.'
+      );
+      return;
+    }
+    // associado === null significa que a checagem falhou (rede etc.) — não
+    // bloqueia por causa de instabilidade, só segue em frente.
   }
 
   // Qualquer usuário que crie um orçamento leva o próprio código junto — mesma regra
