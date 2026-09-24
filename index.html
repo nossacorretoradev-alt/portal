@@ -1666,6 +1666,32 @@ function supabaseHeaders(extra) {
   }
   return Object.assign(base, extra || {});
 }
+// Sobe um arquivo pro Storage do Supabase (bucket "portal-files") e devolve
+// um link assinado (válido por bastante tempo) pra usar como anexo — em vez
+// de guardar o arquivo inteiro em base64 dentro do banco, o que deixava os
+// registros gigantes e dava erro na hora de baixar.
+async function uploadArquivoPortal(blob, caminho) {
+  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/portal-files/${caminho}`;
+  const res = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: supabaseHeaders({ 'Content-Type': 'application/pdf', 'x-upsert': 'true' }),
+    body: blob,
+  });
+  if (!res.ok) {
+    const erro = await res.json().catch(() => ({}));
+    throw new Error(erro.message || 'Falha ao subir o arquivo (' + res.status + ')');
+  }
+  const signRes = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/portal-files/${caminho}`, {
+    method: 'POST',
+    headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ expiresIn: 60 * 60 * 24 * 365 }), // 1 ano
+  });
+  const signData = await signRes.json();
+  if (!signRes.ok || !signData.signedURL) {
+    throw new Error('Arquivo subiu, mas não foi possível gerar o link.');
+  }
+  return `${SUPABASE_URL}/storage/v1${signData.signedURL}`;
+}
 window.storage = {
   async get(key) {
     const url = `${SUPABASE_URL}/rest/v1/rpc/secure_portal_get`;
@@ -3248,6 +3274,43 @@ async function verificarCnpjAssociadoCdl(cnpj) {
     return null;
   }
 }
+// Reconstrói o PDF do orçamento na hora, a partir dos grupos salvos — em vez
+// de guardar o arquivo inteiro (em base64) dentro do banco, o que deixava
+// o registro gigante e dava erro na hora de baixar. Só guarda os DADOS
+// (nomes, planos, quantidades), e monta o PDF de novo sempre que precisar.
+function baixarOrcamentoPipeline(id) {
+  const l = DB.pipeline.find((x) => x.id === id);
+  if (!l || !(l.gruposOrcamento || []).length) {
+    toast('Esse lead não tem um orçamento salvo pra baixar.');
+    return;
+  }
+  const linhas = [];
+  let total = 0;
+  l.gruposOrcamento.forEach((g) => {
+    const plano = PLAN_VALUES_PORTAL[g.planoKey];
+    const vidas = 1 + (Number(g.quantidadeDependentes) || 0);
+    const subtotal = plano ? plano.valor * vidas : 0;
+    total += subtotal;
+    linhas.push([g.titular, g.plano, String(vidas), formatBRL(subtotal)]);
+  });
+  const pdfInfo = gerarOrcamentoPDFPortal({
+    razaoSocial: l.empresa || l.nome || '',
+    cnpj: l.cnpj || '',
+    nome: l.nome || '',
+    celular: l.celular || '',
+    email: l.email || '',
+    tipoArquivo: 'plano-saude',
+    titulo: 'Orçamento — Plano de Saúde Unimed',
+    secaoTitulo: 'Titulares e planos',
+    colunas: ['Titular', 'Plano', 'Vidas', 'Subtotal'],
+    linhas,
+    totalTexto: `${formatBRL(total)}/mês`,
+    observacao:
+      'Cada titular pode possuir plano próprio e seus dependentes permanecem vinculados ao mesmo grupo. Valores sujeitos a análise cadastral e confirmação da Unimed.',
+  });
+  pdfInfo.doc.save(pdfInfo.filename);
+}
+
 async function validarAssociadoPipeline(id) {
   const l = DB.pipeline.find((x) => x.id === id);
   if (!l) return;
@@ -3261,86 +3324,97 @@ async function validarAssociadoPipeline(id) {
       'cdl_base',
       `select=cnpj,empresa,status&cnpj=eq.${encodeURIComponent(cnpj)}&limit=1`
     );
-    let associado = base.length > 0 && (base[0].status || 'ativa') !== 'inativa';
-    if (!associado) {
+    let jaNaBase = base.length > 0 && (base[0].status || 'ativa') !== 'inativa';
+    let origemEncontrada = jaNaBase ? 'cdl_base' : null;
+    if (!jaNaBase) {
       const novos = await sbSelect(
         'affiliates',
         `select=cnpj,empresa&cnpj=eq.${encodeURIComponent(cnpj)}&limit=1`
       );
-      associado = novos.length > 0;
+      jaNaBase = novos.length > 0;
+      if (jaNaBase) origemEncontrada = 'affiliates';
     }
-    if (
-      !associado &&
-      l.novoAfiliado &&
-      l.contratoAssinado &&
-      (l.anexos || []).some((a) => /contrato/i.test(a.nome))
-    ) {
-      // Antes só pedia pra confirmar "de boca" — agora abre o documento
-      // assinado de verdade numa aba nova, pra pessoa realmente ler e
-      // conferir antes de validar, não confiar só na palavra do sistema.
-      const contratoAnexo = (l.anexos || []).find((a) => /contrato/i.test(a.nome));
-      if (contratoAnexo?.dataUrl) {
-        window.open(contratoAnexo.dataUrl, '_blank');
-      }
-      associado = await showConfirmDialog(
-        `O simulador informa uma nova filiação e enviou o contrato assinado (abrimos ele numa aba nova — confira antes de continuar). Depois de ler o documento, deseja validar esta empresa como associada?`,
-        {
-          confirmLabel: 'Validar filiação',
-          danger: false,
-        }
-      );
-      if (associado)
-        await sbUpsert(
-          'cdl_base',
-          [
-            {
-              cnpj,
-              empresa: l.empresa || l.nome || '',
-              status: 'ativa',
-              origem_site: true,
-            },
-          ],
-          'cnpj'
-        );
-    } else if (!associado && l.filiacao?.assinaturaDigital?.completed) {
-      // Contrato gerado e assinado aqui mesmo no portal (via Autentique) —
-      // mesma lógica: abre o documento assinado antes de confirmar.
-      if (l.filiacao.assinaturaDigital.signedFile) {
-        window.open(l.filiacao.assinaturaDigital.signedFile, '_blank');
-      }
-      associado = await showConfirmDialog(
-        'O contrato de filiação foi assinado pela Autentique (abrimos ele numa aba nova — confira antes de continuar). Deseja validar esta empresa como associada?',
-        {
-          confirmLabel: 'Validar filiação',
-          danger: false,
-        }
-      );
-      if (associado)
-        await sbUpsert(
-          'cdl_base',
-          [
-            {
-              cnpj,
-              empresa: l.empresa || l.nome || '',
-              status: 'ativa',
-              origem_site: false,
-            },
-          ],
-          'cnpj'
-        );
-    }
-    l.associadoValidado = associado;
-    l.associadoValidadoEm = associado ? nowISO() : null;
-    l.associadoValidadoPor = associado ? CURRENT_USER?.nome || '' : null;
     l.cnpj = cnpj;
-    await persist();
-    openPipelineLeadModal(id);
-    toast(
-      associado ? '✓ Empresa validada como associada.' : 'Empresa ainda não consta como associada.'
-    );
+
+    // Contrato assinado (por qualquer um dos dois caminhos — site ou gerado
+    // aqui no portal) — junto com os dados da empresa, é o que aparece na
+    // janela de conferência antes de confirmar.
+    const contratoAnexoSite = (l.anexos || []).find((a) => /contrato/i.test(a.nome));
+    const contratoPortal = l.filiacao?.assinaturaDigital?.completed
+      ? l.filiacao.assinaturaDigital
+      : null;
+
+    abrirJanelaConferenciaAssociado(id, {
+      cnpj,
+      jaNaBase,
+      origemEncontrada,
+      statusBase: base[0]?.status,
+      contratoAnexoSite,
+      contratoPortal,
+    });
   } catch (e) {
     toast('Não foi possível consultar a base de associados agora.');
   }
+}
+
+// Janela de conferência: mostra os dados da empresa e o contrato (se tiver)
+// antes de marcar como validada — em vez de só um popup de sim/não.
+function abrirJanelaConferenciaAssociado(id, info) {
+  const l = DB.pipeline.find((x) => x.id === id);
+  if (!l) return;
+  const temEvidencia = info.jaNaBase || info.contratoAnexoSite || info.contratoPortal;
+  openModalHTML(`<div class="modal modal-small"><div class="modal-head"><div class="mh-info"><div class="mh-name">Conferir associação — ${l.empresa || l.nome || ''}</div><div class="mh-sub">CNPJ ${maskCnpj(info.cnpj)}</div></div><button class="modal-close" onclick="closeModal()">${ICONS.close}</button></div><div class="modal-body">
+    <div class="field-grid">
+      <div class="fg"><label>Razão social</label><input value="${l.empresa || l.nome || ''}" disabled></div>
+      <div class="fg"><label>CNPJ</label><input value="${maskCnpj(info.cnpj)}" disabled></div>
+    </div>
+    <div class="field-grid" style="margin-top:12px"><div class="fg"><label>Contato</label><input value="${l.nome || ''} · ${maskPhone(l.celular || '') || '—'}" disabled></div><div class="fg"><label>E-mail</label><input value="${l.email || '—'}" disabled></div></div>
+
+    <div class="dep-card" style="margin-top:16px;border-left:4px solid ${info.jaNaBase ? 'var(--success)' : 'var(--warning)'};">
+      ${
+        info.jaNaBase
+          ? `<b>✓ Já consta na base de associados</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">Encontrada em "${info.origemEncontrada === 'cdl_base' ? 'associados CDL' : 'novos afiliados'}"${info.statusBase ? ` — status: ${info.statusBase}` : ''}.</div>`
+          : `<b>⚠️ Ainda não consta na base de associados</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">Não foi encontrada em associados CDL nem em novos afiliados.</div>`
+      }
+    </div>
+
+    ${
+      info.contratoAnexoSite
+        ? `<div class="dep-card" style="margin-top:12px;"><b>Contrato assinado (enviado pelo site)</b><div style="margin-top:8px;"><a class="btn-ghost" target="_blank" href="${info.contratoAnexoSite.dataUrl}">${ICONS.file} Abrir contrato</a></div></div>`
+        : info.contratoPortal
+          ? `<div class="dep-card" style="margin-top:12px;"><b>Contrato de filiação assinado (gerado no portal)</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">Assinado por ${info.contratoPortal.signerName || '—'} · confirmado em ${fmtDateTime(info.contratoPortal.confirmedAt || info.contratoPortal.createdAt)}.</div>${info.contratoPortal.signedFile ? `<div style="margin-top:8px;"><a class="btn-ghost" target="_blank" href="${info.contratoPortal.signedFile}">${ICONS.file} Abrir contrato assinado</a></div>` : ''}</div>`
+          : `<div class="dep-card" style="margin-top:12px;"><b>Nenhum contrato encontrado</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">Se a empresa ainda não é associada e não tem contrato, use o botão "Associar" no card do lead antes de validar.</div></div>`
+    }
+  </div><div class="modal-foot">
+    <button class="btn-ghost" onclick="closeModal()">Fechar sem validar</button>
+    ${temEvidencia ? `<button class="btn-primary" onclick="confirmarEmpresaValidada('${id}', ${info.jaNaBase ? 'false' : 'true'})">${ICONS.check} Empresa validada</button>` : ''}
+  </div></div>`);
+}
+
+async function confirmarEmpresaValidada(id, precisaRegistrarNaBase) {
+  const l = DB.pipeline.find((x) => x.id === id);
+  if (!l) return;
+  if (precisaRegistrarNaBase) {
+    await sbUpsert(
+      'cdl_base',
+      [
+        {
+          cnpj: l.cnpj,
+          empresa: l.empresa || l.nome || '',
+          status: 'ativa',
+          origem_site: !!(l.anexos || []).some((a) => /contrato/i.test(a.nome)),
+        },
+      ],
+      'cnpj'
+    );
+  }
+  l.associadoValidado = true;
+  l.associadoValidadoEm = nowISO();
+  l.associadoValidadoPor = CURRENT_USER?.nome || '';
+  await persist();
+  closeModal();
+  openPipelineLeadModal(id);
+  toast('✓ Empresa validada como associada.');
 }
 
 // Abre o formulário com os dados que faltam pra gerar o contrato de
@@ -4944,7 +5018,20 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
       observacao:
         'Cada titular pode possuir plano próprio e seus dependentes permanecem vinculados ao mesmo grupo. Valores sujeitos a análise cadastral e confirmação da Unimed.',
     });
-    const pdfDataUrl = pdfInfo.doc.output('datauristring');
+    let pdfUrlSalvo = null;
+    try {
+      const empresaSlugUpload = razaoSocial
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '');
+      pdfUrlSalvo = await uploadArquivoPortal(
+        pdfInfo.doc.output('blob'),
+        `orcamentos/${empresaSlugUpload}-${uid('pdf')}.pdf`
+      );
+    } catch (e) {
+      console.warn('Não foi possível subir o PDF do orçamento pro Storage.', e);
+      // Não trava a criação do lead por causa disso — só fica sem o anexo salvo.
+    }
     const gruposSalvos = ORC_GRUPOS.map((g) => ({
       titular: g.titular,
       plano: PLAN_VALUES_PORTAL[g.plano].nome,
@@ -4974,12 +5061,12 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
           razaoSocial,
           cnpj,
           anexos:
-            idx === 0
+            idx === 0 && pdfUrlSalvo
               ? [
                   {
                     id: uid('anx'),
                     nome: pdfInfo.filename,
-                    dataUrl: pdfDataUrl,
+                    dataUrl: pdfUrlSalvo,
                     criadoEm: nowISO(),
                   },
                 ]
@@ -5032,14 +5119,9 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
       email,
       planoInteresse: `Orçamento com ${ORC_GRUPOS.length} titular(es) · ${totalVidas} vida(s)`,
       gruposOrcamento: gruposSalvos,
-      anexos: [
-        {
-          id: uid('anx'),
-          nome: pdfInfo.filename,
-          dataUrl: pdfDataUrl,
-          criadoEm: nowISO(),
-        },
-      ],
+      anexos: pdfUrlSalvo
+        ? [{ id: uid('anx'), nome: pdfInfo.filename, dataUrl: pdfUrlSalvo, criadoEm: nowISO() }]
+        : [],
       comentarios: [
         {
           data: nowISO(),
@@ -5058,8 +5140,12 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
     );
     await persist();
     pdfInfo.doc.save(pdfInfo.filename);
-    toast('Orçamento criado e enviado para Cliente Potencial no Pipeline.');
-    openPipelineLeadModal(lead.id);
+    toast('✓ Orçamento gerado e enviado para Cliente Potencial no Pipeline.');
+    // Fica na própria tela de orçamento — só o botão "Implantar" deve levar
+    // pra outra tela. Gerar o PDF não deveria tirar quem está vendendo do
+    // fluxo de orçamentos, principalmente se for gerar vários seguidos.
+    ORC_GRUPOS = [];
+    switchView('orcamento');
     return;
   } else {
     const tier = CDL_TIERS_PORTAL[ORC_PLANO_ESCOLHIDO];
@@ -5115,13 +5201,27 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
   }
 
   // anexa o PDF gerado direto no card, igual quando o simulador manda o orçamento do site
-  const pdfDataUrl = pdfInfo.doc.output('datauristring');
-  c.titular.anexos.push({
-    id: uid('anx'),
-    nome: pdfInfo.filename,
-    dataUrl: pdfDataUrl,
-    criadoEm: nowISO(),
-  });
+  let pdfUrlSalvoCdl = null;
+  try {
+    const empresaSlugUploadCdl = razaoSocial
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+    pdfUrlSalvoCdl = await uploadArquivoPortal(
+      pdfInfo.doc.output('blob'),
+      `orcamentos/${empresaSlugUploadCdl}-${uid('pdf')}.pdf`
+    );
+  } catch (e) {
+    console.warn('Não foi possível subir o PDF do orçamento pro Storage.', e);
+  }
+  if (pdfUrlSalvoCdl) {
+    c.titular.anexos.push({
+      id: uid('anx'),
+      nome: pdfInfo.filename,
+      dataUrl: pdfUrlSalvoCdl,
+      criadoEm: nowISO(),
+    });
+  }
 
   DB.clients.push(c);
   await registrarLog(
@@ -5130,8 +5230,11 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
   );
   await persist();
   pdfInfo.doc.save(pdfInfo.filename);
-  toast('Orçamento criado, PDF baixado e foi registrado no sistema.');
-  openClientModal(c.id);
+  toast('✓ Orçamento criado, PDF baixado e registrado no sistema.');
+  // Mesma lógica: gerar o PDF fica na própria tela de orçamento, sem pular
+  // pra outra tela — só "Implantar" deve navegar.
+  ORC_PLANO_ESCOLHIDO = null;
+  switchView('orcamento');
 }
 
 const AVATAR_PALETTE = [
