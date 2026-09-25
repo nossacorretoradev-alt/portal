@@ -1751,12 +1751,75 @@ window.storage = {
    ========================================================= */
 // Tenta de novo automaticamente quando a falha é de rede (ex: "Failed to fetch",
 // que costuma ser algo passageiro — extensão do navegador, rede instável etc.)
+// ─── Sessão do Supabase ────────────────────────────────────────────────────
+// O login vale ~1 hora. Antes, o portal nunca renovava: passado esse tempo,
+// com a aba aberta, TODO salvamento falhava (e aparecia só "verifique sua
+// conexão"). Agora a sessão é renovada sozinha com o refresh_token, alguns
+// minutos antes de vencer — e, se mesmo assim uma chamada voltar 401, renova
+// na hora e tenta de novo.
+let __refreshEmAndamento = null;
+function sessaoExpiraEmMs() {
+  const exp = Number(AUTH_SESSION?.expires_at || 0) * 1000;
+  return exp ? exp - Date.now() : null;
+}
+async function garantirSessaoValida(forcar) {
+  if (!AUTH_SESSION?.refresh_token) return !!AUTH_SESSION?.access_token;
+  const restante = sessaoExpiraEmMs();
+  if (!forcar && restante !== null && restante > 5 * 60 * 1000) return true;
+  if (__refreshEmAndamento) return __refreshEmAndamento;
+  __refreshEmAndamento = (async () => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+        method: 'POST',
+        headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: AUTH_SESSION.refresh_token }),
+      });
+      if (!res.ok) return false;
+      const nova = await res.json();
+      AUTH_SESSION = { ...AUTH_SESSION, ...nova };
+      if (!nova.expires_at && nova.expires_in)
+        AUTH_SESSION.expires_at = Math.floor(Date.now() / 1000) + Number(nova.expires_in);
+      sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(AUTH_SESSION));
+      return true;
+    } catch (e) {
+      console.warn('Não foi possível renovar a sessão.', e);
+      return false;
+    } finally {
+      // a atribuição de __refreshEmAndamento já aconteceu (o fetch acima é
+      // assíncrono), então dá pra liberar na hora — uma próxima renovação
+      // forçada precisa fazer uma chamada nova, não reaproveitar esta
+      __refreshEmAndamento = null;
+    }
+  })();
+  return __refreshEmAndamento;
+}
+// Troca o token no cabeçalho da chamada pelo mais recente (depois de renovar).
+function aplicarTokenAtual(options) {
+  if (options?.headers?.Authorization && AUTH_SESSION?.access_token) {
+    options.headers.Authorization = `Bearer ${AUTH_SESSION.access_token}`;
+  }
+  return options;
+}
+
 async function fetchComRetry(url, options, tentativas) {
   tentativas = tentativas || 3;
   let ultimoErro;
+  if (options?.headers?.Authorization) {
+    await garantirSessaoValida();
+    aplicarTokenAtual(options);
+  }
   for (let i = 0; i < tentativas; i++) {
     try {
-      return await fetch(url, options);
+      let res = await fetch(url, options);
+      // token venceu no meio do caminho (ex.: computador dormiu): renova e tenta de novo
+      if (
+        res.status === 401 &&
+        options?.headers?.Authorization &&
+        (await garantirSessaoValida(true))
+      ) {
+        res = await fetch(url, aplicarTokenAtual(options));
+      }
+      return res;
     } catch (e) {
       ultimoErro = e;
       if (i < tentativas - 1) {
@@ -2154,6 +2217,11 @@ function carimbarAutorDoHistorico() {
 }
 
 async function persist() {
+  if (!AUTH_SESSION?.access_token) {
+    // ninguém logado (ex.: logout em andamento) — não há como salvar
+    if (CURRENT_USER) avisarSessaoExpirada();
+    return;
+  }
   try {
     carimbarAutorDoHistorico();
     const payload = JSON.stringify(DB);
@@ -2186,8 +2254,26 @@ async function persist() {
     marcarHistoricoComoVisto();
   } catch (e) {
     console.warn('Não foi possível salvar no Supabase agora.', e);
-    toast('⚠️ Não foi possível salvar agora — verifique sua conexão.');
+    // 400/401 depois de tentar renovar = sessão realmente perdida
+    if (/failed: 40[01]/.test(e.message || '') && !(await garantirSessaoValida(true))) {
+      avisarSessaoExpirada();
+      return;
+    }
+    toast('Não foi possível salvar agora — verifique sua conexão.');
   }
+}
+
+let __avisoSessaoMostrado = false;
+function avisarSessaoExpirada() {
+  if (__avisoSessaoMostrado) return;
+  __avisoSessaoMostrado = true;
+  toast(
+    'Sua sessão expirou e a última alteração não foi salva. Faça login de novo para continuar.'
+  );
+  setTimeout(() => {
+    __avisoSessaoMostrado = false;
+    logout({ semSalvar: true });
+  }, 3500);
 }
 async function loadDB() {
   try {
@@ -2524,6 +2610,8 @@ async function doLogin() {
       );
     }
     AUTH_SESSION = await res.json();
+    if (!AUTH_SESSION.expires_at && AUTH_SESSION.expires_in)
+      AUTH_SESSION.expires_at = Math.floor(Date.now() / 1000) + Number(AUTH_SESSION.expires_in);
     sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(AUTH_SESSION));
     localStorage.removeItem('portal_login_guard');
     const profileRes = await fetch(
@@ -2576,9 +2664,26 @@ async function doLogin() {
   enterApp(true);
 }
 
-function logout() {
-  if (CURRENT_USER) {
-    registrarLog('Logout realizado').then(() => persist());
+async function logout(opts) {
+  // Registra o logout e salva ENQUANTO a sessão ainda vale. Antes isso rodava
+  // depois de apagar a sessão — o Supabase recusava (erro 400) e o registro
+  // se perdia. Limite de 4s pra nunca travar a saída.
+  if (CURRENT_USER && AUTH_SESSION?.access_token && !opts?.semSalvar) {
+    try {
+      await Promise.race([
+        (async () => {
+          await registrarLog('Logout realizado');
+          await persist();
+        })(),
+        new Promise((r) => setTimeout(r, 4000)),
+      ]);
+    } catch (e) {
+      console.warn('Não foi possível registrar o logout.', e);
+    }
+  }
+  if (window.__sessaoInterval) {
+    clearInterval(window.__sessaoInterval);
+    window.__sessaoInterval = null;
   }
   if (AUTH_SESSION?.access_token)
     fetch(`${SUPABASE_URL}/auth/v1/logout`, {
@@ -2656,6 +2761,17 @@ function enterApp(loginAgoraMesmo) {
   // se alguém mais salvou algo novo e, se sim, atualiza a tela na hora.
   if (window.__syncPollInterval) clearInterval(window.__syncPollInterval);
   window.__syncPollInterval = setInterval(sincronizarComOutrosUsuarios, 4000);
+
+  // Mantém a sessão sempre válida: confere a cada minuto (só chama o Supabase
+  // quando faltam menos de 5 min pra vencer) e ao voltar pra aba do portal.
+  if (window.__sessaoInterval) clearInterval(window.__sessaoInterval);
+  window.__sessaoInterval = setInterval(() => garantirSessaoValida(), 60 * 1000);
+  if (!window.__sessaoVisibilidade) {
+    window.__sessaoVisibilidade = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && AUTH_SESSION) garantirSessaoValida();
+    });
+  }
 }
 
 let __ultimaAssinaturaDB = null;
@@ -21791,9 +21907,14 @@ async function boot() {
   try {
     AUTH_SESSION = JSON.parse(sessionStorage.getItem(AUTH_SESSION_KEY) || 'null');
     if (AUTH_SESSION?.access_token) {
-      const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      await garantirSessaoValida();
+      let userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
         headers: supabaseHeaders(),
       });
+      // sessão vencida ao reabrir a aba: tenta renovar antes de mandar pro login
+      if (userRes.status === 401 && (await garantirSessaoValida(true))) {
+        userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: supabaseHeaders() });
+      }
       if (!userRes.ok) throw new Error('expired');
       const authUser = await userRes.json();
       const profileRes = await fetch(
