@@ -4553,6 +4553,12 @@ const ADESAO_STAGES = [
     color: '#8B5CF6',
   },
   {
+    id: 'assinatura',
+    label: 'Assinatura',
+    short: 'Assinatura',
+    color: '#D946EF',
+  },
+  {
     id: 'enviado',
     label: 'Implantação',
     short: 'Implantação',
@@ -4795,7 +4801,7 @@ async function verificarAssociacaoNoOrcamento() {
   const associado = await verificarCnpjAssociadoCdl(cnpj);
   ORC_JA_ASSOCIADA = associado === true;
   if (associado === true) {
-    statusEl.innerHTML = `${ICONS.check} <b>Já é associada da CDL Mossoró.</b>`;
+    statusEl.innerHTML = `<span style="display:inline-flex;width:15px;height:15px;flex-shrink:0;vertical-align:-2px;">${ICONS.check}</span> <b>Já é associada da CDL Mossoró.</b>`;
     statusEl.style.color = 'var(--success)';
     if (tierBlock) tierBlock.style.display = 'none';
   } else if (associado === false) {
@@ -5194,14 +5200,13 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
       `${razaoSocial} (plano de saúde · ${totalVidas} vidas)`
     );
     await persist();
-    pdfInfo.doc.save(pdfInfo.filename);
-    toast('✓ Orçamento gerado e enviado para Cliente Potencial no Pipeline.');
     // Fica na própria tela de orçamento — só o botão "Implantar" deve levar
     // pra outra tela. Gerar o PDF não deveria tirar quem está vendendo do
     // fluxo de orçamentos, principalmente se for gerar vários seguidos.
     ORC_GRUPOS = [];
     ORC_JA_ASSOCIADA = null;
     switchView('orcamento');
+    perguntarEnvioOrcamento(pdfInfo, pdfUrlSalvo, celular, nome);
     return;
   } else {
     const tier = CDL_TIERS_PORTAL[ORC_PLANO_ESCOLHIDO];
@@ -5285,12 +5290,38 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
     `${razaoSocial} (${ORC_MODE === 'plano' ? 'plano de saúde' : 'adesão CDL'})`
   );
   await persist();
-  pdfInfo.doc.save(pdfInfo.filename);
-  toast('✓ Orçamento criado, PDF baixado e registrado no sistema.');
   // Mesma lógica: gerar o PDF fica na própria tela de orçamento, sem pular
   // pra outra tela — só "Implantar" deve navegar.
   ORC_PLANO_ESCOLHIDO = null;
   switchView('orcamento');
+  perguntarEnvioOrcamento(pdfInfo, pdfUrlSalvoCdl, celular, nome);
+}
+
+// Depois de gerar o orçamento, pergunta numa janelinha: baixar o PDF ou
+// mandar pro cliente pelo WhatsApp (com o link do PDF salvo no Storage).
+let ORC_PDF_PENDENTE = null;
+function perguntarEnvioOrcamento(pdfInfo, pdfUrl, celular, nomeContato) {
+  ORC_PDF_PENDENTE = pdfInfo;
+  const numero = onlyDigits(celular || '');
+  const primeiroNome = (nomeContato || '').split(' ')[0];
+  const linkWpp =
+    numero && pdfUrl
+      ? `https://api.whatsapp.com/send?phone=55${numero}&text=${encodeURIComponent(`Olá ${primeiroNome}! Segue o orçamento do seu plano (CDL Mossoró × Unimed): ${pdfUrl}`)}`
+      : null;
+  openModalHTML(`<div class="modal modal-small"><div class="modal-head"><div class="mh-info"><div class="mh-name">Orçamento pronto</div><div class="mh-sub">Já ficou registrado no Pipeline. O que quer fazer com o PDF?</div></div><button class="modal-close" onclick="closeModal()">${ICONS.close}</button></div><div class="modal-body">
+    <div style="display:grid;gap:10px;">
+      <button class="btn-ghost" style="justify-content:center;padding:12px;" onclick="baixarOrcamentoPendente()">${ICONS.file} Baixar PDF</button>
+      ${
+        linkWpp
+          ? `<a class="wpp-btn" style="justify-content:center;padding:12px;" target="_blank" href="${linkWpp}" onclick="setTimeout(closeModal,300)">${ICONS.wpp} Enviar para o cliente pelo WhatsApp</a>`
+          : `<div style="font-size:11.5px;color:var(--text-muted);text-align:center;">${!numero ? 'Sem celular do cliente — não dá pra enviar pelo WhatsApp.' : 'Não foi possível salvar o PDF online agora — use "Baixar PDF" e anexe no WhatsApp manualmente.'}</div>`
+      }
+    </div>
+  </div></div>`);
+}
+function baixarOrcamentoPendente() {
+  if (ORC_PDF_PENDENTE) ORC_PDF_PENDENTE.doc.save(ORC_PDF_PENDENTE.filename);
+  closeModal();
 }
 
 const AVATAR_PALETTE = [
@@ -5709,6 +5740,178 @@ async function documentoParaBase64(dataUrl) {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ETAPA "ASSINATURA" — cliente e corretora assinam a Ficha Unimed pela
+// Autentique. O link do cliente pode ser mandado direto pelo WhatsApp.
+// ═══════════════════════════════════════════════════════════════════════
+function linkWhatsappCliente(c, mensagem) {
+  const numero = onlyDigits(c.titular.celular || '');
+  if (!numero) return null;
+  return `https://api.whatsapp.com/send?phone=55${numero}${mensagem ? `&text=${encodeURIComponent(mensagem)}` : ''}`;
+}
+
+function renderAbaAssinatura(c) {
+  const ficha = (c.titular.anexos || []).find((a) => a.nome === 'Ficha de Adesao Unimed.pdf');
+  if (!ficha) {
+    return `<div class="pendencia-banner">⚠️ A ficha ainda não foi preenchida. Volte na aba <b>Conferência</b> e preencha a ficha antes de mandar pra assinatura.</div>`;
+  }
+  const a = c.assinaturaFicha || {};
+  const temCelular = !!onlyDigits(c.titular.celular || '');
+  const blocoAssinante = (quem, titulo, nomeAssinante) => {
+    const s = a[quem];
+    const status = s?.completed
+      ? `<span class="status-pill ativo">✓ Assinado${s.confirmedAt ? ` em ${fmtDateTime(s.confirmedAt)}` : ''}</span>`
+      : s?.documentId
+        ? `<span class="status-pill inativo">Aguardando assinatura</span>`
+        : `<span class="status-pill inativo">Não enviado</span>`;
+    let acoes = '';
+    if (!s?.documentId) {
+      acoes = `<button class="btn-primary" id="assin_btn_${quem}" onclick="enviarFichaParaAssinatura('${c.id}','${quem}')">${ICONS.upload} Enviar para assinatura</button>`;
+    } else if (!s.completed) {
+      acoes = `
+        <button class="btn-ghost" onclick="consultarAssinaturaFicha('${c.id}','${quem}')">Conferir assinatura</button>
+        ${quem === 'cliente' && temCelular ? `<a class="wpp-btn" target="_blank" href="${linkWhatsappCliente(c, `Olá ${(c.titular.nome || '').split(' ')[0]}! Segue o link pra assinar a ficha do seu plano Unimed (CDL Mossoró): ${s.signUrl}`)}">${ICONS.wpp} Enviar link pelo WhatsApp</a>` : ''}
+        ${s.signUrl ? `<a class="btn-ghost" target="_blank" href="${s.signUrl}">Abrir link</a>` : ''}`;
+    }
+    return `
+      <div class="dep-card" style="margin-bottom:12px;border-left:4px solid ${s?.completed ? 'var(--success)' : 'var(--border)'};">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <div><b>${titulo}</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">${nomeAssinante || 'sem nome cadastrado'}</div></div>
+          ${status}
+        </div>
+        ${acoes ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">${acoes}</div>` : ''}
+      </div>`;
+  };
+  const tudoAssinado = a.cliente?.completed && a.corretora?.completed;
+  return `
+    ${tudoAssinado ? `<div class="pendencia-banner" style="background:var(--success-light);color:var(--success);border-color:transparent;margin-bottom:14px;">✓ Cliente e corretora assinaram. <button class="btn-primary" style="margin-left:8px;padding:6px 12px;font-size:11.5px;" onclick="setEtapaAdesao('enviado')">Avançar para Implantação</button></div>` : ''}
+    ${blocoAssinante('cliente', 'Cliente (titular)', c.titular.nome)}
+    ${blocoAssinante('corretora', 'Corretora', CURRENT_USER?.nome)}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+      ${temCelular ? `<a class="wpp-btn" target="_blank" href="${linkWhatsappCliente(c, `Olá ${(c.titular.nome || '').split(' ')[0]}, tudo bem?`)}">${ICONS.wpp} Falar com o cliente</a>` : `<span style="font-size:11.5px;color:var(--text-muted);">Cadastre o celular do titular (aba Pessoas) pra liberar o WhatsApp.</span>`}
+      <a class="btn-ghost" target="_blank" href="${ficha.dataUrl}">${ICONS.file} Ver ficha</a>
+    </div>
+  `;
+}
+
+async function enviarFichaParaAssinatura(clientId, quem) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  if (!c) return;
+  const ficha = (c.titular.anexos || []).find((a) => a.nome === 'Ficha de Adesao Unimed.pdf');
+  if (!ficha) {
+    toast('Preencha a ficha na aba Conferência primeiro.');
+    return;
+  }
+  const signatario =
+    quem === 'cliente'
+      ? {
+          nome: c.titular.nome,
+          email: c.titular.email,
+          celular: c.titular.celular,
+          cpf: c.titular.cpf,
+        }
+      : {
+          nome: CURRENT_USER?.nome,
+          email: CURRENT_USER?.email,
+          celular: CURRENT_USER?.celular || '',
+          cpf: CURRENT_USER?.cpf || '',
+        };
+  if (!signatario.nome || !signatario.email) {
+    toast(
+      quem === 'cliente'
+        ? 'Preencha nome e e-mail do titular (aba Pessoas) antes de enviar.'
+        : 'Seu usuário precisa ter nome e e-mail cadastrados pra assinar.'
+    );
+    return;
+  }
+  const btn = document.getElementById(`assin_btn_${quem}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Enviando...';
+  }
+  try {
+    const pdfBase64 = await documentoParaBase64(ficha.dataUrl);
+    const res = await fetch(AUTENTIQUE_CREATE_FUNCTION_URL, {
+      method: 'POST',
+      headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        nome: signatario.nome,
+        email: signatario.email,
+        celular: signatario.celular || '',
+        cpf: onlyDigits(signatario.cpf || ''),
+        pdfBase64,
+        tituloDocumento: `Ficha Unimed - ${c.titular.razaoSocial || c.titular.nome || ''} (${quem})`,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.documentId || !data.signUrl)
+      throw new Error(data.error || 'A Autentique não devolveu o link de assinatura.');
+    c.assinaturaFicha = c.assinaturaFicha || {};
+    c.assinaturaFicha[quem] = {
+      documentId: data.documentId,
+      signatureId: data.signatureId,
+      signUrl: data.signUrl,
+      status: data.status,
+      completed: false,
+      signerName: signatario.nome,
+      createdAt: nowISO(),
+    };
+    c.historico.push({
+      data: nowISO(),
+      texto: `Ficha Unimed enviada para assinatura (${quem === 'cliente' ? 'cliente' : 'corretora'}: ${signatario.nome}).`,
+    });
+    if (c.etapaAdesao === 'conferencia') c.etapaAdesao = 'assinatura';
+    await persist();
+    // Corretora assina na hora (abre o link); o link do cliente vai pelo WhatsApp.
+    if (quem === 'corretora') window.open(data.signUrl, '_blank', 'noopener');
+    renderClientModal();
+    toast(
+      quem === 'cliente'
+        ? '✓ Pronto. Agora é só mandar o link pro cliente pelo WhatsApp.'
+        : '✓ Link de assinatura da corretora aberto.'
+    );
+  } catch (e) {
+    toast(e.message || 'Não foi possível enviar pra assinatura agora.');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Enviar para assinatura';
+    }
+  }
+}
+
+async function consultarAssinaturaFicha(clientId, quem) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  const s = c?.assinaturaFicha?.[quem];
+  if (!s?.documentId) return;
+  try {
+    const res = await fetch(AUTENTIQUE_STATUS_FUNCTION_URL, {
+      method: 'POST',
+      headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ documentId: s.documentId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Não foi possível consultar a assinatura.');
+    Object.assign(s, {
+      status: data.status,
+      completed: !!data.completed,
+      signedFile: data.signedFile || null,
+      lastUpdateAt: data.lastUpdateAt,
+      confirmedAt: data.completed ? s.confirmedAt || nowISO() : null,
+    });
+    if (data.completed) {
+      c.historico.push({
+        data: nowISO(),
+        texto: `Assinatura da ficha confirmada (${quem === 'cliente' ? 'cliente' : 'corretora'}).`,
+      });
+    }
+    await persist();
+    renderClientModal();
+    toast(data.completed ? '✓ Assinatura confirmada.' : 'Ainda aguardando assinatura.');
+  } catch (e) {
+    toast(e.message || 'Não foi possível consultar a assinatura agora.');
+  }
 }
 
 function abrirAssinaturaDocumento(alvoTipo, depIndex, slotKey) {
@@ -6442,27 +6645,27 @@ function renderClientModal() {
       </div>
     `;
   } else if (ACTIVE_PERSON_TAB === 'conferencia') {
+    // Conferência agora é só uma coisa: preencher a ficha. Checklist e
+    // Layout Unimed saíram daqui — o Layout foi pra aba Implantação, que é
+    // onde ele é usado (no envio pra Unimed).
     const fichaFeita = temAnexoChamado(c, 'Ficha de Adesao Unimed.pdf');
-    const dsFeita = temAnexoChamado(c, 'Declaracao de Saude e RC.pdf');
     tabContent = `
-      ${!dsFeita ? `<div class="pendencia-banner" style="margin-bottom:14px;">⚠️ O questionário de risco ainda não foi preenchido — recomendamos preencher ele primeiro (aba "Questionário"), os dados de lá ajudam a preencher a Ficha Unimed.</div>` : ''}
-      <div class="dep-card" style="display:grid;gap:10px;">
-        ${['Documentos pessoais conferidos', 'Questionários de risco individuais conferidos', 'Ficha Unimed gerada e conferida', 'Layout Unimed exportado e conferido', 'Todos os anexos do lead revisados'].map((txt, i) => `<label style="display:flex;gap:10px;align-items:center;font-size:12.5px;font-weight:600;"><input type="checkbox" ${c.conferenciaChecklist && c.conferenciaChecklist[i] ? 'checked' : ''} onchange="toggleConferenciaItem(${i},this.checked)"> ${txt}</label>`).join('')}
+      <div class="doc-actions-grid" style="grid-template-columns:1fr;">
+        <button type="button" class="doc-action-card" onclick="openFichaUnimedModal()"><span class="doc-icon">${ICONS.clipboard}</span><span class="doc-text">Ficha Unimed<small>${fichaFeita ? '✓ Preenchida — clique pra revisar' : 'Preencher a proposta de adesão'}</small></span></button>
       </div>
-      <div class="doc-actions-grid" style="margin-top:14px;">
-        <button type="button" class="doc-action-card" onclick="openFichaUnimedModal()"><span class="doc-icon">${ICONS.clipboard}</span><span class="doc-text">Ficha Unimed<small>${fichaFeita ? 'Gerada — revisar' : 'Gerar proposta de adesão'}</small></span></button>
-        <button type="button" class="doc-action-card" onclick="exportarLayoutUnimed()"><span class="doc-icon">${ICONS.upload}</span><span class="doc-text">Layout Unimed (.xlsx)<small>Gerar e revisar antes do envio</small></span></button>
-      </div>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">Dê OK item por item. Na etapa seguinte, o envio para a Unimed deve levar ficha, layout e todos os anexos do lead.</p>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">${fichaFeita ? 'Ficha pronta. Na próxima etapa (Assinatura), cliente e corretora assinam pela Autentique.' : 'Preencha a ficha. Depois disso, ela segue para assinatura na próxima etapa.'}</p>
     `;
+  } else if (ACTIVE_PERSON_TAB === 'assinatura') {
+    tabContent = renderAbaAssinatura(c);
   } else if (ACTIVE_PERSON_TAB === 'enviado') {
     const aditivoFeito = temAnexoChamado(c, 'Aditivo RC.pdf');
     tabContent = `
-      <div class="doc-actions-grid" style="grid-template-columns:1fr;margin-bottom:16px;">
+      <div class="doc-actions-grid" style="margin-bottom:16px;">
         <button type="button" class="doc-action-card" onclick="openAditivoRcModal()">
           <span class="doc-icon">${ICONS.clipboard}</span>
           <span class="doc-text">Aditivo de Redução de Carência (RC)<small>Preenche automaticamente e deixa pronto pra baixar</small></span>
         </button>
+        <button type="button" class="doc-action-card" onclick="exportarLayoutUnimed()"><span class="doc-icon">${ICONS.upload}</span><span class="doc-text">Layout Unimed (.xlsx)<small>Gerar e revisar antes do envio</small></span></button>
       </div>
       <div style="margin-bottom:16px;">${aditivoFeito ? `<span class="status-pill ativo">✓ Aditivo já gerado</span>` : `<span class="status-pill inativo">Aditivo ainda não gerado</span>`}</div>
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
@@ -6527,6 +6730,10 @@ function renderClientModal() {
     {
       id: 'conferencia',
       label: 'Conferência',
+    },
+    {
+      id: 'assinatura',
+      label: 'Assinatura',
     },
     {
       id: 'enviado',
@@ -8265,9 +8472,9 @@ async function gerarFichaUnimed() {
     texto: 'Ficha de Adesão Unimed (PME III) preenchida e anexada.',
   });
   await persist();
-  ACTIVE_PERSON_TAB = 'documentacao';
+  ACTIVE_PERSON_TAB = 'conferencia';
   renderClientModal();
-  toast('Ficha de Adesão Unimed gerada e anexada ao Titular.');
+  toast('✓ Ficha preenchida. Próximo passo: Assinatura.');
 }
 
 /* ---------- ADITIVO DE REDUÇÃO DE CARÊNCIA (RC 58 / RC 90) ---------- */
