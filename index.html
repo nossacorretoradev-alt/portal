@@ -1670,11 +1670,14 @@ function supabaseHeaders(extra) {
 // um link assinado (válido por bastante tempo) pra usar como anexo — em vez
 // de guardar o arquivo inteiro em base64 dentro do banco, o que deixava os
 // registros gigantes e dava erro na hora de baixar.
-async function uploadArquivoPortal(blob, caminho) {
+async function uploadArquivoPortal(blob, caminho, contentType) {
   const uploadUrl = `${SUPABASE_URL}/storage/v1/object/portal-files/${caminho}`;
   const res = await fetch(uploadUrl, {
     method: 'POST',
-    headers: supabaseHeaders({ 'Content-Type': 'application/pdf', 'x-upsert': 'true' }),
+    headers: supabaseHeaders({
+      'Content-Type': contentType || blob.type || 'application/pdf',
+      'x-upsert': 'true',
+    }),
     body: blob,
   });
   if (!res.ok) {
@@ -3301,27 +3304,18 @@ async function verificarCnpjAssociadoCdl(cnpj) {
 // de guardar o arquivo inteiro (em base64) dentro do banco, o que deixava
 // o registro gigante e dava erro na hora de baixar. Só guarda os DADOS
 // (nomes, planos, quantidades), e monta o PDF de novo sempre que precisar.
-function baixarOrcamentoPipeline(id) {
-  const l = DB.pipeline.find((x) => x.id === id);
-  if (!l || !(l.gruposOrcamento || []).length) {
-    toast('Esse lead não tem um orçamento salvo pra baixar.');
-    return;
-  }
+function montarPdfOrcamento(dadosCliente, grupos) {
   const linhas = [];
   let total = 0;
-  l.gruposOrcamento.forEach((g) => {
+  grupos.forEach((g) => {
     const plano = PLAN_VALUES_PORTAL[g.planoKey];
     const vidas = 1 + (Number(g.quantidadeDependentes) || 0);
     const subtotal = plano ? plano.valor * vidas : 0;
     total += subtotal;
     linhas.push([g.titular, g.plano, String(vidas), formatBRL(subtotal)]);
   });
-  const pdfInfo = gerarOrcamentoPDFPortal({
-    razaoSocial: l.empresa || l.nome || '',
-    cnpj: l.cnpj || '',
-    nome: l.nome || '',
-    celular: l.celular || '',
-    email: l.email || '',
+  return gerarOrcamentoPDFPortal({
+    ...dadosCliente,
     tipoArquivo: 'plano-saude',
     titulo: 'Orçamento — Plano de Saúde Unimed',
     secaoTitulo: 'Titulares e planos',
@@ -3331,6 +3325,43 @@ function baixarOrcamentoPipeline(id) {
     observacao:
       'Cada titular pode possuir plano próprio e seus dependentes permanecem vinculados ao mesmo grupo. Valores sujeitos a análise cadastral e confirmação da Unimed.',
   });
+}
+// Reconstrói o PDF do orçamento na hora, a partir dos grupos salvos.
+function baixarOrcamentoPipeline(id) {
+  const l = DB.pipeline.find((x) => x.id === id);
+  if (!l || !(l.gruposOrcamento || []).length) {
+    toast('Esse lead não tem um orçamento salvo pra baixar.');
+    return;
+  }
+  const pdfInfo = montarPdfOrcamento(
+    {
+      razaoSocial: l.empresa || l.nome || '',
+      cnpj: l.cnpj || '',
+      nome: l.nome || '',
+      celular: l.celular || '',
+      email: l.email || '',
+    },
+    l.gruposOrcamento
+  );
+  pdfInfo.doc.save(pdfInfo.filename);
+}
+function baixarOrcamentoCliente(clientId) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  const grupos = c?.gruposOrcamento || [];
+  if (!grupos.length) {
+    toast('Esse cliente não tem os dados do orçamento salvos.');
+    return;
+  }
+  const pdfInfo = montarPdfOrcamento(
+    {
+      razaoSocial: c.titular.razaoSocial || '',
+      cnpj: c.titular.cnpj || '',
+      nome: c.titular.nome || '',
+      celular: c.titular.celular || '',
+      email: c.titular.email || '',
+    },
+    grupos
+  );
   pdfInfo.doc.save(pdfInfo.filename);
 }
 
@@ -3744,6 +3775,9 @@ async function converterPipelineParaImplantacao(l) {
       })
     ),
     anexosLead: [...(l.anexos || [])],
+    // leva os dados do orçamento junto — assim dá pra gerar o PDF de novo
+    // na aba Anexos a qualquer hora, mesmo que o arquivo original se perca
+    gruposOrcamento: l.gruposOrcamento || [],
     associadoValidado: true,
     associadoValidadoEm: l.associadoValidadoEm,
     planoEscolhido: l.planoInteresse || '',
@@ -5107,6 +5141,7 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
         status: 'ativo',
         origemSite: false,
         numeroLead: DB.leadCounter,
+        gruposOrcamento: idx === 0 ? gruposSalvos : [],
         etapaAdesao: 'nova',
         pendencia: {
           ativa: false,
@@ -5746,6 +5781,163 @@ async function documentoParaBase64(dataUrl) {
 // ETAPA "ASSINATURA" — cliente e corretora assinam a Ficha Unimed pela
 // Autentique. O link do cliente pode ser mandado direto pelo WhatsApp.
 // ═══════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════
+// ABA ANEXOS — todos os arquivos da empresa num lugar só (orçamento, ficha,
+// fichas assinadas, documentos da empresa e de cada pessoa, anexos que
+// vieram do Pipeline), pra baixar a qualquer hora.
+// ═══════════════════════════════════════════════════════════════════════
+let ANEXOS_VISIVEIS = [];
+function coletarAnexosDaEmpresa(c) {
+  const titulares = c.empresaId ? getTitularesDaEmpresa(c.empresaId) : [c];
+  if (!titulares.some((x) => x.id === c.id)) titulares.unshift(c);
+  const emp = getEmpresaDoCliente(c);
+  const grupos = [];
+  const vistos = new Set();
+  const add = (lista, nome, url, extra) => {
+    if (!url || vistos.has(url)) return;
+    vistos.add(url);
+    lista.push({ nome: nome || 'arquivo', url, ...(extra || {}) });
+  };
+  const addDoc = (lista, d) => {
+    if (!d) return;
+    add(lista, d.nome, d.dataUrl, { criadoEm: d.criadoEm });
+    if (d.assinaturaDigital?.completed && d.assinaturaDigital.signedFile)
+      add(lista, `${d.nome} (assinado)`, d.assinaturaDigital.signedFile);
+  };
+
+  const docsEmpresa = [];
+  Object.values(emp?.documentos || {}).forEach((d) => addDoc(docsEmpresa, d));
+  if (docsEmpresa.length)
+    grupos.push({ titulo: `Empresa — ${emp.razaoSocial || ''}`, itens: docsEmpresa });
+
+  titulares.forEach((x) => {
+    const itens = [];
+    (x.titular.anexos || []).forEach((d) => addDoc(itens, d));
+    Object.values(x.titular.documentos || {}).forEach((d) => addDoc(itens, d));
+    const af = x.assinaturaFicha || {};
+    if (af.cliente?.signedFile)
+      add(itens, 'Ficha Unimed (assinada pelo cliente)', af.cliente.signedFile);
+    if (af.corretora?.signedFile)
+      add(itens, 'Ficha Unimed (assinada pela corretora)', af.corretora.signedFile);
+    (x.anexosLead || []).forEach((d) =>
+      addDoc(itens, { ...d, nome: `${d.nome} (veio do Pipeline)` })
+    );
+    (x.dependentes || []).forEach((dep, i) => {
+      const quem = dep.nome || `Dependente ${i + 1}`;
+      (dep.anexos || []).forEach((d) => addDoc(itens, { ...d, nome: `${quem} — ${d.nome}` }));
+      Object.values(dep.documentos || {}).forEach((d) =>
+        addDoc(itens, { ...d, nome: `${quem} — ${d.nome}` })
+      );
+    });
+    grupos.push({
+      titulo: `Titular — ${x.titular.nome || 'sem nome'}`,
+      clientId: x.id,
+      temOrcamento: (x.gruposOrcamento || []).length > 0,
+      itens,
+    });
+  });
+  return grupos;
+}
+
+function contarAnexosDaEmpresa(c) {
+  return coletarAnexosDaEmpresa(c).reduce((n, g) => n + g.itens.length, 0);
+}
+
+function renderAbaAnexos(c) {
+  const grupos = coletarAnexosDaEmpresa(c);
+  ANEXOS_VISIVEIS = [];
+  const linha = (item) => {
+    const idx = ANEXOS_VISIVEIS.push(item) - 1;
+    return `<div class="doc-slot-row">
+      <span class="doc-slot-icon ok">${ICONS.file}</span>
+      <span class="doc-slot-label">${item.nome}${item.criadoEm ? `<small style="display:block;color:var(--text-faint);font-weight:500;">${fmtDateTime(item.criadoEm)}</small>` : ''}</span>
+      <button class="btn-ghost" style="padding:5px 10px;font-size:11px;" onclick="abrirAnexoVisivel(${idx})">Abrir</button>
+      <button class="btn-primary" style="padding:5px 10px;font-size:11px;" onclick="baixarAnexoVisivel(${idx})">Baixar</button>
+    </div>`;
+  };
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+      <div style="font-size:12px;color:var(--text-muted);">Todos os arquivos desta empresa, de todos os titulares e dependentes.</div>
+      <label class="btn-ghost" style="cursor:pointer;">${ICONS.upload} Anexar arquivo<input type="file" multiple style="display:none;" onchange="anexarArquivoAbaAnexos(event)"></label>
+    </div>
+    ${grupos
+      .map(
+        (g) => `
+      <div class="anexo-person-block">
+        <div class="anexo-person-head"><span><b>${g.titulo}</b></span></div>
+        ${g.temOrcamento ? `<div class="doc-slot-row"><span class="doc-slot-icon ok">${ICONS.clipboard}</span><span class="doc-slot-label">Orçamento (PDF atualizado)</span><button class="btn-primary" style="padding:5px 10px;font-size:11px;" onclick="baixarOrcamentoCliente('${g.clientId}')">Baixar</button></div>` : ''}
+        ${g.itens.map(linha).join('') || (g.temOrcamento ? '' : '<div style="font-size:12px;color:var(--text-faint);padding:6px 0;">Nenhum arquivo ainda.</div>')}
+      </div>`
+      )
+      .join('')}
+  `;
+}
+
+function abrirAnexoVisivel(idx) {
+  const item = ANEXOS_VISIVEIS[idx];
+  if (!item) return;
+  if (/^data:/i.test(item.url)) {
+    // data: URL não abre direto em aba nova em alguns navegadores — converte
+    fetch(item.url)
+      .then((r) => r.blob())
+      .then((b) => window.open(URL.createObjectURL(b), '_blank'));
+  } else window.open(item.url, '_blank', 'noopener');
+}
+
+async function baixarAnexoVisivel(idx) {
+  const item = ANEXOS_VISIVEIS[idx];
+  if (!item) return;
+  try {
+    const res = await fetch(item.url);
+    if (!res.ok) throw new Error('falha ' + res.status);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = /\.[a-z0-9]{2,5}$/i.test(item.nome) ? item.nome : item.nome + '.pdf';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) {
+    // se o download direto não der (link expirado, bloqueio do navegador),
+    // pelo menos abre o arquivo pra salvar manualmente
+    window.open(item.url, '_blank', 'noopener');
+  }
+}
+
+async function anexarArquivoAbaAnexos(event) {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const files = Array.from(event.target.files || []);
+  if (!c || !files.length) return;
+  c.titular.anexos = c.titular.anexos || [];
+  toast('Enviando arquivo(s)...');
+  for (const f of files) {
+    let url = null;
+    try {
+      const nomeSeguro = f.name
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9._-]+/g, '-');
+      url = await uploadArquivoPortal(f, `anexos/${c.id}/${uid('f')}-${nomeSeguro}`, f.type);
+    } catch (e) {
+      // sem Storage disponível, guarda do jeito antigo pra não perder o arquivo
+      url = await new Promise((res) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.readAsDataURL(f);
+      });
+    }
+    c.titular.anexos.push({ id: uid('anx'), nome: f.name, dataUrl: url, criadoEm: nowISO() });
+  }
+  c.historico.push({
+    data: nowISO(),
+    texto: `${files.length} arquivo(s) anexado(s) na aba Anexos.`,
+  });
+  await persist();
+  renderClientModal();
+  toast('✓ Arquivo(s) anexado(s).');
+}
+
 function linkWhatsappCliente(c, mensagem) {
   const numero = onlyDigits(c.titular.celular || '');
   if (!numero) return null;
@@ -6657,6 +6849,8 @@ function renderClientModal() {
     `;
   } else if (ACTIVE_PERSON_TAB === 'assinatura') {
     tabContent = renderAbaAssinatura(c);
+  } else if (ACTIVE_PERSON_TAB === 'anexos') {
+    tabContent = renderAbaAnexos(c);
   } else if (ACTIVE_PERSON_TAB === 'enviado') {
     const aditivoFeito = temAnexoChamado(c, 'Aditivo RC.pdf');
     tabContent = `
@@ -6739,6 +6933,10 @@ function renderClientModal() {
       id: 'enviado',
       label: 'Implantação',
     },
+    {
+      id: 'anexos',
+      label: `Anexos (${contarAnexosDaEmpresa(c)})`,
+    },
   ];
 
   openModalHTML(`
@@ -6762,6 +6960,13 @@ function renderClientModal() {
           ${stageTrackerHTML}
         </div>
 
+        <div style="display:flex;justify-content:flex-end;margin:-6px 0 12px;">
+          ${
+            ACTIVE_PERSON_TAB === 'anexos'
+              ? `<button class="btn-ghost" onclick="switchPersonTab('${c.etapaAdesao}')">← Voltar para a etapa atual (${stageLabel(c.etapaAdesao)})</button>`
+              : `<button class="btn-ghost" onclick="switchPersonTab('anexos')">${ICONS.file} Anexos (${contarAnexosDaEmpresa(c)})</button>`
+          }
+        </div>
         <div class="journey-tab-content">
           ${
             ACTIVE_PERSON_TAB === 'documentacao'
