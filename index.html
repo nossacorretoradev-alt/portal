@@ -3212,7 +3212,9 @@ function viewPipeline() {
             (l) => `<div class="kanban-card" onclick="openPipelineLeadModal('${l.id}')">
         <div class="kc-top"><div class="kc-avatar" style="background:${avatarColor(l.empresa || l.nome)}">${initials(l.nome || l.empresa)}</div><div class="kc-name">${l.empresa || l.nome || 'Lead'}</div></div>
         <div class="kc-sub">${l.nome || '—'} · ${maskPhone(l.celular || '') || '—'}</div>
+        <div class="kc-sub" style="margin-top:3px;">Vendedor: <b>${(DB.users || []).find((u) => u.id === l.vendedorId)?.nome || '—'}</b></div>
         ${l.planoInteresse ? `<div class="kc-plan-tag">${l.planoInteresse}</div>` : ''}
+        ${localizarCardsDaEmpresa(l.cnpj, { pipelineId: l.id }).length ? `<div style="margin-top:8px;font-size:11px;font-weight:700;color:var(--warning);">⚠️ Empresa já tem outro card</div>` : ''}
         <div style="display:flex;gap:7px;margin-top:10px;" onclick="event.stopPropagation()">
           ${l.celular ? `<a class="wpp-btn" target="_blank" href="https://api.whatsapp.com/send?phone=55${onlyDigits(l.celular)}">${ICONS.wpp} WhatsApp</a>` : ''}
           <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="openPipelineLeadModal('${l.id}')">Comentários</button>
@@ -3243,11 +3245,22 @@ function openPipelineLeadModal(id, isNew) {
       criadoEm: nowISO(),
       vendedorId: CURRENT_USER?.id || null,
       criadoPorNome: CURRENT_USER?.nome || null,
+      __rascunho: true, // ainda não foi salvo — não conta como card existente
     };
     DB.pipeline.push(l);
   }
   if (!l) return;
   openModalHTML(`<div class="modal"><div class="modal-head"><div class="mh-info"><div class="mh-name">${l.empresa || l.nome || 'Novo lead'}</div><div class="mh-sub">Triagem SDR</div></div><button class="modal-close" onclick="closeModal();switchView('pipeline')">${ICONS.close}</button></div><div class="modal-body">
+    ${(() => {
+      const outros = l.__rascunho ? [] : localizarCardsDaEmpresa(l.cnpj, { pipelineId: l.id });
+      return outros.length
+        ? `<div class="pendencia-banner" style="margin-bottom:14px;">⚠️ <b>Essa empresa já tem card:</b> ${textoCardsDaEmpresa(outros)}.${l.origemSite ? ' Este lead chegou pelo simulador, por isso não foi travado.' : ''} <button class="btn-ghost" style="margin-left:6px;padding:4px 10px;font-size:11px;" onclick="abrirCardExistente('${outros[0].tipo}','${outros[0].id}')">Abrir o outro card</button></div>`
+        : '';
+    })()}
+    <div class="dep-card" style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div><b style="font-size:12.5px;">Vendedor responsável</b><div style="font-size:11px;color:var(--text-muted);margin-top:2px;">É quem recebe a comissão desta venda.</div></div>
+      ${selectVendedorResponsavel(l.vendedorId || '', `setVendedorPipeline('${l.id}', this.value)`)}
+    </div>
     <div class="field-grid">
       <div class="fg">
         <label>Empresa <span class="opt">(busque uma já cadastrada ou digite uma nova)</span></label>
@@ -3311,8 +3324,10 @@ function openPipelineLeadModal(id, isNew) {
     <div class="modal-section-title" style="margin-top:20px">Anexos do lead (${(l.anexos || []).length})</div>
     <div class="attachment-list">${(l.anexos || []).map((a, i) => `<span class="attachment-chip">${ICONS.file}${a.nome}<a href="${a.dataUrl}" target="_blank" style="color:inherit;display:flex;">${ICONS.upload}</a><button onclick="removePipelineAnexo('${l.id}',${i})">${ICONS.close}</button></span>`).join('') || '<span style="font-size:12px;color:var(--text-faint)">Nenhum anexo recebido.</span>'}</div>
     <label class="btn-ghost" style="margin-top:10px;padding:7px 11px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Adicionar anexos<input type="file" multiple style="display:none" onchange="addPipelineAnexos('${l.id}',event)"></label>
-    <div class="modal-section-title" style="margin-top:20px">Membros do lead</div>
-    <div style="max-height:150px;overflow:auto" onchange="atualizarMembrosPipelineLead('${l.id}')">${membrosCheckboxes(l.membrosIds || (l.vendedorId ? [l.vendedorId] : []))}</div>
+    <details style="margin-top:20px;">
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--navy);">Membros do lead (${(l.membrosIds || (l.vendedorId ? [l.vendedorId] : [])).length}) — clique pra ver ou alterar</summary>
+      <div style="max-height:150px;overflow:auto;margin-top:8px;" onchange="atualizarMembrosPipelineLead('${l.id}')">${membrosCheckboxes(l.membrosIds || (l.vendedorId ? [l.vendedorId] : []))}</div>
+    </details>
     <div class="modal-section-title" style="margin-top:20px">Comentários</div>
     <div class="history-list" style="max-height:180px">${
       (l.comentarios || [])
@@ -3761,8 +3776,19 @@ async function atualizarMembrosPipelineLead(id) {
 async function savePipelineLead(id) {
   const l = DB.pipeline.find((x) => x.id === id);
   if (!l) return;
+  const cnpjDigitado = onlyDigits(document.getElementById('pl_cnpj').value);
+  // Trava duplicado: lead novo, ou CNPJ trocado, pra uma empresa que já tem card.
+  if (l.__rascunho || cnpjDigitado !== onlyDigits(l.cnpj || '')) {
+    const achados = localizarCardsDaEmpresa(cnpjDigitado, { pipelineId: l.id });
+    if (achados.length) {
+      if (l.__rascunho) DB.pipeline = DB.pipeline.filter((x) => x.id !== l.id);
+      avisarEmpresaJaExiste(achados, 'Não dá pra criar outro lead pra ela.');
+      return;
+    }
+  }
+  delete l.__rascunho;
   l.empresa = document.getElementById('pl_empresa').value.trim();
-  l.cnpj = onlyDigits(document.getElementById('pl_cnpj').value);
+  l.cnpj = cnpjDigitado;
   l.nome = document.getElementById('pl_nome').value.trim();
   l.celular = onlyDigits(document.getElementById('pl_celular').value);
   l.email = document.getElementById('pl_email').value.trim();
@@ -3784,10 +3810,198 @@ async function savePipelineLead(id) {
   switchView('pipeline');
   toast('Lead salvo.');
 }
+// ═══════════════════════════════════════════════════════════════════════
+// VENDEDOR RESPONSÁVEL — quem ganha a comissão do card. Aparece no Pipeline e
+// na Implantação; só administrador troca. Na Implantação vale pro card
+// inteiro (todos os titulares da empresa com o mesmo nº de lead).
+// ═══════════════════════════════════════════════════════════════════════
+function vendedoresElegiveis() {
+  return (DB.users || []).filter((u) => u.ativo && (u.papel === 'vendedor' || u.codigoVendedor));
+}
+function selectVendedorResponsavel(valorAtual, onchange) {
+  const lista = vendedoresElegiveis();
+  const atual = (DB.users || []).find((u) => u.id === valorAtual);
+  if (!isAdmin()) {
+    return `<b>${atual ? atual.nome : 'Sem vendedor'}</b>`;
+  }
+  const opcoes = lista.some((u) => u.id === valorAtual) || !atual ? lista : lista.concat([atual]);
+  return `<select style="min-width:200px;" onchange="${onchange}">
+    <option value="">Sem vendedor (sem comissão)</option>
+    ${opcoes.map((u) => `<option value="${u.id}" ${u.id === valorAtual ? 'selected' : ''}>${u.nome}${u.codigoVendedor ? ` · cód. ${u.codigoVendedor}` : ''}</option>`).join('')}
+  </select>`;
+}
+function titularesDoMesmoCard(c) {
+  if (!c.empresaId) return [c];
+  const lista = getTitularesDaEmpresa(c.empresaId).filter(
+    (x) => !c.numeroLead || x.numeroLead === c.numeroLead
+  );
+  return lista.length ? lista : [c];
+}
+function vendedorResponsavelDoCard(c) {
+  return (c.vendedores || [])[0]?.vendedorId || '';
+}
+
+async function setVendedorPipeline(leadId, vendedorId) {
+  if (!isAdmin()) return;
+  const l = DB.pipeline.find((x) => x.id === leadId);
+  if (!l) return;
+  const antes = (DB.users || []).find((u) => u.id === l.vendedorId)?.nome || 'sem vendedor';
+  const depois = (DB.users || []).find((u) => u.id === vendedorId)?.nome || 'sem vendedor';
+  l.vendedorId = vendedorId || null;
+  l.comentarios = l.comentarios || [];
+  l.comentarios.push({
+    data: nowISO(),
+    texto: `Vendedor responsável alterado de ${antes} para ${depois}.`,
+    usuario: CURRENT_USER?.nome || '',
+  });
+  await persist();
+  openPipelineLeadModal(leadId);
+  toast('✓ Vendedor responsável atualizado.');
+}
+
+async function setVendedorImplantacao(clientId, vendedorId) {
+  if (!isAdmin()) return;
+  const c = DB.clients.find((x) => x.id === clientId);
+  if (!c) return;
+  const card = titularesDoMesmoCard(c);
+  const ids = card.map((x) => x.id);
+  // Não troca por baixo de uma comissão que já tem dinheiro envolvido.
+  const lancado = (DB.comissaoLancamentos || []).find(
+    (lan) => ids.includes(lan.clienteId) && lan.vendedorId !== vendedorId
+  );
+  const pago = card.some((x) =>
+    (x.vendedores || []).some((v) => v.vendedorId !== vendedorId && (v.pagamentos || []).length)
+  );
+  if (lancado || pago) {
+    const nome =
+      (DB.users || []).find((u) => u.id === (lancado?.vendedorId || vendedorResponsavelDoCard(c)))
+        ?.nome || 'outro vendedor';
+    toast(
+      `Já existe comissão lançada para ${nome} neste card. Ajuste na tela de Comissões antes de trocar o vendedor.`
+    );
+    renderClientModal();
+    return;
+  }
+  const antes =
+    (DB.users || []).find((u) => u.id === vendedorResponsavelDoCard(c))?.nome || 'sem vendedor';
+  const depois = (DB.users || []).find((u) => u.id === vendedorId)?.nome || 'sem vendedor';
+  card.forEach((x) => {
+    x.vendedores = vendedorId ? [{ vendedorId, percentual: 100, pagamentos: [] }] : [];
+    x.historico = x.historico || [];
+    x.historico.push({
+      data: nowISO(),
+      texto: `Vendedor responsável alterado de ${antes} para ${depois}.`,
+    });
+  });
+  await persist();
+  renderClientModal();
+  toast('✓ Vendedor responsável atualizado em todo o card.');
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// EMPRESA DUPLICADA — procura se já existe card dessa empresa (mesmo CNPJ)
+// no Pipeline ou na Implantação. Dentro do portal, isso trava a criação de um
+// card novo; leads que chegam pelo simulador não são travados (quem cria é o
+// cliente), só ganham um aviso no card.
+// ═══════════════════════════════════════════════════════════════════════
+function localizarCardsDaEmpresa(cnpj, ignorar) {
+  const alvo = onlyDigits(cnpj || '');
+  if (alvo.length !== 14) return [];
+  ignorar = ignorar || {};
+  const achados = [];
+  (DB.pipeline || []).forEach((l) => {
+    if (l.id === ignorar.pipelineId || l.__rascunho) return;
+    if (onlyDigits(l.cnpj || '') !== alvo) return;
+    const etapa = PIPELINE_STAGES.find((st) => st.id === l.etapa)?.label || l.etapa || '';
+    achados.push({
+      tipo: 'pipeline',
+      id: l.id,
+      nome: l.empresa || l.nome || '',
+      descricao: `no Pipeline — etapa "${etapa}"`,
+    });
+  });
+  const cardsImplantacao = new Map(); // um aviso por card (vários titulares = mesmo card)
+  (DB.clients || []).forEach((c) => {
+    if ((ignorar.clientIds || []).includes(c.id) || c.status === 'inativo') return;
+    const emp = (DB.empresas || []).find((e) => e.id === c.empresaId);
+    if (onlyDigits(c.titular?.cnpj || emp?.cnpj || '') !== alvo) return;
+    const chave = `${c.empresaId}|${c.numeroLead || c.id}`;
+    if (cardsImplantacao.has(chave)) return;
+    cardsImplantacao.set(chave, {
+      tipo: 'implantacao',
+      id: c.id,
+      nome: c.titular?.razaoSocial || emp?.razaoSocial || c.titular?.nome || '',
+      descricao:
+        c.etapaAdesao === 'ativo'
+          ? `já é cliente ativo — lead nº ${c.numeroLead || '—'}`
+          : `na Implantação — etapa "${stageLabel(c.etapaAdesao)}", lead nº ${c.numeroLead || '—'}`,
+    });
+  });
+  return achados.concat([...cardsImplantacao.values()]);
+}
+
+function textoCardsDaEmpresa(achados) {
+  return achados.map((a) => `${a.nome || 'Empresa'} ${a.descricao}`).join('; ');
+}
+
+// Janela de aviso que trava a criação e oferece abrir o card que já existe.
+function avisarEmpresaJaExiste(achados, acaoBloqueada, voltarParaClientId) {
+  openModalHTML(`<div class="modal modal-small"><div class="modal-head"><div class="mh-info"><div class="mh-name">Essa empresa já tem card</div><div class="mh-sub">${acaoBloqueada}</div></div><button class="modal-close" onclick="closeModal()">${ICONS.close}</button></div><div class="modal-body">
+    <div class="pendencia-banner" style="margin-bottom:12px;">⚠️ Pra não duplicar, continue pelo card que já existe.</div>
+    ${achados
+      .map(
+        (
+          a
+        ) => `<div class="dep-card" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div><b>${a.nome || 'Empresa'}</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">${a.descricao}</div></div>
+        <button class="btn-primary" onclick="abrirCardExistente('${a.tipo}','${a.id}')">Abrir card</button>
+      </div>`
+      )
+      .join('')}
+  </div><div class="modal-foot">${
+    voltarParaClientId
+      ? `<button class="btn-ghost" onclick="closeModal(); openClientModal('${voltarParaClientId}')">Voltar ao card</button>`
+      : `<button class="btn-ghost" onclick="closeModal()">Fechar</button>`
+  }</div></div>`);
+}
+
+function abrirCardExistente(tipo, id) {
+  closeModal();
+  if (tipo === 'pipeline') {
+    switchView('pipeline');
+    openPipelineLeadModal(id);
+  } else {
+    switchView('crm');
+    ACTIVE_PERSON_TAB = DB.clients.find((c) => c.id === id)?.etapaAdesao || 'nova';
+    openClientModal(id);
+  }
+}
+
 async function converterPipelineParaImplantacao(l) {
+  // Se a empresa já está na Implantação, não abre outro card: pergunta e, se
+  // confirmado, os titulares deste lead entram no card existente (mesmo nº de
+  // lead e mesma etapa).
+  const jaNaImplantacao = localizarCardsDaEmpresa(l.cnpj, { pipelineId: l.id }).filter(
+    (a) => a.tipo === 'implantacao'
+  );
+  let cardExistente = null;
+  if (jaNaImplantacao.length) {
+    const ok = await showConfirmDialog(
+      `Essa empresa já tem card: ${textoCardsDaEmpresa(jaNaImplantacao)}. Se continuar, os titulares deste lead entram nesse mesmo card, sem criar outro.`,
+      { confirmLabel: 'Juntar ao card existente', danger: false }
+    );
+    if (!ok) return;
+    cardExistente = DB.clients.find((x) => x.id === jaNaImplantacao[0].id);
+  }
   const emp = getOrCreateEmpresaByCnpj(l.cnpj || '', l.empresa || '');
-  DB.leadCounter = (DB.leadCounter || 0) + 1;
-  const numeroLead = DB.leadCounter;
+  let numeroLead;
+  if (cardExistente) {
+    numeroLead = cardExistente.numeroLead;
+  } else {
+    DB.leadCounter = (DB.leadCounter || 0) + 1;
+    numeroLead = DB.leadCounter;
+  }
+  const etapaInicial = cardExistente ? cardExistente.etapaAdesao : 'nova';
   const grupos = l.gruposOrcamento || [];
   const vendedores = l.vendedorId
     ? [{ vendedorId: l.vendedorId, percentual: 100, pagamentos: [] }]
@@ -3797,7 +4011,7 @@ async function converterPipelineParaImplantacao(l) {
     status: 'ativo',
     origemSite: !!l.origemSite,
     numeroLead,
-    etapaAdesao: 'nova',
+    etapaAdesao: etapaInicial,
     pendencia: { ativa: false, motivo: '' },
     empresaId: emp.id,
     associadoValidado: true,
@@ -3899,9 +4113,11 @@ async function converterPipelineParaImplantacao(l) {
   closeModal();
   switchView('crm');
   toast(
-    criados.length > 1
-      ? `✓ Venda ativa transferida para Implantação com ${criados.length} titulares.`
-      : '✓ Venda ativa transferida para Implantação.'
+    cardExistente
+      ? `✓ ${criados.length} titular(es) adicionado(s) ao card existente (lead nº ${numeroLead}).`
+      : criados.length > 1
+        ? `✓ Venda ativa transferida para Implantação com ${criados.length} titulares.`
+        : '✓ Venda ativa transferida para Implantação.'
   );
 }
 
@@ -3960,6 +4176,7 @@ function viewCRM() {
                       .map((t) => t.titular.nome || 'sem nome')
                       .join(', ')}${g.titulares.length > 3 ? '…' : ''}`
               }</div>
+              <div class="kc-sub" style="margin-top:3px;">Vendedor: <b>${(DB.users || []).find((u) => u.id === vendedorResponsavelDoCard(primeiro))?.nome || '—'}</b></div>
               ${primeiro.planoEscolhido ? `<div class="kc-plan-tag">${primeiro.planoEscolhido}</div>` : ''}
               ${g.pendente ? '<span class="pend-pill" style="margin-top:6px;display:inline-block;">Pendência</span>' : ''}
             </div>`;
@@ -5186,6 +5403,14 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
   }
   if (ORC_MODE === 'cdl' && !ORC_PLANO_ESCOLHIDO) {
     toast('Escolha uma opção.');
+    return;
+  }
+
+  // Trava duplicado: se essa empresa já tem card no Pipeline ou na Implantação,
+  // não cria outro — mostra onde ela está e deixa abrir o card existente.
+  const cardsExistentes = localizarCardsDaEmpresa(cnpj);
+  if (cardsExistentes.length) {
+    avisarEmpresaJaExiste(cardsExistentes, 'Não dá pra criar outro orçamento/card pra ela.');
     return;
   }
 
@@ -7186,7 +7411,11 @@ function renderClientModal() {
           ${stageTrackerHTML}
         </div>
 
-        <div style="display:flex;justify-content:flex-end;margin:-6px 0 12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:-6px 0 12px;">
+          <div style="display:flex;align-items:center;gap:8px;font-size:12px;flex-wrap:wrap;">
+            <span style="color:var(--text-muted);font-weight:600;">Vendedor responsável:</span>
+            ${selectVendedorResponsavel(vendedorResponsavelDoCard(c), `setVendedorImplantacao('${c.id}', this.value)`)}
+          </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
             ${
               ACTIVE_PERSON_TAB === 'anexos' || ACTIVE_PERSON_TAB === 'historico'
@@ -7208,9 +7437,9 @@ function renderClientModal() {
               : ''
           }
           ${tabContent}
-          <div class="anexo-person-block" style="margin-top:22px;border-color:var(--blue);">
-            <div class="anexo-person-head"><span><b>Comunicação da implantação</b></span><span style="font-size:10.5px;color:var(--text-muted)">${(c.comentariosInternos || []).length} comentário(s)</span></div>
-            <div class="history-list" style="max-height:190px;margin-bottom:10px">${
+          <details style="margin-top:22px;border:1px solid var(--border);border-radius:12px;padding:10px 14px;background:#fff;">
+            <summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:var(--navy);">Comentários da equipe (${(c.comentariosInternos || []).length})</summary>
+            <div class="history-list" style="max-height:190px;margin:10px 0;">${
               (c.comentariosInternos || [])
                 .slice()
                 .reverse()
@@ -7219,17 +7448,18 @@ function renderClientModal() {
                     `<div class="history-item"><span class="hi-date">${fmtDateTime(m.data)}</span><span><b>${DB.users.find((u) => u.id === m.usuarioId)?.nome || 'Usuário'}${m.mencionadoId ? ' → ' + (DB.users.find((u) => u.id === m.mencionadoId)?.nome || 'funcionário') : ''}:</b> ${m.texto}</span></div>`
                 )
                 .join('') ||
-              '<span style="font-size:12px;color:var(--text-faint)">Nenhum comentário interno ainda.</span>'
+              '<span style="font-size:12px;color:var(--text-faint)">Nenhum comentário ainda.</span>'
             }</div>
-            <div class="field-grid"><div class="fg"><label>Marcar funcionário</label><select id="implant_mencao"><option value="">Sem marcação</option>${DB.users
-              .filter((u) => u.ativo && u.id !== CURRENT_USER.id)
-              .map((u) => `<option value="${u.id}">${u.nome}</option>`)
-              .join(
-                ''
-              )}</select></div><div class="fg"><label>Comentário</label><input id="implant_comentario" placeholder="Ex.: dê seguimento a este lead"></div></div>
-            <label style="display:flex;align-items:center;gap:8px;font-size:11.5px;margin-top:10px"><input type="checkbox" id="implant_criar_tarefa" checked> Criar também uma tarefa para o funcionário marcado</label>
-            <button class="btn-primary" style="margin-top:10px" onclick="adicionarComentarioImplantacao()">Enviar comentário</button>
-          </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+              <input id="implant_comentario" style="flex:1 1 220px;" placeholder="Escreva um comentário...">
+              <select id="implant_mencao" style="flex:0 1 180px;"><option value="">Marcar alguém (opcional)</option>${DB.users
+                .filter((u) => u.ativo && u.id !== CURRENT_USER.id)
+                .map((u) => `<option value="${u.id}">${u.nome}</option>`)
+                .join('')}</select>
+              <button class="btn-primary" onclick="adicionarComentarioImplantacao()">Enviar</button>
+            </div>
+            <label style="display:flex;align-items:center;gap:8px;font-size:11.5px;margin-top:8px;color:var(--text-muted);"><input type="checkbox" id="implant_criar_tarefa" checked> Se marcar alguém, criar também uma tarefa pra essa pessoa</label>
+          </details>
         </div>
 
       </div>
@@ -9408,6 +9638,30 @@ async function updateTitular() {
 async function updateEmpresa() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   const emp = getEmpresaDoCliente(c);
+  // Trava duplicado: CNPJ digitado já está em outro card (Pipeline ou Implantação).
+  const cnpjDigitado = onlyDigits(document.getElementById('emp_cnpj').value);
+  if (cnpjDigitado && cnpjDigitado !== onlyDigits(emp.cnpj || '')) {
+    const titularesDesteCard = getTitularesDaEmpresa(emp.id)
+      .map((x) => x.id)
+      .concat(c.id);
+    const achados = localizarCardsDaEmpresa(cnpjDigitado, { clientIds: titularesDesteCard });
+    if (achados.length) {
+      const cardEmBranco =
+        !emp.cnpj &&
+        !c.titular?.nome &&
+        getTitularesDaEmpresa(emp.id).filter((x) => x.id !== c.id).length === 0;
+      if (cardEmBranco) {
+        // card acabou de ser aberto e ainda está vazio — descarta pra não sobrar card fantasma
+        DB.clients = DB.clients.filter((x) => x.id !== c.id);
+        await persist();
+        avisarEmpresaJaExiste(achados, 'Não dá pra criar outro card pra ela.');
+      } else {
+        document.getElementById('emp_cnpj').value = emp.cnpj ? maskCnpj(emp.cnpj) : '';
+        avisarEmpresaJaExiste(achados, 'Esse CNPJ já está em outro card.', c.id);
+      }
+      return;
+    }
+  }
   // getEmpresaDoCliente só RETORNA a empresa certa (por id existente ou por CNPJ) —
   // não grava esse vínculo no cliente. Sem isso, um cliente novo cujo CNPJ já bate
   // com uma empresa existente ficava com empresaId vazio pra sempre.
