@@ -2129,8 +2129,33 @@ async function registrarLog(acao, detalhes) {
   }
 }
 
+// ─── Autor das movimentações do histórico ─────────────────────────────────
+// Guarda quantas movimentações cada card já tinha quando esta aba carregou (ou
+// sincronizou) os dados. Tudo que aparecer DEPOIS disso e for salvo por esta
+// aba foi feito pelo usuário logado — então recebe o nome dele. Movimentações
+// que chegam de outros usuários ou do cliente (link) entram como "já vistas"
+// e nunca são carimbadas com o nome errado.
+let __HIST_BASE = new Map();
+function marcarHistoricoComoVisto() {
+  __HIST_BASE = new Map((DB?.clients || []).map((c) => [c.id, (c.historico || []).length]));
+}
+function carimbarAutorDoHistorico() {
+  if (!CURRENT_USER) return;
+  (DB?.clients || []).forEach((c) => {
+    const h = c.historico || [];
+    const base = __HIST_BASE.has(c.id) ? __HIST_BASE.get(c.id) : 0;
+    for (let i = base; i < h.length; i++) {
+      if (h[i] && !h[i].usuario && !h[i].semCarimbo) {
+        h[i].usuario = CURRENT_USER.nome || CURRENT_USER.email || '';
+        h[i].usuarioId = CURRENT_USER.id;
+      }
+    }
+  });
+}
+
 async function persist() {
   try {
+    carimbarAutorDoHistorico();
     const payload = JSON.stringify(DB);
     // Proteção contra perda de dados: se essa aba já sabe qual era a última
     // versão do banco (__ultimaAssinaturaDB), confere se o servidor ainda
@@ -2158,6 +2183,7 @@ async function persist() {
     // Marca essa versão como "já vista" — assim o poller de sincronização não
     // acha que foi outra pessoa que mudou algo quando na verdade fomos nós.
     __ultimaAssinaturaDB = payload;
+    marcarHistoricoComoVisto();
   } catch (e) {
     console.warn('Não foi possível salvar no Supabase agora.', e);
     toast('⚠️ Não foi possível salvar agora — verifique sua conexão.');
@@ -2167,6 +2193,7 @@ async function loadDB() {
   try {
     const r = await window.storage.get(STORAGE_KEY);
     DB = JSON.parse(r.value);
+    marcarHistoricoComoVisto();
     // Guarda a versão que essa aba carregou — é a base de comparação usada
     // em persist() pra saber se alguém mais mudou o banco nesse meio-tempo.
     __ultimaAssinaturaDB = r.value;
@@ -2649,6 +2676,7 @@ async function sincronizarComOutrosUsuarios() {
     if (assinaturaNova === __ultimaAssinaturaDB) return; // nada mudou
     __ultimaAssinaturaDB = assinaturaNova;
     DB = JSON.parse(assinaturaNova);
+    marcarHistoricoComoVisto(); // o que veio de outra pessoa não é "meu"
     // Se tiver um modal aberto (editando um cliente/lead específico), só
     // atualiza esse modal — não fecha nem interrompe o que a pessoa está
     // olhando. Se estiver numa lista/kanban, atualiza a lista direto.
@@ -3214,6 +3242,7 @@ function openPipelineLeadModal(id, isNew) {
       comentarios: [],
       criadoEm: nowISO(),
       vendedorId: CURRENT_USER?.id || null,
+      criadoPorNome: CURRENT_USER?.nome || null,
     };
     DB.pipeline.push(l);
   }
@@ -3800,6 +3829,23 @@ async function converterPipelineParaImplantacao(l) {
     anexos: [],
   });
 
+  // O que aconteceu no Pipeline vem junto: criação do lead e cada comentário,
+  // com o autor original (semCarimbo = não trocar pelo usuário que converteu).
+  const historicoPipeline = [
+    {
+      data: l.criadoEm || nowISO(),
+      texto: `Lead criado no Pipeline${l.origemSite ? ' — veio do site/simulador' : ''}.`,
+      usuario: l.origemSite ? 'Cliente (site)' : l.criadoPorNome || null,
+      semCarimbo: true,
+    },
+    ...(l.comentarios || []).map((cm) => ({
+      data: cm.data,
+      texto: `[Pipeline] ${cm.texto}`,
+      usuario: cm.usuario || null,
+      semCarimbo: true,
+    })),
+  ];
+
   let criados;
   if (grupos.length) {
     // Um titular por item do orçamento (vindo do simulador ou do portal),
@@ -3817,6 +3863,7 @@ async function converterPipelineParaImplantacao(l) {
         anexosLead: idx === 0 ? [...(l.anexos || [])] : [],
         gruposOrcamento: idx === 0 ? grupos : [],
         historico: [
+          ...(idx === 0 ? historicoPipeline : []),
           {
             data: nowISO(),
             texto: `Venda ativada no Pipeline e transferida para Implantação (titular ${idx + 1} de ${grupos.length} · ${g.plano}).`,
@@ -3837,6 +3884,7 @@ async function converterPipelineParaImplantacao(l) {
         anexosLead: [...(l.anexos || [])],
         gruposOrcamento: [],
         historico: [
+          ...historicoPipeline,
           {
             data: nowISO(),
             texto: 'Venda ativada no Pipeline e transferida automaticamente para Implantação.',
@@ -5335,6 +5383,7 @@ async function criarOrcamentoNoPortal(implantarDireto = false) {
       planoCdlEscolhido: cdlTier ? CDL_TIERS_PORTAL[cdlTier].nome : null,
       criadoEm: nowISO(),
     };
+    lead.criadoPorNome = CURRENT_USER?.nome || null;
     DB.pipeline = DB.pipeline || [];
     DB.pipeline.push(lead);
     await registrarLog(
@@ -5888,6 +5937,87 @@ async function documentoParaBase64(dataUrl) {
 // ETAPA "ASSINATURA" — cliente e corretora assinam a Ficha Unimed pela
 // Autentique. O link do cliente pode ser mandado direto pelo WhatsApp.
 // ═══════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════
+// HISTÓRICO — todas as movimentações da empresa (todos os titulares), com
+// data/hora, quem fez e o quê. Inclui os comentários internos do card.
+// ═══════════════════════════════════════════════════════════════════════
+function escHist(v) {
+  return String(v == null ? '' : v).replace(
+    /[&<>"']/g,
+    (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]
+  );
+}
+function nomeUsuarioPorId(id) {
+  return (DB.users || []).find((u) => u.id === id)?.nome || '';
+}
+function coletarHistoricoDaEmpresa(c) {
+  const titulares = c.empresaId ? getTitularesDaEmpresa(c.empresaId) : [c];
+  if (!titulares.some((x) => x.id === c.id)) titulares.unshift(c);
+  const itens = [];
+  titulares.forEach((x) => {
+    const quem = x.titular.nome || 'titular sem nome';
+    (x.historico || []).forEach((h) =>
+      itens.push({
+        data: h.data,
+        texto: h.texto,
+        autor:
+          h.usuario ||
+          (h.usuarioId ? nomeUsuarioPorId(h.usuarioId) : '') ||
+          (/pelo link|pelo site|simulador/i.test(h.texto || '') ? 'Cliente (link)' : ''),
+        titular: quem,
+      })
+    );
+    (x.comentariosInternos || []).forEach((cm) =>
+      itens.push({
+        data: cm.data,
+        texto: `Comentário: "${cm.texto}"${cm.mencionadoId ? ` (marcou ${nomeUsuarioPorId(cm.mencionadoId) || 'um funcionário'})` : ''}`,
+        autor: nomeUsuarioPorId(cm.usuarioId),
+        titular: quem,
+        comentario: true,
+      })
+    );
+  });
+  return itens.filter((i) => i.data).sort((a, b) => String(b.data).localeCompare(String(a.data)));
+}
+function renderAbaHistorico(c) {
+  const itens = coletarHistoricoDaEmpresa(c);
+  const variosTitulares = new Set(itens.map((i) => i.titular)).size > 1;
+  const primeiro = itens[itens.length - 1];
+  return `
+    <div class="dep-card" style="margin-bottom:12px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;">
+      <div style="font-size:12.5px;">${
+        primeiro
+          ? `<b>Criado em ${fmtDateTime(primeiro.data)}</b>${primeiro.autor ? ` por <b>${escHist(primeiro.autor)}</b>` : ''}`
+          : 'Sem movimentações ainda.'
+      }<div style="color:var(--text-muted);margin-top:2px;">${itens.length} movimentação(ões) registrada(s)</div></div>
+      <input type="text" placeholder="Buscar no histórico..." style="max-width:240px;" oninput="filtrarHistorico(this.value)">
+    </div>
+    <div id="historicoLista" style="display:grid;gap:6px;">
+      ${
+        itens
+          .map(
+            (i) => `
+        <div class="hist-row" data-busca="${escHist(`${i.texto} ${i.autor} ${i.titular}`.toLowerCase())}" style="display:grid;grid-template-columns:118px 1fr;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:10px;background:${i.comentario ? 'var(--navy-tint, #f3f5fb)' : '#fff'};">
+          <div style="font-size:11px;color:var(--text-muted);line-height:1.35;">${fmtDateTime(i.data)}</div>
+          <div style="font-size:12.5px;line-height:1.45;min-width:0;">
+            <b>${i.autor ? escHist(i.autor) : '<span style="color:var(--text-faint);font-weight:600;" title="Movimentação registrada antes de o sistema guardar o autor">autor não registrado</span>'}</b>
+            ${variosTitulares ? `<span style="font-size:10.5px;color:var(--text-muted);margin-left:6px;">· ${escHist(i.titular)}</span>` : ''}
+            <div style="color:var(--text);margin-top:2px;overflow-wrap:anywhere;">${escHist(i.texto)}</div>
+          </div>
+        </div>`
+          )
+          .join('') ||
+        '<div style="font-size:12px;color:var(--text-faint);">Nenhuma movimentação ainda.</div>'
+      }
+    </div>`;
+}
+function filtrarHistorico(q) {
+  const termo = (q || '').toLowerCase().trim();
+  document.querySelectorAll('#historicoLista .hist-row').forEach((el) => {
+    el.style.display = !termo || el.dataset.busca.includes(termo) ? '' : 'none';
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // ABA ANEXOS — todos os arquivos da empresa num lugar só (orçamento, ficha,
 // fichas assinadas, documentos da empresa e de cada pessoa, anexos que
@@ -6916,18 +7046,7 @@ function renderClientModal() {
       }
     `;
   } else if (ACTIVE_PERSON_TAB === 'historico') {
-    tabContent = `
-      <div class="history-list" style="max-height:260px;">
-        ${c.historico
-          .slice()
-          .reverse()
-          .map(
-            (h) =>
-              `<div class="history-item"><span class="hi-date">${fmtDateTime(h.data)}</span><span>${h.texto}</span></div>`
-          )
-          .join('')}
-      </div>
-    `;
+    tabContent = renderAbaHistorico(c);
   } else if (ACTIVE_PERSON_TAB === 'ativo') {
     tabContent = `<div class="empty-state">${ICONS.check}<div><b>Implantação concluída.</b><br><span style="font-size:12px;color:var(--text-muted);">Comissões são tratadas exclusivamente no relatório de comissões.</span></div></div>`;
   } else if (ACTIVE_PERSON_TAB === 'questionario') {
@@ -7068,11 +7187,15 @@ function renderClientModal() {
         </div>
 
         <div style="display:flex;justify-content:flex-end;margin:-6px 0 12px;">
-          ${
-            ACTIVE_PERSON_TAB === 'anexos'
-              ? `<button class="btn-ghost" onclick="switchPersonTab('${c.etapaAdesao}')">← Voltar para a etapa atual (${stageLabel(c.etapaAdesao)})</button>`
-              : `<button class="btn-ghost" onclick="switchPersonTab('anexos')">${ICONS.file} Anexos (${contarAnexosDaEmpresa(c)})</button>`
-          }
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+            ${
+              ACTIVE_PERSON_TAB === 'anexos' || ACTIVE_PERSON_TAB === 'historico'
+                ? `<button class="btn-ghost" onclick="switchPersonTab('${c.etapaAdesao}')">← Voltar para a etapa atual (${stageLabel(c.etapaAdesao)})</button>`
+                : ''
+            }
+            ${ACTIVE_PERSON_TAB !== 'historico' ? `<button class="btn-ghost" onclick="switchPersonTab('historico')">${ICONS.clipboard} Histórico</button>` : ''}
+            ${ACTIVE_PERSON_TAB !== 'anexos' ? `<button class="btn-ghost" onclick="switchPersonTab('anexos')">${ICONS.file} Anexos (${contarAnexosDaEmpresa(c)})</button>` : ''}
+          </div>
         </div>
         <div class="journey-tab-content">
           ${
@@ -9151,10 +9274,36 @@ async function updateTitularCampo(clientId, campo, valor) {
   }
   const antes = c.titular[campo];
   c.titular[campo] = valor;
-  if (valor !== antes) {
-    c.historico.push({ data: nowISO(), texto: 'Dados do titular atualizados.' });
+  if ((valor || '') !== (antes || '')) {
+    c.historico.push({
+      data: nowISO(),
+      texto: `Titular ${c.titular.nome || 'sem nome'}: ${descreverMudancaCampo(campo, antes, valor)}`,
+    });
   }
   await persist();
+}
+
+// Texto legível de "o que mudou" pro histórico: nome do campo + antes → depois.
+const ROTULOS_CAMPOS_PESSOA = {
+  nome: 'nome',
+  cpf: 'CPF',
+  dataNascimento: 'data de nascimento',
+  celular: 'celular',
+  email: 'e-mail',
+  sexo: 'sexo',
+  estadoCivil: 'estado civil',
+  nomeMae: 'nome da mãe',
+  parentesco: 'parentesco',
+};
+function descreverMudancaCampo(campo, antes, depois) {
+  const fmt = (v) => {
+    if (v === undefined || v === null || v === '') return 'vazio';
+    if (campo === 'cpf') return maskCpf(String(v));
+    if (campo === 'dataNascimento') return fmtDate(v);
+    if (campo === 'sexo') return v === 'M' ? 'Masculino' : v === 'F' ? 'Feminino' : v;
+    return String(v);
+  };
+  return `${ROTULOS_CAMPOS_PESSOA[campo] || campo} alterado de "${fmt(antes)}" para "${fmt(depois)}".`;
 }
 async function updatePlanoTitular(clientId, valor) {
   const c = DB.clients.find((x) => x.id === clientId);
@@ -9184,9 +9333,16 @@ async function updateDependenteTitular(clientId, i, field, value) {
   const c = DB.clients.find((x) => x.id === clientId);
   if (!c) return;
   const val = field === 'cpf' ? onlyDigits(value) : value;
+  const antes = c.dependentes[i][field];
   c.dependentes[i][field] = val;
   if (field === 'cpf' && val && !isValidCPF(val)) {
-    toast('⚠️ O CPF desse dependente não é válido — confira os números.');
+    toast('CPF do dependente inválido — confira os números.');
+  }
+  if ((val || '') !== (antes || '')) {
+    c.historico.push({
+      data: nowISO(),
+      texto: `Dependente ${c.dependentes[i].nome || i + 1} (de ${c.titular.nome || 'titular sem nome'}): ${descreverMudancaCampo(field, antes, val)}`,
+    });
   }
   await persist();
 }
