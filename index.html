@@ -3258,6 +3258,24 @@ function openPipelineLeadModal(id, isNew) {
           : ''
       }
     </div>
+    ${
+      (l.gruposOrcamento || []).length
+        ? `<div class="modal-section-title" style="margin-top:20px">Titulares e planos (${l.gruposOrcamento.length} titular(es) · ${l.gruposOrcamento.reduce((n, g) => n + 1 + (Number(g.quantidadeDependentes) || 0), 0)} vida(s))</div>
+    <div class="dep-card">
+      ${l.gruposOrcamento
+        .map((g) => {
+          const vidas = 1 + (Number(g.quantidadeDependentes) || 0);
+          const valor = PLAN_VALUES_PORTAL[g.planoKey]?.valor || 0;
+          return `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12.5px;"><span><b>${g.titular}</b> · ${vidas} vida(s)</span><span>${g.plano} · <b>${formatBRL(valor * vidas)}</b></span></div>`;
+        })
+        .join('')}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:10px;flex-wrap:wrap;">
+        <b>Total: ${formatBRL(l.gruposOrcamento.reduce((t, g) => t + (PLAN_VALUES_PORTAL[g.planoKey]?.valor || 0) * (1 + (Number(g.quantidadeDependentes) || 0)), 0))}/mês</b>
+        <button class="btn-primary" onclick="baixarOrcamentoPipeline('${l.id}')">${ICONS.file} Baixar orçamento</button>
+      </div>
+    </div>`
+        : ''
+    }
     <div class="modal-section-title" style="margin-top:20px">Anexos do lead (${(l.anexos || []).length})</div>
     <div class="attachment-list">${(l.anexos || []).map((a, i) => `<span class="attachment-chip">${ICONS.file}${a.nome}<a href="${a.dataUrl}" target="_blank" style="color:inherit;display:flex;">${ICONS.upload}</a><button onclick="removePipelineAnexo('${l.id}',${i})">${ICONS.close}</button></span>`).join('') || '<span style="font-size:12px;color:var(--text-faint)">Nenhum anexo recebido.</span>'}</div>
     <label class="btn-ghost" style="margin-top:10px;padding:7px 11px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Adicionar anexos<input type="file" multiple style="display:none" onchange="addPipelineAnexos('${l.id}',event)"></label>
@@ -3737,75 +3755,103 @@ async function savePipelineLead(id) {
 async function converterPipelineParaImplantacao(l) {
   const emp = getOrCreateEmpresaByCnpj(l.cnpj || '', l.empresa || '');
   DB.leadCounter = (DB.leadCounter || 0) + 1;
-  const c = {
+  const numeroLead = DB.leadCounter;
+  const grupos = l.gruposOrcamento || [];
+  const vendedores = l.vendedorId
+    ? [{ vendedorId: l.vendedorId, percentual: 100, pagamentos: [] }]
+    : [];
+  const base = (extra) => ({
     id: uid('cli'),
     status: 'ativo',
     origemSite: !!l.origemSite,
-    numeroLead: DB.leadCounter,
+    numeroLead,
     etapaAdesao: 'nova',
-    pendencia: {
-      ativa: false,
-      motivo: '',
-    },
-    leadOrigemId: l.leadOrigemId || null,
+    pendencia: { ativa: false, motivo: '' },
     empresaId: emp.id,
-    titular: {
-      nome: l.nome || '',
-      cpf: '',
-      dataNascimento: '',
-      celular: l.celular || '',
-      email: l.email || '',
-      razaoSocial: l.empresa || '',
-      cnpj: l.cnpj || '',
-      anexos: [],
-      codigoVida: uid('vida'),
-    },
-    dependentes: Array.from(
-      {
-        length: Math.max(0, (Number(l.qtdVidas) || 1) - 1),
-      },
-      (_, i) => ({
-        id: uid('dep'),
-        codigoVida: uid('vida'),
-        nome: l.vidasOriginais?.[i + 1]?.nome || '',
-        cpf: l.vidasOriginais?.[i + 1]?.cpf || '',
-        dataNascimento: l.vidasOriginais?.[i + 1]?.dataNascimento || '',
-        parentesco: '',
-        anexos: [],
-      })
-    ),
-    anexosLead: [...(l.anexos || [])],
-    // leva os dados do orçamento junto — assim dá pra gerar o PDF de novo
-    // na aba Anexos a qualquer hora, mesmo que o arquivo original se perca
-    gruposOrcamento: l.gruposOrcamento || [],
     associadoValidado: true,
     associadoValidadoEm: l.associadoValidadoEm,
-    planoEscolhido: l.planoInteresse || '',
-    vendedores: l.vendedorId
-      ? [
-          {
-            vendedorId: l.vendedorId,
-            percentual: 100,
-            pagamentos: [],
-          },
-        ]
-      : [],
+    vendedores: vendedores.map((v) => ({ ...v, pagamentos: [] })),
     comissoes: [],
-    historico: [
-      {
-        data: nowISO(),
-        texto: 'Venda ativada no Pipeline e transferida automaticamente para Implantação.',
-      },
-    ],
     emailAdministradoraEnviadoEm: null,
     criadoEm: l.criadoEm || nowISO(),
-  };
-  DB.clients.push(c);
+    ...extra,
+  });
+  const novoTitular = (nome, comContato) => ({
+    nome: nome || '',
+    cpf: '',
+    dataNascimento: '',
+    celular: comContato ? l.celular || '' : '',
+    email: comContato ? l.email || '' : '',
+    razaoSocial: l.empresa || '',
+    cnpj: l.cnpj || '',
+    anexos: [],
+    codigoVida: uid('vida'),
+  });
+  const novoDependente = (dados) => ({
+    id: uid('dep'),
+    codigoVida: uid('vida'),
+    nome: dados?.nome || '',
+    cpf: dados?.cpf || '',
+    dataNascimento: dados?.dataNascimento || '',
+    parentesco: '',
+    anexos: [],
+  });
+
+  let criados;
+  if (grupos.length) {
+    // Um titular por item do orçamento (vindo do simulador ou do portal),
+    // todos na mesma empresa, cada um com o próprio plano e dependentes.
+    criados = grupos.map((g, idx) => {
+      const nomeEhGenerico = /^Titular \d+$/i.test(g.titular || '');
+      const nome = nomeEhGenerico ? (idx === 0 ? l.nome : '') : g.titular;
+      return base({
+        leadOrigemId: idx === 0 ? l.leadOrigemId || null : null,
+        titular: novoTitular(nome, idx === 0),
+        dependentes: Array.from({ length: Number(g.quantidadeDependentes) || 0 }, () =>
+          novoDependente()
+        ),
+        planoEscolhido: g.plano,
+        anexosLead: idx === 0 ? [...(l.anexos || [])] : [],
+        gruposOrcamento: idx === 0 ? grupos : [],
+        historico: [
+          {
+            data: nowISO(),
+            texto: `Venda ativada no Pipeline e transferida para Implantação (titular ${idx + 1} de ${grupos.length} · ${g.plano}).`,
+          },
+        ],
+      });
+    });
+  } else {
+    // Lead antigo (só "X vidas" + 1 plano): mantém o comportamento de antes.
+    criados = [
+      base({
+        leadOrigemId: l.leadOrigemId || null,
+        titular: novoTitular(l.nome, true),
+        dependentes: Array.from({ length: Math.max(0, (Number(l.qtdVidas) || 1) - 1) }, (_, i) =>
+          novoDependente(l.vidasOriginais?.[i + 1])
+        ),
+        planoEscolhido: l.planoInteresse || '',
+        anexosLead: [...(l.anexos || [])],
+        gruposOrcamento: [],
+        historico: [
+          {
+            data: nowISO(),
+            texto: 'Venda ativada no Pipeline e transferida automaticamente para Implantação.',
+          },
+        ],
+      }),
+    ];
+  }
+  DB.clients.push(...criados);
   DB.pipeline = DB.pipeline.filter((x) => x.id !== l.id);
   await persist();
   closeModal();
   switchView('crm');
-  toast('✓ Venda ativa transferida para Implantação.');
+  toast(
+    criados.length > 1
+      ? `✓ Venda ativa transferida para Implantação com ${criados.length} titulares.`
+      : '✓ Venda ativa transferida para Implantação.'
+  );
 }
 
 function viewCRM() {
@@ -3918,6 +3964,20 @@ ${SUPABASE_URL}
   }
   return getPublicStorageUrl(path);
 }
+// Converte a lista de titulares que vem do simulador pro formato usado no
+// portal. Ignora itens com plano desconhecido pra não quebrar o orçamento.
+function normalizarGruposDoSite(grupos) {
+  if (!Array.isArray(grupos)) return [];
+  return grupos
+    .filter((g) => g && PLAN_VALUES_PORTAL[g.planoKey])
+    .map((g, i) => ({
+      titular: String(g.titular || '').trim() || `Titular ${i + 1}`,
+      planoKey: g.planoKey,
+      plano: PLAN_VALUES_PORTAL[g.planoKey].nome,
+      quantidadeDependentes: Math.max(0, Number(g.quantidadeDependentes) || 0),
+    }));
+}
+
 async function importarLeadsDoSite(opts) {
   opts = opts || {};
   const silencioso = !!opts.silencioso;
@@ -4021,6 +4081,9 @@ async function importarLeadsDoSite(opts) {
       planoInteresse: lead.plano_escolhido || '',
       vidasOriginais: vidas,
       qtdVidas: Number(lead.qtd_vidas) || vidas.length || 1,
+      // titulares escolhidos no simulador (cada um com seu plano e dependentes) —
+      // mesmo formato do orçamento feito aqui no portal
+      gruposOrcamento: normalizarGruposDoSite(lead.grupos),
       associadoInformado: !!lead.associado,
       novoAfiliado: !!lead.novo_afiliado,
       associadoValidado: false,
