@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Complete seus dados — CDL Mossoró × Unimed</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --navy:#00042D; --navy-soft:#0B1140; --navy-tint:#EEEEF3;
+  --green:#159442; --green-bright:#3ECB74; --green-tint:#E8F7EE;
+  --warn:#B45309; --warn-tint:#FDF1E2; --cream:#F6F6F8; --line:#E2E2E8;
+  --ink:#14141C; --gray:#5B5B66; --gray-soft:#8B8B96;
+  --font-display:'Archivo',Arial,sans-serif; --font-body:'Inter',-apple-system,sans-serif;
+  --radius:16px; --radius-lg:24px;
+  --container:600px;
+}
+*,*::before,*::after{ box-sizing:border-box; }
+body{ margin:0; font-family:var(--font-body); background:var(--cream); color:var(--ink); }
+h1,h2,h3{ font-family:var(--font-display); margin:0; }
+
+/* ===== HERO ===== */
+.hero{ background:var(--navy); padding:36px 20px 60px; text-align:center; position:relative; overflow:hidden; }
+.hero-spiral{ position:absolute; top:-30px; right:-50px; width:260px; height:260px; opacity:.18; pointer-events:none; }
+.hero-badge{
+  display:inline-flex; align-items:center; gap:7px; background:rgba(255,255,255,0.08); color:#fff;
+  font-size:12px; font-weight:600; padding:7px 14px; border-radius:999px; margin-bottom:16px;
+  border:1px solid rgba(255,255,255,0.15); position:relative; z-index:1;
+}
+.hero h1{ color:#fff; font-size:22px; font-weight:800; position:relative; z-index:1; max-width:420px; margin:0 auto; line-height:1.3; }
+.hero p{ color:#C7C9DB; font-size:13.5px; margin:10px auto 0; max-width:360px; position:relative; z-index:1; line-height:1.5; }
+
+/* ===== CARD (flutua sobre o hero) ===== */
+.wrap{ max-width:var(--container); margin:-34px auto 40px; padding:0 16px; position:relative; z-index:2; }
+.card{
+  background:#fff; border-radius:var(--radius-lg); box-shadow:0 14px 34px -16px rgba(0,4,45,0.28);
+  padding:28px 24px 26px; position:relative; overflow:hidden;
+}
+.card::before{ content:""; position:absolute; top:0; left:0; right:0; height:5px; background:linear-gradient(90deg,var(--navy),var(--green)); }
+
+/* progresso */
+.progress-row{ display:flex; align-items:center; gap:12px; margin-bottom:22px; }
+.progress-ring{ width:38px; height:38px; border-radius:50%; flex:0 0 auto; position:relative;
+  background:conic-gradient(var(--green) calc(var(--pct,0)*1%), var(--line) 0); transition:background .5s ease; }
+.progress-ring::after{ content:""; position:absolute; inset:4px; background:#fff; border-radius:50%; }
+.progress-ring span{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:9.5px; font-weight:800; color:var(--navy); }
+.progress-label{ font-size:11.5px; font-weight:700; color:var(--gray-soft); text-transform:uppercase; letter-spacing:.03em; }
+
+.step-head{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+.step-icon{ width:34px; height:34px; border-radius:10px; background:var(--navy-tint); color:var(--navy); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.step-icon svg{ width:18px; height:18px; }
+.step-icon.green{ background:var(--green-tint); color:var(--green); }
+.eyebrow{ font-size:11.5px; font-weight:700; color:var(--green); text-transform:uppercase; letter-spacing:.04em; }
+h2.step-title{ font-size:19px; margin:2px 0 6px; color:var(--navy); }
+p.step-sub{ color:var(--gray); font-size:13px; margin:0 0 20px; line-height:1.55; }
+
+/* ===== CAMPOS ===== */
+.field-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+@media(max-width:480px){ .field-grid{ grid-template-columns:1fr; } }
+.fg{ margin-bottom:14px; }
+.fg label{ display:block; font-size:11.5px; font-weight:700; color:var(--navy); text-transform:uppercase; letter-spacing:.02em; margin-bottom:6px; }
+.fg input, .fg select{ width:100%; border:1.5px solid var(--line); border-radius:11px; padding:12px 14px; font-size:14.5px; font-family:inherit; background:var(--cream); color:var(--ink); }
+.fg input:focus, .fg select:focus{ outline:none; border-color:var(--navy); background:#fff; }
+.field-hint{ font-size:11.5px; margin-top:6px; color:var(--gray-soft); min-height:14px; }
+.field-hint.ok{ color:var(--green); font-weight:600; }
+
+/* ===== DECLARAÇÃO DE SAÚDE ===== */
+.ds-progress{ display:flex; align-items:center; justify-content:space-between; background:var(--cream); border-radius:11px; padding:10px 14px; margin-bottom:16px; font-size:12px; font-weight:700; color:var(--navy); }
+.ds-progress .bar{ flex:1; height:6px; background:var(--line); border-radius:99px; margin:0 12px; overflow:hidden; }
+.ds-progress .bar i{ display:block; height:100%; background:var(--green); border-radius:99px; transition:width .3s; }
+.ds-q-card{ border:1.5px solid var(--line); border-radius:13px; padding:14px 15px; margin-bottom:10px; transition:.15s; }
+.ds-q-card.answered-sim{ border-color:var(--warn); background:var(--warn-tint); }
+.ds-q-card.answered-nao{ border-color:var(--green); background:var(--green-tint); }
+.ds-q-num{ display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:var(--navy-tint); color:var(--navy); font-size:10.5px; font-weight:800; flex-shrink:0; margin-right:8px; }
+.ds-q-text{ font-size:12.5px; color:var(--ink); line-height:1.5; display:inline; }
+.ds-toggle{ display:flex; gap:8px; margin-top:10px; }
+.ds-toggle button{ flex:1; padding:9px; border-radius:9px; border:1.5px solid var(--line); background:#fff; font-weight:700; font-size:12.5px; color:var(--gray); cursor:pointer; font-family:inherit; }
+.ds-toggle button.active-nao{ border-color:var(--green); background:var(--green); color:#fff; }
+.ds-toggle button.active-sim{ border-color:var(--warn); background:var(--warn); color:#fff; }
+.ds-detail{ margin-top:9px; display:none; }
+.section-title{ font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; color:var(--green); margin:22px 0 12px; padding-top:6px; border-top:1px dashed var(--line); }
+.section-title:first-of-type{ border-top:none; margin-top:4px; }
+
+/* ===== BOTÕES ===== */
+.q-actions{ display:flex; gap:10px; margin-top:22px; }
+.btn{ font-family:var(--font-display); font-weight:800; font-size:14.5px; padding:14px 20px; border-radius:999px; border:none; cursor:pointer; }
+.btn-primary{ background:var(--navy); color:#fff; flex:1; }
+.btn-primary:hover{ background:#000220; }
+.btn-primary:disabled{ opacity:.4; cursor:not-allowed; }
+.btn-ghost{ background:var(--cream); color:var(--gray); flex:0 0 auto; }
+.btn-block{ width:100%; }
+
+/* ===== TELAS ESPECIAIS ===== */
+.intro-icon{ width:52px; height:52px; border-radius:16px; background:var(--green-tint); color:var(--green); display:flex; align-items:center; justify-content:center; margin:0 auto 16px; }
+.intro-icon svg{ width:26px; height:26px; }
+.checklist{ text-align:left; margin:18px 0; }
+.checklist li{ list-style:none; display:flex; gap:10px; align-items:flex-start; font-size:13px; color:var(--gray); margin-bottom:10px; line-height:1.4; }
+.checklist svg{ width:16px; height:16px; color:var(--green); flex-shrink:0; margin-top:2px; }
+
+.success-icon{ width:60px; height:60px; border-radius:50%; background:var(--green); color:#fff; display:flex; align-items:center; justify-content:center; font-size:28px; margin:0 auto 18px; }
+.loading, .error-box{ text-align:center; padding:50px 10px; }
+.error-box h2{ color:var(--warn); font-size:18px; margin-bottom:8px; }
+.error-box p{ color:var(--gray); font-size:13.5px; }
+.spinner{ width:30px; height:30px; border-radius:50%; border:3px solid var(--line); border-top-color:var(--navy); margin:0 auto 14px; animation:spin .8s linear infinite; }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+
+.footnote{ text-align:center; font-size:11px; color:var(--gray-soft); margin-top:16px; line-height:1.5; }
+.footnote svg{ width:12px; height:12px; vertical-align:-1px; margin-right:3px; }
+</style>
+
+<style>
+/* ── Identidade do portal Nossa+ (páginas públicas servidas pelo próprio portal) ── */
+:root{
+  --green:#12B76A; --green-dark:#0E9A58; --green-bright:#12B76A; --green-tint:#E7F9F1;
+  --accent:#CB2015; --accent-tint:#FDF1EF;
+  --font-display:'Poppins',Arial,sans-serif;
+}
+.eyebrow,.section-title,.group-title{ color:var(--accent) !important; }
+.nossa-brandbar{ background:#fff; border-bottom:1px solid #E4E9EF; padding:14px 20px; display:flex; align-items:center; justify-content:center; gap:12px; }
+.nossa-brandbar img{ height:26px; width:auto; display:block; }
+.nossa-brandbar span{ font-family:'Inter',sans-serif; font-size:11px; font-weight:600; color:#64748B; letter-spacing:.04em; text-transform:uppercase; border-left:1px solid #E4E9EF; padding-left:12px; }
+</style>
+</head>
+<body>
+<div class="nossa-brandbar"><img src="data:image/png;base64,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" alt="Nossa Corretora"><span>CDL Mossoró × Unimed</span></div>
+
+<div class="hero">
+  <svg class="hero-spiral" viewBox="0 0 200 200" fill="none">
+    <g stroke="#3A4380" stroke-width="3">
+      <path d="M100 100 Q 130.7 116.8 160.7 169.1"/><path d="M100 100 Q 118.2 129.9 118.0 190.2"/>
+      <path d="M100 100 Q 100 135.4 80.9 190.2"/><path d="M100 100 Q 82.9 129.9 39.3 169.1"/>
+      <path d="M100 100 Q 69.3 116.8 10.3 130.9"/><path d="M100 100 Q 64.6 100 0 100"/>
+    </g>
+  </svg>
+  <div class="hero-badge">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px;"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg>
+    Link seguro e pessoal
+  </div>
+  <h1 id="heroTitle">Complete os dados da sua adesão</h1>
+  <p id="heroSub">CDL Mossoró × Unimed</p>
+</div>
+
+<div class="wrap" id="app">
+  <div class="card">
+    <div class="loading">
+      <div class="spinner"></div>
+      <p style="color:var(--gray);font-size:13.5px;">Carregando seus dados...</p>
+    </div>
+  </div>
+</div>
+<div class="wrap" style="margin-top:0;" id="footnoteArea"></div>
+
+<script>
+const SUPABASE_URL = 'https://ucqmgvmnqcbbboryuevn.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_8mxIm8xrMLcIICWXGxtFSA_sancrabI';
+const STORAGE_KEY = 'cdlunimed_portal_db_v1';
+function supabaseHeaders(extra) {
+  // Chave nova do Supabase (sb_publishable_) não é JWT — mandar ela também no
+  // header Authorization faz o Supabase tentar decodificar como JWT e rejeitar
+  // com 401. Só entra no header "apikey".
+  return Object.assign({ apikey: SUPABASE_ANON_KEY }, extra || {});
+}
+async function buscarFormularioPublico(numeroCliente, codigoEmpresa, codigoVida) {
+  const url = `${SUPABASE_URL}/functions/v1/public-questionario`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      action: 'get',
+      numeroCliente,
+      codigoEmpresa,
+      codigoVida,
+    }),
+  });
+  const result = await res.json();
+  if (!res.ok) throw new Error(result.error || 'Falha ao buscar dados: ' + res.status);
+  return result;
+}
+async function enviarFormularioPublico(numeroCliente, codigoEmpresa, endereco, pessoas) {
+  const url = `${SUPABASE_URL}/functions/v1/public-questionario`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      action: 'submit',
+      numeroCliente,
+      codigoEmpresa,
+      endereco,
+      pessoas,
+    }),
+  });
+  const result = await res.json();
+  if (!res.ok) throw new Error(result.error || 'Falha ao salvar: ' + res.status);
+  return result;
+}
+
+const ICONS = {
+  home: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 001 1h4v-6h4v6h4a1 1 0 001-1V9.5"/></svg>`,
+  user: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+  heart: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 00-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 00-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 000-7.8z"/></svg>`,
+  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>`,
+  clock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`,
+  lock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg>`,
+};
+
+const DS_QUESTIONS = [
+  'Aparelho Cardiovascular (Angina, Infarto, Hipertensão, Doença Reumática e Chagas, outras Valvulopatias, Aneurismas); já foi submetido a algum tratamento?',
+  'Aparelho Digestivo (Vesícula, Fígado, Pâncreas, Esôfago, Intestino e Outros)?',
+  'Aparelho Genito-Urinário (Cálculos, Ureter, Bexiga, Próstata, Infecção Urinária e Outras)?',
+  'Aparelho Respiratório (Asma, Bronquite, Enfisema, Pneumonia, Tuberculose, e Outras)?',
+  'Problemas Gineco-Obstétricos (Infertilidade, Distúrbios Menstruais, Gravidez, Períneo, Mioma, Cistos de Ovários e Trompas, Complicações no Parto, Sangramento ou Endometriose)?',
+  'Doenças Oculares (Deficiência Visual, Astigmatismo, Miopia, Catarata, Glaucoma, Estrabismo e Outros)?',
+  'Distúrbios Mentais e do Comportamento (Nervosismo, Ansiedade, Depressão, Esquizofrenia, Neurose, Ingestão de Álcool ou Drogas, Outros)?',
+  'Doenças de veias e artérias (Varizes, Trombose, Aneurismas)?',
+  'Doenças dos órgãos genitais masculinos (Próstata, Hidroceles, Outros)?',
+  'Doenças endócrinas ou metabólicas (Diabetes, Tireoide, Supra-Renal, Hipófise e Outras)?',
+  'Doenças da mama (Cistos, Displasias, Outros)?',
+  'Doenças do sistema imune (Lúpus, Artrite Reumatoide, Outras)?',
+  'Doenças neurológicas (Derrame, Paralisia, Epilepsia, Desmaios, Parkinson, Outras)?',
+  'Hérnias de qualquer natureza (Inguinal, Umbilical, Outras)?',
+  'Problemas hematológicos (Anemia, Leucemia, Coagulopatias, Outras)?',
+  'Malformações congênitas ou adquiridas?',
+  'Doenças otorrinolaringológicas (Otite, Sinusite, Amigdalite, Rinite, Faringite, Vertigem, Outras)?',
+  'É portador ou tem sequela de alguma doença neoplásica (Câncer)? Já fez cirurgia, quimioterapia ou radioterapia?',
+  'Doenças do aparelho osteolocomotor (Hérnia de Disco, Escoliose, Artrite, Artrose, Joanete, Osteomielite, Outras)? Já necessitou de cirurgia ou fisioterapia?',
+  'É portador ou tem sequela de doença infectocontagiosa (AIDS ou outras DSTs, Hepatite, Tuberculose, Meningite, Outras)?',
+  'Tem algum tratamento clínico ou cirúrgico indicado e ainda não realizado?',
+  'Deficiência de órgãos, membros ou sentidos?',
+  'Teve alguma internação clínica ou fez alguma cirurgia nos últimos 12 meses? Qual motivo?',
+  'Teve algum acidente que tenha deixado alguma sequela ou necessite de algum tratamento médico?',
+  'Alguma doença ou problema de saúde não relacionado acima? Qual?',
+];
+const DS_FAMILY_QUESTIONS = [
+  'História de câncer, hipertensão, infarto ou diabetes na família?',
+  'História de alergias?',
+];
+
+function onlyDigits(v) {
+  return (v || '').replace(/\D/g, '');
+}
+
+const params = new URLSearchParams(location.search);
+const CLIENT_NUMERO = params.get('c') || params.get('id'); // aceita "c" (novo) e "id" (links antigos)
+const EMPRESA_CODIGO = params.get('e');
+const VIDA_CODIGO = params.get('v');
+let DB = null;
+let CLIENT = null;
+let STEPS = [];
+let STEP_IDX = 0;
+const ANSWERS = {}; // ANSWERS[personKey] = {...}
+let ENDERECO = {};
+
+function listPessoasPublico(c) {
+  const todas = [
+    { key: 'titular', label: c.titular.nome || 'Titular', tipo: 'Titular', pessoa: c.titular },
+  ].concat(
+    c.dependentes.map((d, i) => ({
+      key: 'dep' + i,
+      label: d.nome || 'Dependente ' + (i + 1),
+      tipo: i + 1 + 'º Dependente',
+      pessoa: d,
+    }))
+  );
+  return VIDA_CODIGO ? todas.filter((p) => p.pessoa.codigoVida === VIDA_CODIGO) : todas;
+}
+
+async function boot() {
+  const app = document.getElementById('app');
+  if (!CLIENT_NUMERO) {
+    showError('Link inválido', 'Faltam informações no link. Peça um novo link para a CDL Mossoró.');
+    return;
+  }
+  try {
+    // A validação de empresa (EMPRESA_CODIGO) e de vida (VIDA_CODIGO) agora
+    // já acontece dentro da Edge Function, no servidor — não precisa mais
+    // repetir aqui.
+    CLIENT = await buscarFormularioPublico(CLIENT_NUMERO, EMPRESA_CODIGO, VIDA_CODIGO);
+    const pessoas = listPessoasPublico(CLIENT);
+    if (!pessoas.length) {
+      showError(
+        'Vida não encontrada',
+        'O código individual desta vida não foi localizado. Peça um novo link à CDL Mossoró.'
+      );
+      return;
+    }
+    STEPS = ['intro', 'endereco', ...pessoas.map((p) => 'pessoa:' + p.key)];
+    document.getElementById('heroSub').textContent =
+      CLIENT.titular.razaoSocial || 'CDL Mossoró × Unimed';
+    renderStep();
+  } catch (e) {
+    console.warn('boot error:', e);
+    const msg = (e.message || '').toLowerCase();
+    if (
+      msg.includes('403') ||
+      msg.includes('rls') ||
+      msg.includes('unauthorized') ||
+      msg.includes('permission')
+    ) {
+      showError(
+        'Acesso não autorizado',
+        'O servidor não conseguiu carregar seus dados. Entre em contato com a CDL Mossoró e informe o código do erro: RLS-403.'
+      );
+    } else if (msg.includes('empresa-invalida')) {
+      showError(
+        'Link inválido',
+        'O código da empresa não corresponde a este cadastro. Peça um novo link à CDL Mossoró.'
+      );
+    } else if (msg.includes('not-found') || msg.includes('not found') || msg.includes('404')) {
+      showError(
+        'Cadastro não encontrado',
+        'Não localizamos seus dados com este link. Fale com a CDL Mossoró para receber um novo link.'
+      );
+    } else {
+      showError(
+        'Não foi possível carregar',
+        'Verifique sua internet e tente abrir o link de novo em alguns instantes. (' +
+          (e.message || 'erro desconhecido') +
+          ')'
+      );
+    }
+  }
+}
+function showError(title, msg) {
+  document.getElementById('app').innerHTML =
+    `<div class="card"><div class="error-box"><h2>${title}</h2><p>${msg}</p></div></div>`;
+}
+
+function updateProgress() {
+  const pct = Math.round((STEP_IDX / STEPS.length) * 100);
+  const ring = document.getElementById('progressRing');
+  if (ring) {
+    ring.style.setProperty('--pct', pct);
+    document.getElementById('progressPct').textContent = pct + '%';
+  }
+}
+
+function renderStep() {
+  const stepId = STEPS[STEP_IDX];
+  const app = document.getElementById('app');
+  if (stepId === 'intro') {
+    renderIntro(app);
+    return;
+  }
+  if (stepId === 'endereco') {
+    renderEndereco(app);
+    return;
+  }
+  if (stepId.startsWith('pessoa:')) {
+    renderPessoa(app, stepId.split(':')[1]);
+    return;
+  }
+}
+
+function frameShell(inner, opts) {
+  opts = opts || {};
+  const label = opts.label || '';
+  return `
+    <div class="card">
+      ${
+        opts.noProgress
+          ? ''
+          : `
+      <div class="progress-row">
+        <div class="progress-ring" id="progressRing" style="--pct:0"><span id="progressPct">0%</span></div>
+        <div class="progress-label">${label}</div>
+      </div>`
+      }
+      ${inner}
+    </div>`;
+}
+
+function renderIntro(app) {
+  const t = CLIENT.titular;
+  app.innerHTML = frameShell(
+    `
+    <div style="text-align:center;">
+      <div class="intro-icon">${ICONS.heart}</div>
+      <h2 class="step-title">Olá${t.nome ? ', ' + t.nome.split(' ')[0] : ''}!</h2>
+      <p class="step-sub">Pra concluir a adesão do plano de saúde da <b>${t.razaoSocial || 'sua empresa'}</b>, precisamos completar mais algumas informações.</p>
+      <ul class="checklist">
+        <li>${ICONS.check}<span>Leva cerca de 5 a 8 minutos, dependendo de quantas pessoas estão no plano.</span></li>
+        <li>${ICONS.check}<span>Você pode fechar e voltar pelo mesmo link depois, se precisar.</span></li>
+        <li>${ICONS.check}<span>Suas respostas de saúde são confidenciais e usadas só para sua adesão.</span></li>
+      </ul>
+      <button class="btn btn-primary btn-block" onclick="goNext()">Começar</button>
+    </div>
+  `,
+    { noProgress: true }
+  );
+}
+
+function renderEndereco(app) {
+  const e = ENDERECO;
+  app.innerHTML = frameShell(
+    `
+    <div class="step-head">
+      <div class="step-icon">${ICONS.home}</div>
+      <div class="eyebrow">Endereço</div>
+    </div>
+    <h2 class="step-title">Onde fica sua empresa?</h2>
+    <p class="step-sub">Usamos o CEP pra preencher o resto automaticamente.</p>
+
+    <div class="fg"><label>CEP</label><input id="f_cep" placeholder="00000-000" value="${e.cep || ''}"><div class="field-hint" id="cepStatus"></div></div>
+    <div class="fg"><label>Endereço</label><input id="f_endereco" value="${e.endereco || ''}"></div>
+    <div class="field-grid">
+      <div class="fg"><label>Número</label><input id="f_numero" value="${e.numero || ''}"></div>
+      <div class="fg"><label>Complemento</label><input id="f_complemento" value="${e.complemento || ''}"></div>
+    </div>
+    <div class="field-grid">
+      <div class="fg"><label>Bairro</label><input id="f_bairro" value="${e.bairro || ''}"></div>
+      <div class="fg"><label>Cidade</label><input id="f_cidade" value="${e.cidade || 'Mossoró'}"></div>
+    </div>
+
+    <div class="q-actions">
+      <button class="btn btn-ghost" onclick="goPrev()">Voltar</button>
+      <button class="btn btn-primary" onclick="saveEnderecoAndNext()">Continuar</button>
+    </div>
+  `,
+    { label: 'Endereço' }
+  );
+  updateProgress();
+  document.getElementById('f_cep').addEventListener('input', onCepInput);
+}
+function saveEnderecoAndNext() {
+  ENDERECO = {
+    cep: onlyDigits(document.getElementById('f_cep').value),
+    endereco: document.getElementById('f_endereco').value,
+    numero: document.getElementById('f_numero').value,
+    complemento: document.getElementById('f_complemento').value,
+    bairro: document.getElementById('f_bairro').value,
+    cidade: document.getElementById('f_cidade').value,
+  };
+  goNext();
+}
+let cepTimer = null;
+function onCepInput(e) {
+  let v = onlyDigits(e.target.value).slice(0, 8);
+  e.target.value = v.replace(/^(\d{5})(\d)/, '$1-$2');
+  clearTimeout(cepTimer);
+  if (v.length === 8) {
+    cepTimer = setTimeout(() => lookupCep(v), 300);
+  }
+}
+async function lookupCep(digits) {
+  const statusEl = document.getElementById('cepStatus');
+  if (!statusEl) return; // a pessoa já saiu dessa etapa antes da busca terminar
+  statusEl.textContent = 'Buscando endereço...';
+  statusEl.className = 'field-hint';
+  try {
+    const r = await fetch(`https://viacep.com.br/ws/${digits}/json/`);
+    const data = await r.json();
+    const statusEl2 = document.getElementById('cepStatus');
+    if (!statusEl2) return;
+    if (data.erro) {
+      statusEl2.textContent = 'CEP não encontrado — preencha manualmente.';
+      return;
+    }
+    const enderecoEl = document.getElementById('f_endereco');
+    if (!enderecoEl) return;
+    enderecoEl.value = data.logradouro || '';
+    document.getElementById('f_bairro').value = data.bairro || '';
+    document.getElementById('f_cidade').value = data.localidade || 'Mossoró';
+    statusEl2.textContent = 'Endereço preenchido — confira o número.';
+    statusEl2.className = 'field-hint ok';
+  } catch (e) {
+    const statusEl3 = document.getElementById('cepStatus');
+    if (statusEl3) statusEl3.textContent = 'Não conseguimos buscar agora — preencha manualmente.';
+  }
+}
+
+function renderPessoa(app, key) {
+  const pessoas = listPessoasPublico(CLIENT);
+  const p = pessoas.find((x) => x.key === key);
+  const isTitular = key === 'titular';
+  const ans = ANSWERS[key] || (ANSWERS[key] = {});
+  const totalQ = DS_QUESTIONS.length + DS_FAMILY_QUESTIONS.length;
+  const respondidas =
+    DS_QUESTIONS.filter((q, i) => ans['q' + i] !== undefined).length +
+    DS_FAMILY_QUESTIONS.filter((q, i) => ans['f' + i] !== undefined).length;
+
+  app.innerHTML = frameShell(
+    `
+    <div class="step-head">
+      <div class="step-icon green">${ICONS.user}</div>
+      <div class="eyebrow">${p.tipo}</div>
+    </div>
+    <h2 class="step-title">${p.label}</h2>
+    <p class="step-sub">Complete os dados e a declaração de saúde desta pessoa.</p>
+
+    <div class="field-grid">
+      <div class="fg"><label>Sexo</label>
+        <select id="p_sexo">
+          <option value="">Selecione</option>
+          <option value="M" ${p.pessoa.sexo === 'M' ? 'selected' : ''}>Masculino</option>
+          <option value="F" ${p.pessoa.sexo === 'F' ? 'selected' : ''}>Feminino</option>
+        </select>
+      </div>
+      <div class="fg"><label>Nome da mãe</label><input id="p_mae" value="${p.pessoa.nomeMae || ''}"></div>
+    </div>
+    ${
+      isTitular
+        ? `
+    <div class="fg"><label>Estado civil</label>
+      <select id="p_civil">
+        <option value="">Selecione</option>
+        <option value="1" ${CLIENT.titular.estadoCivil === '1' ? 'selected' : ''}>Solteiro(a)</option>
+        <option value="2" ${CLIENT.titular.estadoCivil === '2' ? 'selected' : ''}>Casado(a)</option>
+        <option value="3" ${CLIENT.titular.estadoCivil === '3' ? 'selected' : ''}>Divorciado(a)</option>
+        <option value="4" ${CLIENT.titular.estadoCivil === '4' ? 'selected' : ''}>Viúvo(a)</option>
+        <option value="5" ${CLIENT.titular.estadoCivil === '5' ? 'selected' : ''}>União estável</option>
+      </select>
+    </div>`
+        : ''
+    }
+    <div class="field-grid">
+      <div class="fg"><label>Peso (kg)</label><input type="number" id="p_peso" value="${ans.peso || ''}"></div>
+      <div class="fg"><label>Altura (cm)</label><input type="number" id="p_altura" value="${ans.altura || ''}"></div>
+    </div>
+
+    <div class="section-title">Declaração de saúde</div>
+    <div class="ds-progress">
+      <span id="dsCount">${respondidas}/${totalQ}</span>
+      <div class="bar"><i id="dsBar" style="width:${Math.round((respondidas / totalQ) * 100)}%"></i></div>
+      <span style="color:var(--gray-soft);font-weight:600;">respondidas</span>
+    </div>
+    <p class="step-sub" style="margin-top:-6px;">Responda com sinceridade — isso não impede sua adesão, só ajuda a Unimed a te orientar melhor.</p>
+
+    <div id="dsQuestions">
+      ${DS_QUESTIONS.map((q, i) => dsQuestionCard('q', i, q, ans)).join('')}
+    </div>
+
+    <div class="section-title">Histórico familiar</div>
+    <div id="dsFamily">
+      ${DS_FAMILY_QUESTIONS.map((q, i) => dsQuestionCard('f', i, q, ans, true)).join('')}
+    </div>
+
+    <div class="q-actions">
+      <button class="btn btn-ghost" onclick="savePessoaData('${key}'); goPrev();">Voltar</button>
+      <button class="btn btn-primary" id="pessoaNextBtn" onclick="savePessoaAndNext('${key}')">${STEP_IDX === STEPS.length - 1 ? 'Enviar meus dados' : 'Continuar'}</button>
+    </div>
+  `,
+    { label: p.tipo }
+  );
+  updateProgress();
+}
+function dsQuestionCard(prefix, i, text, ans, noDetail) {
+  const val = ans[prefix + i];
+  const cls = val === 'Sim' ? 'answered-sim' : val === 'Não' ? 'answered-nao' : '';
+  return `
+    <div class="ds-q-card ${cls}" id="dsCard_${prefix}${i}">
+      <div><span class="ds-q-num">${i + 1}</span><span class="ds-q-text">${text}</span></div>
+      <div class="ds-toggle">
+        <button type="button" id="btn_${prefix}${i}_nao" class="${val === 'Não' ? 'active-nao' : ''}" onclick="setDs('${prefix}',${i},false,${!!noDetail})">Não</button>
+        <button type="button" id="btn_${prefix}${i}_sim" class="${val === 'Sim' ? 'active-sim' : ''}" onclick="setDs('${prefix}',${i},true,${!!noDetail})">Sim</button>
+      </div>
+      ${noDetail ? '' : `<input class="ds-detail" id="det_${prefix}${i}" placeholder="Especifique" value="${ans[prefix + i + '_det'] || ''}" style="display:${val === 'Sim' ? 'block' : 'none'};">`}
+    </div>`;
+}
+function setDs(prefix, i, isSim, noDetail) {
+  const key = STEPS[STEP_IDX].split(':')[1];
+  const ans = ANSWERS[key] || (ANSWERS[key] = {});
+  ans[prefix + i] = isSim ? 'Sim' : 'Não';
+  document.getElementById(`btn_${prefix}${i}_nao`).classList.toggle('active-nao', !isSim);
+  document.getElementById(`btn_${prefix}${i}_sim`).classList.toggle('active-sim', isSim);
+  const card = document.getElementById(`dsCard_${prefix}${i}`);
+  card.classList.toggle('answered-sim', isSim);
+  card.classList.toggle('answered-nao', !isSim);
+  if (!noDetail) {
+    const det = document.getElementById(`det_${prefix}${i}`);
+    det.style.display = isSim ? 'block' : 'none';
+  }
+  // atualiza contador
+  const totalQ = DS_QUESTIONS.length + DS_FAMILY_QUESTIONS.length;
+  const respondidas =
+    DS_QUESTIONS.filter((q, idx) => ans['q' + idx] !== undefined).length +
+    DS_FAMILY_QUESTIONS.filter((q, idx) => ans['f' + idx] !== undefined).length;
+  document.getElementById('dsCount').textContent = respondidas + '/' + totalQ;
+  document.getElementById('dsBar').style.width = Math.round((respondidas / totalQ) * 100) + '%';
+}
+function savePessoaData(key) {
+  const ans = ANSWERS[key] || (ANSWERS[key] = {});
+  ans.sexoInput = document.getElementById('p_sexo').value;
+  ans.maeInput = document.getElementById('p_mae').value;
+  ans.peso = document.getElementById('p_peso').value;
+  ans.altura = document.getElementById('p_altura').value;
+  const civilEl = document.getElementById('p_civil');
+  if (civilEl) ans.civilInput = civilEl.value;
+  DS_QUESTIONS.forEach((q, i) => {
+    const det = document.getElementById('det_q' + i);
+    if (det) ans['q' + i + '_det'] = det.value;
+  });
+}
+function savePessoaAndNext(key) {
+  savePessoaData(key);
+  if (STEP_IDX === STEPS.length - 1) {
+    enviarFormulario();
+  } else {
+    goNext();
+  }
+}
+
+function goNext() {
+  if (STEP_IDX < STEPS.length - 1) {
+    STEP_IDX++;
+    renderStep();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}
+function goPrev() {
+  if (STEP_IDX > 0) {
+    STEP_IDX--;
+    renderStep();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}
+
+async function enviarFormulario() {
+  const btn = document.getElementById('pessoaNextBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Enviando...';
+  }
+
+  const c = CLIENT;
+  const pessoasPayload = [];
+  const pessoas = listPessoasPublico(c);
+  pessoas.forEach((p) => {
+    const ans = ANSWERS[p.key] || {};
+    const ds = {};
+    DS_QUESTIONS.forEach((q, i) => {
+      ds['q' + i] = ans['q' + i] || 'Não';
+      if (ds['q' + i] === 'Sim') ds['q' + i + '_det'] = ans['q' + i + '_det'] || '';
+    });
+    DS_FAMILY_QUESTIONS.forEach((q, i) => {
+      ds['f' + i] = ans['f' + i] || 'Não';
+    });
+    ds.peso = ans.peso;
+    ds.altura = ans.altura;
+    pessoasPayload.push({
+      key: p.key,
+      sexo: ans.sexoInput || undefined,
+      nomeMae: ans.maeInput || undefined,
+      estadoCivil: p.key === 'titular' ? ans.civilInput || undefined : undefined,
+      dsRespostas: ds,
+    });
+  });
+
+  try {
+    await enviarFormularioPublico(CLIENT_NUMERO, EMPRESA_CODIGO, ENDERECO, pessoasPayload);
+    showSuccess();
+  } catch (e) {
+    console.warn(e);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Enviar meus dados';
+    }
+    alert('Não foi possível enviar agora. Verifique sua internet e tente novamente.');
+  }
+}
+
+function showSuccess() {
+  document.getElementById('app').innerHTML = frameShell(
+    `
+    <div style="text-align:center;">
+      <div class="success-icon">${ICONS.check}</div>
+      <h2 class="step-title">Recebemos seus dados!</h2>
+      <p class="step-sub">Obrigado por completar as informações. Nosso time da CDL Mossoró já está com tudo em mãos pra dar andamento à sua adesão junto à Unimed.</p>
+    </div>
+  `,
+    { noProgress: true }
+  );
+}
+
+document.getElementById('footnoteArea').innerHTML =
+  `<p class="footnote">${ICONS.lock} Seus dados são de responsabilidade da Nossa Corretora de Seguros e usados só para sua adesão junto à CDL Mossoró e Unimed, em conformidade com a LGPD.</p>`;
+boot();
+</script>
+
+</body>
+</html>
