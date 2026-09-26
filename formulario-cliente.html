@@ -177,7 +177,7 @@ async function buscarFormularioPublico(numeroCliente, codigoEmpresa, codigoVida)
   if (!res.ok) throw new Error(result.error || 'Falha ao buscar dados: ' + res.status);
   return result;
 }
-async function enviarFormularioPublico(numeroCliente, codigoEmpresa, endereco, pessoas) {
+async function enviarFormularioPublico(numeroCliente, codigoEmpresa, endereco, pessoas, codigoVida) {
   const url = `${SUPABASE_URL}/functions/v1/public-questionario`;
   const res = await fetch(url, {
     method: 'POST',
@@ -188,6 +188,7 @@ async function enviarFormularioPublico(numeroCliente, codigoEmpresa, endereco, p
       codigoEmpresa,
       endereco,
       pessoas,
+      codigoVida,
     }),
   });
   const result = await res.json();
@@ -287,6 +288,11 @@ async function boot() {
     STEPS = ['intro', 'endereco', ...pessoas.map((p) => 'pessoa:' + p.key)];
     document.getElementById('heroSub').textContent =
       CLIENT.titular.razaoSocial || 'CDL Mossoró × Unimed';
+    if (CLIENT.ehTitular && CLIENT.familiaCompleta) {
+      if (CLIENT.assinatura && CLIENT.assinatura.completed) return showAssinado();
+      if (CLIENT.assinatura && CLIENT.assinatura.signUrl) return showAssinarAgora(CLIENT.assinatura.signUrl);
+      return showProntoParaAssinar();
+    }
     renderStep();
   } catch (e) {
     console.warn('boot error:', e);
@@ -513,10 +519,6 @@ function renderPessoa(app, key) {
     </div>`
         : ''
     }
-    <div class="field-grid">
-      <div class="fg"><label>Peso (kg)</label><input type="number" id="p_peso" value="${ans.peso || ''}"></div>
-      <div class="fg"><label>Altura (cm)</label><input type="number" id="p_altura" value="${ans.altura || ''}"></div>
-    </div>
 
     <div class="section-title">Declaração de saúde</div>
     <div class="ds-progress">
@@ -533,6 +535,16 @@ function renderPessoa(app, key) {
     <div class="section-title">Histórico familiar</div>
     <div id="dsFamily">
       ${DS_FAMILY_QUESTIONS.map((q, i) => dsQuestionCard('f', i, q, ans, true)).join('')}
+    </div>
+
+    <div class="section-title">Peso e altura</div>
+    <div class="ds-q-card ${ans.peso && ans.altura ? 'answered-nao' : ''}" id="dsCard_medidas">
+      <div><span class="ds-q-text">Informe o peso e a altura ${isTitular ? 'do titular' : 'desta pessoa'} — a Unimed pede na declaração de saúde.</span></div>
+      <div class="field-grid" style="margin-top:10px;">
+        <div class="fg"><label>Peso (kg)</label><input type="text" inputmode="decimal" autocomplete="off" id="p_peso" placeholder="Ex.: 70" value="${ans.peso || ''}" oninput="atualizarImcTela()"></div>
+        <div class="fg"><label>Altura (cm)</label><input type="text" inputmode="decimal" autocomplete="off" id="p_altura" placeholder="Ex.: 165 ou 1,65" value="${ans.altura || ''}" oninput="atualizarImcTela()"></div>
+      </div>
+      <div id="imcInfo" style="font-size:12px;color:var(--gray);margin-top:6px;">${textoImc(ans.peso, ans.altura)}</div>
     </div>
 
     <div class="q-actions">
@@ -591,8 +603,66 @@ function savePessoaData(key) {
     if (det) ans['q' + i + '_det'] = det.value;
   });
 }
+// peso/altura: aceita altura em cm (165) ou metros (1,65); devolve null se não der
+function medidasValidas(peso, altura) {
+  const p = parseFloat(String(peso || '').replace(',', '.'));
+  let a = parseFloat(String(altura || '').replace(',', '.'));
+  if (a > 0 && a < 3) a = a * 100;
+  if (!(p >= 1 && p <= 350) || !(a >= 30 && a <= 230)) return null;
+  return { peso: p, alturaCm: Math.round(a) };
+}
+function textoImc(peso, altura) {
+  const m = medidasValidas(peso, altura);
+  if (!m) return '';
+  const imc = m.peso / Math.pow(m.alturaCm / 100, 2);
+  return `IMC: ${imc.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}`;
+}
+function atualizarImcTela() {
+  const el = document.getElementById('imcInfo');
+  if (el) el.textContent = textoImc(document.getElementById('p_peso').value, document.getElementById('p_altura').value);
+}
+function rolarAte(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.style.boxShadow = '0 0 0 3px rgba(203,32,21,.35)';
+  setTimeout(() => (el.style.boxShadow = ''), 2500);
+}
+// Não deixa avançar com a declaração incompleta — a Unimed recusa a ficha
+function validarPessoa(key) {
+  const ans = ANSWERS[key] || {};
+  const faltaQ = DS_QUESTIONS.findIndex((q, i) => ans['q' + i] !== 'Sim' && ans['q' + i] !== 'Não');
+  if (faltaQ >= 0) {
+    alert(`Responda a pergunta ${faltaQ + 1} da declaração de saúde.`);
+    rolarAte('dsCard_q' + faltaQ);
+    return false;
+  }
+  const faltaF = DS_FAMILY_QUESTIONS.findIndex((q, i) => ans['f' + i] !== 'Sim' && ans['f' + i] !== 'Não');
+  if (faltaF >= 0) {
+    alert(`Responda a pergunta ${faltaF + 1} do histórico familiar.`);
+    rolarAte('dsCard_f' + faltaF);
+    return false;
+  }
+  const semDetalhe = DS_QUESTIONS.findIndex((q, i) => ans['q' + i] === 'Sim' && !String(ans['q' + i + '_det'] || '').trim());
+  if (semDetalhe >= 0) {
+    alert(`Na pergunta ${semDetalhe + 1} você respondeu "Sim" — explique no campo "Especifique".`);
+    rolarAte('dsCard_q' + semDetalhe);
+    return false;
+  }
+  const m = medidasValidas(ans.peso, ans.altura);
+  if (!m) {
+    alert('Informe o peso (em kg) e a altura (em cm) — são obrigatórios na declaração de saúde.');
+    rolarAte('dsCard_medidas');
+    return false;
+  }
+  ans.peso = String(m.peso);
+  ans.altura = String(m.alturaCm);
+  return true;
+}
+
 function savePessoaAndNext(key) {
   savePessoaData(key);
+  if (!validarPessoa(key)) return;
   if (STEP_IDX === STEPS.length - 1) {
     enviarFormulario();
   } else {
@@ -647,29 +717,334 @@ async function enviarFormulario() {
   });
 
   try {
-    await enviarFormularioPublico(CLIENT_NUMERO, EMPRESA_CODIGO, ENDERECO, pessoasPayload);
-    showSuccess();
+    const status = await enviarFormularioPublico(CLIENT_NUMERO, EMPRESA_CODIGO, ENDERECO, pessoasPayload, VIDA_CODIGO);
+    if (status && status.ehTitular && status.familiaCompleta) iniciarAssinatura();
+    else showSuccess(status);
   } catch (e) {
     console.warn(e);
     if (btn) {
       btn.disabled = false;
       btn.textContent = 'Enviar meus dados';
     }
-    alert('Não foi possível enviar agora. Verifique sua internet e tente novamente.');
+    const motivo = String(e && e.message ? e.message : '').slice(0, 160);
+    alert(
+      'Não foi possível enviar agora.' +
+        (motivo ? `\n\nDetalhe: ${motivo}` : '') +
+        '\n\nTente novamente em alguns instantes. Se continuar, fale com a CDL Mossoró.'
+    );
   }
 }
 
-function showSuccess() {
+function showSuccess(status) {
+  const faltam = (status && status.faltam) || [];
+  let proximo = 'Nosso time da CDL Mossoró já está com tudo em mãos pra dar andamento à sua adesão junto à Unimed.';
+  if (faltam.length) {
+    proximo = `Ainda falta preencher: <b>${faltam.map(escHtml).join(', ')}</b>. Quando todos terminarem, o titular abre o link dele para <b>assinar os documentos</b>.`;
+  } else if (status && !status.ehTitular) {
+    proximo = `Todos já responderam. Agora falta o titular, <b>${escHtml(CLIENT.titular.nome || '')}</b>, abrir o link dele para <b>assinar os documentos</b>.`;
+  }
   document.getElementById('app').innerHTML = frameShell(
     `
     <div style="text-align:center;">
       <div class="success-icon">${ICONS.check}</div>
       <h2 class="step-title">Recebemos seus dados!</h2>
-      <p class="step-sub">Obrigado por completar as informações. Nosso time da CDL Mossoró já está com tudo em mãos pra dar andamento à sua adesão junto à Unimed.</p>
+      <p class="step-sub">Obrigado por completar as informações. ${proximo}</p>
     </div>
   `,
     { noProgress: true }
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ASSINATURA — depois que a família toda respondeu, o titular gera aqui a
+// ficha de inclusão oficial da Unimed (Declaração de Saúde + Aditivo RC) e
+// assina pela Autentique. O corretor (intermediário) assina pelo portal.
+// ═══════════════════════════════════════════════════════════════════════
+function escHtml(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+}
+// Preenche a FICHA DE INCLUSÃO (Carta de Orientação + Declaração de Saúde +
+// Declaração do Proponente + Aditivo RC) — modelo oficial Unimed Natal, 7 páginas.
+// Uma ficha por titular (ele + até 5 dependentes na DS e até 3 no RC).
+// Coordenadas medidas no próprio PDF (A4, a partir do TOPO da página).
+async function preencherFichaInclusao(PDFLib, templateBytes, d) {
+  const { PDFDocument, StandardFonts, rgb } = PDFLib;
+  const pdf = await PDFDocument.load(templateBytes);
+  const fonte = await pdf.embedFont(StandardFonts.Helvetica);
+  const negrito = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const pg = pdf.getPages();
+  const H = 842;
+  const azul = rgb(0.02, 0.1, 0.45);
+  const seguro = (v) =>
+    String(v == null ? '' : v)
+      .replace(/[\u2013\u2014]/g, '-')
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/[^\x20-\xFF]/g, '');
+  const txt = (p, valor, x, base, largura, tam = 8.5, f = fonte) => {
+    const s = seguro(valor).trim();
+    if (!s) return;
+    let t = tam;
+    while (t > 4.5 && f.widthOfTextAtSize(s, t) > largura) t -= 0.25;
+    p.drawText(s, { x, y: H - base, size: t, font: f, color: azul });
+  };
+  const centro = (p, valor, cx, base, largura, tam = 8.5, f = fonte) => {
+    const s = seguro(valor).trim();
+    if (!s) return;
+    let t = tam;
+    while (t > 4.5 && f.widthOfTextAtSize(s, t) > largura) t -= 0.25;
+    p.drawText(s, { x: cx - f.widthOfTextAtSize(s, t) / 2, y: H - base, size: t, font: f, color: azul });
+  };
+  const marcaX = (p, cx, cy, tam = 3) => {
+    const o = { thickness: 1.3, color: azul };
+    p.drawLine({ start: { x: cx - tam, y: H - cy - tam }, end: { x: cx + tam, y: H - cy + tam }, ...o });
+    p.drawLine({ start: { x: cx - tam, y: H - cy + tam }, end: { x: cx + tam, y: H - cy - tam }, ...o });
+  };
+  const [dia, mes, ano] = seguro(d.data || '').split('/');
+  const MESES = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+  const mesExtenso = MESES[Number(mes) - 1] || mes || '';
+
+  // ── Pág. 2: beneficiário e intermediário (assinaturas ficam pra Autentique)
+  const p2 = pg[1];
+  txt(p2, d.local, 58, 298, 131);
+  centro(p2, dia, 206, 298, 19);
+  centro(p2, mes, 231.2, 298, 19);
+  centro(p2, ano, 259, 298, 24);
+  txt(p2, d.titularNome, 86, 323.5, 186);
+  txt(p2, d.local, 323, 298, 107);
+  centro(p2, dia, 446.5, 298, 19);
+  centro(p2, mes, 471.5, 298, 19);
+  centro(p2, ano, 499, 298, 24);
+  txt(p2, d.intermediarioNome, 351, 318.5, 186);
+  txt(p2, d.intermediarioCpf, 344, 336, 190);
+
+  // ── Págs. 3 e 4: Declaração de Saúde (27 itens × titular + 5 dependentes)
+  const p3 = pg[2], p4 = pg[3];
+  txt(p3, d.numeroContrato, 64, 58.5, 124, 10, negrito);
+  const colX = [441.7, 464.3, 486.9, 509.55, 532.2, 554.8];
+  const linhas3 = [138.4,165.2,192.1,219.0,245.9,272.7,299.6,326.5,353.3,380.2,407.1,433.9,460.8,487.7,514.6,541.4,568.3,595.2,622.0,648.9,675.8,702.6,729.5,756.4,783.3];
+  const linhas4 = [111.2, 138.0, 164.9, 191.8];
+  const pessoas = (d.pessoas || []).slice(0, 6); // [titular, dep1..dep5]
+  for (let item = 1; item <= 27; item++) {
+    const p = item <= 24 ? p3 : p4;
+    const topo = item <= 24 ? linhas3[item - 1] : linhas4[item - 25];
+    const fundo = item <= 24 ? linhas3[item] : linhas4[item - 24];
+    const base = (topo + fundo) / 2 + 2.5;
+    pessoas.forEach((pe, col) => {
+      const r = pe.respostas[item];
+      if (r === 'Sim' || r === 'Não') centro(p, r === 'Sim' ? 'SIM' : 'NÃO', colX[col], base, 20, 6.5, negrito);
+    });
+  }
+  // item 28: peso / altura / IMC (uma linha por pessoa)
+  const linhasPeso = [207.5, 223.0, 239.0, 255.0, 271.0, 287.0];
+  pessoas.forEach((pe, i) => {
+    const b = linhasPeso[i] - 2;
+    txt(p4, pe.peso, 90, b, 44);
+    txt(p4, pe.altura, 176, b, 80);
+    txt(p4, pe.imc, 303, b, 68);
+  });
+  // detalhamento de cada "SIM" (até 4 linhas; o excesso vai resumido na última)
+  const linhasObs = [353.2, 369.9, 386.6, 403.3, 420.0];
+  const obs = d.observacoes || [];
+  const mostrar = obs.length > 4 ? obs.slice(0, 3).concat([{ item: '...', pessoa: 'vários', texto: obs.slice(3).map((o) => `item ${o.item} (${o.pessoa}): ${o.texto}`).join('; ') }]) : obs;
+  mostrar.forEach((o, i) => {
+    const b = (linhasObs[i] + linhasObs[i + 1]) / 2 + 2.5;
+    centro(p4, o.item, 60.8, b, 58);
+    txt(p4, o.pessoa, 95, b, 158);
+    txt(p4, o.texto, 259, b, 304, 7.5);
+  });
+  txt(p4, d.titularNome, 33, 454, 265);
+  if (d.entrevista === 'c') marcaX(p4, 47.5, 537.3, 2.8);
+
+  // ── Pág. 5: Declaração do Proponente — data
+  const p5 = pg[4];
+  centro(p5, dia, 318, 424.5, 26);
+  centro(p5, mesExtenso, 411, 424.5, 120);
+  centro(p5, ano, 503.8, 424.5, 26);
+
+  // ── Págs. 6 e 7: Aditivo de Redução de Carência
+  const p6 = pg[5], p7 = pg[6];
+  marcaX(p6, 175.3, 86.5, 4);
+  txt(p6, d.numeroContrato, 150, 103.5, 150, 10, negrito);
+  txt(p6, d.registroAns, 484, 103, 66);
+  centro(p6, dia, 293, 115.5, 20);
+  centro(p6, mes, 318, 115.5, 20);
+  centro(p6, ano, 352, 115.5, 38);
+  txt(p6, d.contratanteNome, 44, 158, 390);
+  const caixasRc = [136.25, 260.25, 391.5, 519.25];
+  (d.rc || []).slice(0, 4).forEach((v, i) => centro(p7, v, caixasRc[i], 262.8, 38, 11, negrito));
+  centro(p7, dia, 212, 521, 48);
+  centro(p7, mesExtenso, 308, 521, 114);
+  centro(p7, ano, 410.5, 521, 62);
+
+  return await pdf.save();
+}
+
+const REGISTRO_ANS_POR_PLANO = { essencial: '488.675/21-5', greenEnf: '486.090/20-0', greenApt: '486.088/20-8' };
+const POSICOES_TITULAR = [
+  { pagina: 1, x: 72, y: 86 },
+  { pagina: 2, x: 18.8, y: 35.2 },
+  { pagina: 4, x: 60.1, y: 49.7 },
+  { pagina: 5, x: 58.6, y: 50.1 },
+  { pagina: 7, x: 37.0, y: 67.4 },
+];
+const POSICOES_INTERMEDIARIO = [{ pagina: 2, x: 63.3, y: 36.7 }];
+function chavePlanoPorNome(nome) {
+  const n = String(nome || '');
+  if (/apartamento/i.test(n)) return 'greenApt';
+  if (/enfermaria|green/i.test(n)) return 'greenEnf';
+  return n ? 'essencial' : '';
+}
+function respostasDsUnimed(ds) {
+  const r = {};
+  if (!ds) return r;
+  for (let i = 0; i < 24; i++) r[i + 1] = ds['q' + i];
+  r[25] = ds.f0;
+  r[26] = ds.f1;
+  r[27] = ds.q24;
+  return r;
+}
+function pesoAlturaImc(ds) {
+  const peso = parseFloat(String(ds?.peso || '').replace(',', '.'));
+  let alt = parseFloat(String(ds?.altura || '').replace(',', '.'));
+  if (alt > 3) alt = alt / 100;
+  const br = (n, c) => n.toLocaleString('pt-BR', { minimumFractionDigits: c, maximumFractionDigits: c });
+  return {
+    peso: peso > 0 ? br(peso, peso % 1 ? 1 : 0) : '',
+    altura: alt > 0 ? br(alt, 2) : '',
+    imc: peso > 0 && alt > 0 ? br(peso / (alt * alt), 2) : '',
+  };
+}
+function formatarCpf(v) {
+  const d = String(v || '').replace(/\D/g, '');
+  return d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : v || '';
+}
+let __pdfLibPromise = null;
+function carregarPdfLib() {
+  if (window.PDFLib) return Promise.resolve(window.PDFLib);
+  if (__pdfLibPromise) return __pdfLibPromise;
+  const fontes = [
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js',
+    'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js',
+  ];
+  __pdfLibPromise = (async () => {
+    for (const src of fontes) {
+      try {
+        await new Promise((res, rej) => {
+          const el = document.createElement('script');
+          el.src = src;
+          el.onload = res;
+          el.onerror = rej;
+          document.head.appendChild(el);
+        });
+        if (window.PDFLib) return window.PDFLib;
+      } catch (e) {}
+    }
+    __pdfLibPromise = null;
+    throw new Error('Não foi possível carregar o gerador de documentos.');
+  })();
+  return __pdfLibPromise;
+}
+async function chamarQuestionario(action, extra) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/public-questionario`, {
+    method: 'POST',
+    headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(Object.assign({ action, numeroCliente: CLIENT_NUMERO, codigoEmpresa: EMPRESA_CODIGO, codigoVida: VIDA_CODIGO }, extra || {})),
+  });
+  const r = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(r.error || 'Falha (' + res.status + ')');
+  return r;
+}
+function bytesParaBase64(bytes) {
+  let bin = '';
+  const passo = 0x8000;
+  for (let i = 0; i < bytes.length; i += passo) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + passo));
+  return btoa(bin);
+}
+function telaAssinatura(corpo) {
+  document.getElementById('app').innerHTML = frameShell(`<div style="text-align:center;">${corpo}</div>`, { noProgress: true });
+}
+function showProntoParaAssinar() {
+  telaAssinatura(`
+    <div class="success-icon">${ICONS.check}</div>
+    <h2 class="step-title">Falta só assinar</h2>
+    <p class="step-sub">As respostas de todos já foram recebidas. Agora vamos gerar a sua ficha de inclusão da Unimed (Declaração de Saúde e Aditivo de Carência) para você assinar pelo celular.</p>
+    <button class="btn btn-primary" style="width:100%;margin-top:10px;" onclick="iniciarAssinatura()">Gerar e assinar meus documentos</button>
+    <button class="btn btn-ghost" style="width:100%;margin-top:8px;" onclick="renderStep()">Revisar minhas respostas</button>`);
+}
+function showAssinarAgora(url) {
+  telaAssinatura(`
+    <div class="success-icon">${ICONS.check}</div>
+    <h2 class="step-title">Seus documentos estão prontos</h2>
+    <p class="step-sub">Toque no botão abaixo para ler e assinar sua ficha de inclusão da Unimed. A assinatura é eletrônica, pela Autentique, e tem validade jurídica.</p>
+    <a class="btn btn-primary" style="display:block;width:100%;margin-top:10px;text-decoration:none;" href="${escHtml(url)}" target="_blank" rel="noopener">Assinar agora</a>
+    <p class="step-sub" style="font-size:12px;margin-top:12px;">Depois de assinar, pode fechar esta página. O corretor assina a parte dele e a CDL Mossoró segue com a sua adesão.</p>`);
+}
+function showAssinado() {
+  telaAssinatura(`
+    <div class="success-icon">${ICONS.check}</div>
+    <h2 class="step-title">Documentos assinados</h2>
+    <p class="step-sub">Está tudo certo com a sua parte. A CDL Mossoró segue com a sua adesão junto à Unimed.</p>`);
+}
+async function iniciarAssinatura() {
+  telaAssinatura(`<div class="loading"><div class="spinner"></div><p style="color:var(--gray);font-size:13.5px;">Preparando seus documentos... isso leva alguns segundos.</p></div>`);
+  try {
+    const d = await chamarQuestionario('ficha-dados');
+    const PDFLib = await carregarPdfLib();
+    const resTpl = await fetch('modelos/ficha-inclusao-ds-rc.pdf');
+    if (!resTpl.ok) throw new Error('modelo da ficha não encontrado');
+    const tpl = new Uint8Array(await resTpl.arrayBuffer());
+    const obs = [];
+    const pessoas = d.pessoas.slice(0, 6).map((pe, i) => {
+      const ds = pe.dsRespostas || null;
+      const resp = respostasDsUnimed(ds);
+      Object.keys(resp).forEach((item) => {
+        if (resp[item] !== 'Sim') return;
+        const n = Number(item);
+        const det = n <= 24 ? ds['q' + (n - 1) + '_det'] : n === 27 ? ds.q24_det : '';
+        obs.push({ item: String(n), pessoa: i === 0 ? 'Titular' : `${i}º dependente`, texto: det || '' });
+      });
+      return { respostas: resp, ...pesoAlturaImc(ds) };
+    });
+    const bytes = await preencherFichaInclusao(PDFLib, tpl, {
+      numeroContrato: '288215',
+      data: new Date().toLocaleDateString('pt-BR'),
+      local: 'Mossoró',
+      titularNome: d.titularNome,
+      contratanteNome: d.titularNome,
+      intermediarioNome: d.intermediario.nome,
+      intermediarioCpf: formatarCpf(d.intermediario.cpf),
+      registroAns: REGISTRO_ANS_POR_PLANO[chavePlanoPorNome(d.planoEscolhido)] || '',
+      entrevista: 'c',
+      pessoas,
+      observacoes: obs,
+      rc: d.rc,
+    });
+    const pdfBase64 = bytesParaBase64(bytes);
+    const resAut = await fetch(`${SUPABASE_URL}/functions/v1/autentique-create`, {
+      method: 'POST',
+      headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        tituloDocumento: `Ficha de inclusao - ${d.titularNome}`,
+        pdfBase64,
+        signers: [
+          { nome: d.titularNome, posicoes: POSICOES_TITULAR },
+          { nome: d.intermediario.nome, posicoes: POSICOES_INTERMEDIARIO },
+        ],
+      }),
+    });
+    const aut = await resAut.json().catch(() => ({}));
+    if (!resAut.ok || !aut.documentId) throw new Error(aut.error || 'a Autentique não criou o documento');
+    if (!Array.isArray(aut.signers) || aut.signers.length < 2) throw new Error('assinatura com dois assinantes indisponível (atualize a função autentique-create)');
+    const reg = await chamarQuestionario('ficha-registrar', { pdfBase64, autentique: aut });
+    showAssinarAgora(reg.signUrl);
+  } catch (e) {
+    console.warn('assinatura', e);
+    telaAssinatura(`
+      <h2 class="step-title">Não conseguimos gerar agora</h2>
+      <p class="step-sub">Suas respostas estão salvas. Tente de novo em alguns instantes; se continuar, fale com a CDL Mossoró.<br><br><small>Detalhe: ${escHtml(String(e.message || e).slice(0, 160))}</small></p>
+      <button class="btn btn-primary" style="width:100%;margin-top:10px;" onclick="iniciarAssinatura()">Tentar de novo</button>`);
+  }
 }
 
 document.getElementById('footnoteArea').innerHTML =
