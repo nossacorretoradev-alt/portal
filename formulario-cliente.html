@@ -285,6 +285,13 @@ async function boot() {
       );
       return;
     }
+    // Já traz o que o portal sabe: endereço da empresa e respostas que a
+    // pessoa deste link já deu — ela só confere, não digita tudo de novo.
+    ENDERECO = Object.assign({}, CLIENT.endereco || {});
+    pessoas.forEach((pe) => {
+      const ds = pe.pessoa && pe.pessoa.dsRespostas;
+      if (ds && !ANSWERS[pe.key]) ANSWERS[pe.key] = Object.assign({}, ds);
+    });
     STEPS = ['intro', 'endereco', ...pessoas.map((p) => 'pessoa:' + p.key)];
     document.getElementById('heroSub').textContent =
       CLIENT.titular.razaoSocial || 'CDL Mossoró × Unimed';
@@ -404,10 +411,10 @@ function renderEndereco(app) {
       <div class="step-icon">${ICONS.home}</div>
       <div class="eyebrow">Endereço</div>
     </div>
-    <h2 class="step-title">Onde fica sua empresa?</h2>
-    <p class="step-sub">Usamos o CEP pra preencher o resto automaticamente.</p>
+    <h2 class="step-title">${e.cep && e.endereco ? 'Confira o endereço da empresa' : 'Onde fica sua empresa?'}</h2>
+    <p class="step-sub">${e.cep && e.endereco ? 'Já temos esse endereço no cadastro. Se estiver certo, é só continuar.' : 'Usamos o CEP pra preencher o resto automaticamente.'}</p>
 
-    <div class="fg"><label>CEP</label><input id="f_cep" placeholder="00000-000" value="${e.cep || ''}"><div class="field-hint" id="cepStatus"></div></div>
+    <div class="fg"><label>CEP</label><input id="f_cep" placeholder="00000-000" value="${String(e.cep || '').replace(/^(\d{5})(\d{3})$/, '$1-$2')}"><div class="field-hint" id="cepStatus"></div></div>
     <div class="fg"><label>Endereço</label><input id="f_endereco" value="${e.endereco || ''}"></div>
     <div class="field-grid">
       <div class="fg"><label>Número</label><input id="f_numero" value="${e.numero || ''}"></div>
