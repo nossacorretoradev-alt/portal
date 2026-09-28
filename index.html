@@ -8365,24 +8365,57 @@ function renderClientModal() {
     tabContent = `<div class="empty-state">${ICONS.check}<div><b>Implantação concluída.</b><br><span style="font-size:12px;color:var(--text-muted);">Comissões são tratadas exclusivamente no relatório de comissões.</span></div></div>`;
   } else if (ACTIVE_PERSON_TAB === 'questionario') {
     const feito = listPessoas(c).every((p) => !!p.pessoa.questionarioRiscoConcluidoEm);
+    const linhaVida = (x, p) => {
+      const sit = situacaoPessoaFicha(p.pessoa);
+      const status = !sit
+        ? '<span style="color:var(--success);font-weight:600;">✓ Respondido</span>'
+        : sit === 'sem questionário'
+          ? `Aguardando resposta${p.pessoa.linkRiscoGeradoEm ? ` · link enviado em ${fmtDate(p.pessoa.linkRiscoGeradoEm.slice(0, 10))}` : ''}`
+          : `<span style="color:var(--warning);font-weight:600;">⚠ Incompleto: ${sit}</span>`;
+      // situação da ficha de inclusão desta vida
+      const v = vidaPorChave(x, p.key);
+      const ai = (v && v.pessoa.assinaturaInclusao) || {};
+      const ficha = v && fichaDaVida(v);
+      const assinaturaTxt = !ficha
+        ? '<span style="color:var(--text-faint);">Ficha ainda não gerada</span>'
+        : ai.vida?.completed && ai.intermediario?.completed
+          ? '<span style="color:var(--success);font-weight:600;">✓ Ficha assinada</span>'
+          : ai.vida?.completed
+            ? '<span style="color:var(--success);font-weight:600;">✓ Vida assinou</span> · falta o corretor'
+            : ai.vida?.documentId
+              ? '<span style="color:var(--warning);font-weight:600;">Aguardando assinatura</span>'
+              : 'Ficha gerada · não enviada pra assinatura';
+      const sig = v ? assinanteDaVida(x, v) : null;
+      return `<div class="dep-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div><b>${p.label}</b>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${status} · ${assinaturaTxt}${sig && sig.menor ? ` · assina: ${escHist(sig.nome)} (responsável)` : ''}</div>
+          <div style="font-size:10.5px;color:var(--text-faint);margin-top:2px;">Código da vida: <code>${escHist(p.pessoa.codigoVida || 'gerado ao enviar o link')}</code></div></div>
+        <div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;">
+          <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="abrirQuestionarioDaVida('${x.id}','${p.key}')">Preencher pelo implantador</button>
+          <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="gerarLinkRiscoPessoa('${p.key}','${x.id}')">Copiar link</button>
+          <button class="wpp-btn" style="padding:7px 10px;font-size:11px;" onclick="enviarLinkRiscoWhatsapp('${p.key}','${x.id}')">${ICONS.wpp} Enviar link</button>
+        </div></div>`;
+    };
+    const titularesCard = titularesDoMesmoCard(c);
+    const totalVidas = titularesCard.reduce((n, x) => n + listPessoas(x).length, 0);
+    const respondidas = titularesCard.reduce(
+      (n, x) => n + listPessoas(x).filter((p) => !situacaoPessoaFicha(p.pessoa)).length,
+      0
+    );
     tabContent = `
       <p style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">O questionário de saúde é individual: cada vida (titular e cada dependente) responde e assina a própria ficha, pelo link dela. Dependente menor de 18 anos é assinado pelo titular.</p>
-      <p style="font-size:11px;color:var(--text-faint);margin-bottom:12px;">Código da empresa: <code>${escHist(getEmpresaDoCliente(c)?.codigoEmpresa || 'gerado ao enviar o primeiro link')}</code></p>
-      <div style="display:grid;gap:10px;">
-        ${listPessoas(c)
-          .map((p) =>
-            (() => {
-              const sit = situacaoPessoaFicha(p.pessoa);
-              const status = !sit
-                ? '<span style="color:var(--success);font-weight:600;">✓ Respondido</span>'
-                : sit === 'sem questionário'
-                  ? `Aguardando resposta${p.pessoa.linkRiscoGeradoEm ? ` · link enviado em ${fmtDate(p.pessoa.linkRiscoGeradoEm.slice(0, 10))}` : ''}`
-                  : `<span style="color:var(--warning);font-weight:600;">⚠ Incompleto: ${sit}</span>`;
-              return `<div class="dep-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div><b>${p.label}</b><div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${status} · Código da vida: <code>${escHist(p.pessoa.codigoVida || 'gerado ao enviar o link')}</code></div></div><div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;"><button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="openQuestionarioRiscoModalFor('${p.key}')">Preencher pelo implantador</button><button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="gerarLinkRiscoPessoa('${p.key}')">Copiar link</button><button class="wpp-btn" style="padding:7px 10px;font-size:11px;" onclick="enviarLinkRiscoWhatsapp('${p.key}')">${ICONS.wpp} Enviar link</button></div></div>`;
-            })()
-          )
-          .join('')}
-      </div>
+      <p style="font-size:11px;color:var(--text-faint);margin-bottom:12px;">${respondidas} de ${totalVidas} vida(s) responderam · Código da empresa: <code>${escHist(getEmpresaDoCliente(c)?.codigoEmpresa || 'gerado ao enviar o primeiro link')}</code></p>
+      ${titularesCard
+        .map(
+          (x) => `
+        <div style="margin-bottom:14px;">
+          ${titularesCard.length > 1 ? `<div style="font-size:11.5px;font-weight:700;color:var(--navy);margin:0 0 6px;">Família de ${escHist(x.titular.nome || 'titular sem nome')}</div>` : ''}
+          <div style="display:grid;gap:10px;">${listPessoas(x)
+            .map((p) => linhaVida(x, p))
+            .join('')}</div>
+        </div>`
+        )
+        .join('')}
     `;
   } else if (ACTIVE_PERSON_TAB === 'conferencia') {
     // Conferência agora é só uma coisa: preencher a ficha. Checklist e
@@ -9516,6 +9549,10 @@ const DS_FAMILY_QUESTIONS = [
 let DS_ACTIVE_PESSOA = null;
 let DS_ANSWERS = {};
 
+function abrirQuestionarioDaVida(clientId, key) {
+  if (clientId) ACTIVE_CLIENT_ID = clientId;
+  openQuestionarioRiscoModalFor(key);
+}
 function openQuestionarioRiscoModalFor(key) {
   openQuestionarioRiscoModal();
   setTimeout(() => switchDsPessoa(key), 0);
@@ -9523,8 +9560,8 @@ function openQuestionarioRiscoModalFor(key) {
 
 // O questionário de saúde é INDIVIDUAL por vida (titular e cada dependente):
 // cada link traz o código da vida (v=) e só mostra as perguntas daquela pessoa.
-async function montarLinkRisco(key) {
-  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+async function montarLinkRisco(key, clientId) {
+  const c = DB.clients.find((x) => x.id === (clientId || ACTIVE_CLIENT_ID));
   const p = listPessoas(c).find((x) => x.key === key);
   if (!p) return null;
   const emp = getEmpresaDoCliente(c);
@@ -9552,9 +9589,9 @@ async function montarLinkRisco(key) {
   }
   return { c, p, link };
 }
-async function gerarLinkRiscoPessoa(key) {
+async function gerarLinkRiscoPessoa(key, clientId) {
   try {
-    const r = await montarLinkRisco(key);
+    const r = await montarLinkRisco(key, clientId);
     if (!r) return;
     try {
       await navigator.clipboard.writeText(r.link);
@@ -9567,11 +9604,11 @@ async function gerarLinkRiscoPessoa(key) {
     toast('Erro ao gerar o link: ' + e.message);
   }
 }
-async function enviarLinkRiscoWhatsapp(key) {
+async function enviarLinkRiscoWhatsapp(key, clientId) {
   // abre a janela já (antes de esperar o salvamento), senão o navegador bloqueia
   const janela = window.open('about:blank', '_blank');
   try {
-    const r = await montarLinkRisco(key);
+    const r = await montarLinkRisco(key, clientId);
     if (!r) return janela && janela.close();
     const { c, p, link } = r;
     const proprio = onlyDigits(p.pessoa.celular || '');
