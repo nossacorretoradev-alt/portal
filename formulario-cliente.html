@@ -298,10 +298,17 @@ async function boot() {
       const ds = pe.pessoa && pe.pessoa.dsRespostas;
       if (ds && !ANSWERS[pe.key]) ANSWERS[pe.key] = Object.assign({}, ds);
     });
-    STEPS = ['intro', 'endereco', ...pessoas.map((p) => 'pessoa:' + p.key)];
+    // questionário é individual por vida: link de dependente pede só o
+    // questionário dele; o endereço da empresa fica no link do titular
+    const incluiTitular = pessoas.some((p) => p.key === 'titular');
+    STEPS = [
+      'intro',
+      ...(incluiTitular ? ['endereco'] : []),
+      ...pessoas.map((p) => 'pessoa:' + p.key),
+    ];
     document.getElementById('heroSub').textContent =
       CLIENT.titular.razaoSocial || 'CDL Mossoró × Unimed';
-    if (CLIENT.ehTitular && CLIENT.familiaCompleta) {
+    if (CLIENT.completa) {
       if (CLIENT.assinatura && CLIENT.assinatura.completed) return showAssinado();
       if (CLIENT.assinatura && CLIENT.assinatura.signUrl)
         return showAssinarAgora(CLIENT.assinatura.signUrl);
@@ -746,7 +753,7 @@ async function enviarFormulario() {
       pessoasPayload,
       VIDA_CODIGO
     );
-    if (status && status.ehTitular && status.familiaCompleta) iniciarAssinatura();
+    if (status && status.completa) iniciarAssinatura();
     else showSuccess(status);
   } catch (e) {
     console.warn(e);
@@ -764,20 +771,12 @@ async function enviarFormulario() {
 }
 
 function showSuccess(status) {
-  const faltam = (status && status.faltam) || [];
-  let proximo =
-    'Nosso time da CDL Mossoró já está com tudo em mãos pra dar andamento à sua adesão junto à Unimed.';
-  if (faltam.length) {
-    proximo = `Ainda falta preencher: <b>${faltam.map(escHtml).join(', ')}</b>. Quando todos terminarem, o titular abre o link dele para <b>assinar os documentos</b>.`;
-  } else if (status && !status.ehTitular) {
-    proximo = `Todos já responderam. Agora falta o titular, <b>${escHtml(CLIENT.titular.nome || '')}</b>, abrir o link dele para <b>assinar os documentos</b>.`;
-  }
   document.getElementById('app').innerHTML = frameShell(
     `
     <div style="text-align:center;">
       <div class="success-icon">${ICONS.check}</div>
       <h2 class="step-title">Recebemos seus dados!</h2>
-      <p class="step-sub">Obrigado por completar as informações. ${proximo}</p>
+      <p class="step-sub">Obrigado por completar as informações. A CDL Mossoró já está com tudo em mãos pra dar andamento à sua adesão junto à Unimed.</p>
     </div>
   `,
     { noProgress: true }
@@ -1064,7 +1063,7 @@ function showProntoParaAssinar() {
   telaAssinatura(`
     <div class="success-icon">${ICONS.check}</div>
     <h2 class="step-title">Falta só assinar</h2>
-    <p class="step-sub">As respostas de todos já foram recebidas. Agora vamos gerar a sua ficha de inclusão da Unimed (Declaração de Saúde e Aditivo de Carência) para você assinar pelo celular.</p>
+    <p class="step-sub">${CLIENT.menor ? `Como <b>${escHtml(((listPessoasPublico(CLIENT)[0] || {}).pessoa || {}).nome || 'o dependente')}</b> é menor de idade, quem assina é o responsável, <b>${escHtml(CLIENT.responsavelNome || '')}</b>.` : 'Suas respostas já foram recebidas.'} Agora vamos gerar a ficha de inclusão da Unimed (Declaração de Saúde e Aditivo de Carência) para assinar pelo celular.</p>
     <button class="btn btn-primary" style="width:100%;margin-top:10px;" onclick="iniciarAssinatura()">Gerar e assinar meus documentos</button>
     <button class="btn btn-ghost" style="width:100%;margin-top:8px;" onclick="renderStep()">Revisar minhas respostas</button>`);
 }
@@ -1092,45 +1091,47 @@ async function iniciarAssinatura() {
     const resTpl = await fetch('modelos/ficha-inclusao-ds-rc.pdf');
     if (!resTpl.ok) throw new Error('modelo da ficha não encontrado');
     const tpl = new Uint8Array(await resTpl.arrayBuffer());
+    const vida = d.vida;
+    const rotulo = vida.idx === 0 ? 'Titular' : `${vida.idx}º dependente`;
+    const ds = vida.dsRespostas || null;
+    const resp = respostasDsUnimed(ds);
     const obs = [];
-    const pessoas = d.pessoas.slice(0, 6).map((pe, i) => {
-      const ds = pe.dsRespostas || null;
-      const resp = respostasDsUnimed(ds);
-      Object.keys(resp).forEach((item) => {
-        if (resp[item] !== 'Sim') return;
-        const n = Number(item);
-        const det = n <= 24 ? ds['q' + (n - 1) + '_det'] : n === 27 ? ds.q24_det : '';
-        obs.push({
-          item: String(n),
-          pessoa: i === 0 ? 'Titular' : `${i}º dependente`,
-          texto: det || '',
-        });
-      });
-      return { respostas: resp, ...pesoAlturaImc(ds) };
+    Object.keys(resp).forEach((item) => {
+      if (resp[item] !== 'Sim') return;
+      const n = Number(item);
+      const det = n <= 24 ? ds['q' + (n - 1) + '_det'] : n === 27 ? ds.q24_det : '';
+      obs.push({ item: String(n), pessoa: rotulo, texto: det || '' });
     });
+    const col = Math.min(vida.idx, 5);
+    const pessoas = Array.from({ length: col + 1 }, (_, i) =>
+      i === col ? { respostas: resp, ...pesoAlturaImc(ds) } : { respostas: {} }
+    );
+    const rc = ['', '', '', ''];
+    if (vida.idx < 4) rc[vida.idx] = d.rc || '58';
+    const nomeFicha = d.menor ? `${vida.nome} (resp.: ${d.assinanteNome})` : vida.nome;
     const bytes = await preencherFichaInclusao(PDFLib, tpl, {
       numeroContrato: '288215',
       data: new Date().toLocaleDateString('pt-BR'),
       local: 'Mossoró',
-      titularNome: d.titularNome,
-      contratanteNome: d.titularNome,
+      titularNome: nomeFicha,
+      contratanteNome: nomeFicha,
       intermediarioNome: d.intermediario.nome,
       intermediarioCpf: formatarCpf(d.intermediario.cpf),
       registroAns: REGISTRO_ANS_POR_PLANO[chavePlanoPorNome(d.planoEscolhido)] || '',
       entrevista: 'c',
       pessoas,
       observacoes: obs,
-      rc: d.rc,
+      rc,
     });
     const pdfBase64 = bytesParaBase64(bytes);
     const resAut = await fetch(`${SUPABASE_URL}/functions/v1/autentique-create`, {
       method: 'POST',
       headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
-        tituloDocumento: `Ficha de inclusao - ${d.titularNome}`,
+        tituloDocumento: `Ficha de inclusao - ${vida.nome}`,
         pdfBase64,
         signers: [
-          { nome: d.titularNome, posicoes: POSICOES_TITULAR },
+          { nome: d.assinanteNome, posicoes: POSICOES_TITULAR },
           { nome: d.intermediario.nome, posicoes: POSICOES_INTERMEDIARIO },
         ],
       }),
