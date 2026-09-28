@@ -7029,7 +7029,7 @@ function openFichasInclusaoModal() {
       const sig = assinanteDaVida(x, v);
       const rcAtual = x.fichaInclusao?.rc?.[v.idx] || '58';
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px;flex-wrap:wrap;">
-        <span><b>${escHist(v.pessoa.nome || '—')}</b> · ${v.rotulo}${x.id !== c.id || titularesDoMesmoCard(c).length > 1 ? ` <span style="color:var(--text-muted);">(família de ${escHist(x.titular.nome || '—')})</span>` : ''}
+        <span><b>${escHist(v.pessoa.nome || '—')}</b> · ${v.rotulo}${x.id !== c.id || titularesDoMesmoCard(c).length > 1 ? ` <span style="color:var(--text-muted);">(grupo de ${escHist(x.titular.nome || '—')})</span>` : ''}
           ${sit ? `<span style="color:var(--warning);font-weight:600;"> · ${sit}</span>` : '<span style="color:var(--success);"> · ok</span>'}
           <div style="font-size:11px;color:var(--text-muted);">Assina: ${escHist(sig.nome || 'sem nome')}${sig.menor ? ' (responsável — menor de 18)' : ''}${sig.semNascimento ? ' · <span style="color:var(--warning);">sem data de nascimento</span>' : ''}</div></span>
         ${v.idx < 4 ? `<label style="display:flex;align-items:center;gap:6px;">RC <select id="fi_rc_${x.id}_${v.key}"><option value="58" ${rcAtual === '58' ? 'selected' : ''}>58</option><option value="90" ${rcAtual === '90' ? 'selected' : ''}>90</option></select></label>` : '<span style="font-size:11px;color:var(--text-faint);">sem campo de RC</span>'}
@@ -8391,7 +8391,7 @@ function renderClientModal() {
           <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${status} · ${assinaturaTxt}${sig && sig.menor ? ` · assina: ${escHist(sig.nome)} (responsável)` : ''}</div>
           <div style="font-size:10.5px;color:var(--text-faint);margin-top:2px;">Código da vida: <code>${escHist(p.pessoa.codigoVida || 'gerado ao enviar o link')}</code></div></div>
         <div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;">
-          <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="abrirQuestionarioDaVida('${x.id}','${p.key}')">Preencher pelo implantador</button>
+          <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="abrirQuestionarioDaVida('${x.id}','${p.key}')">Preencher</button>
           <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="gerarLinkRiscoPessoa('${p.key}','${x.id}')">Copiar link</button>
           <button class="wpp-btn" style="padding:7px 10px;font-size:11px;" onclick="enviarLinkRiscoWhatsapp('${p.key}','${x.id}')">${ICONS.wpp} Enviar link</button>
         </div></div>`;
@@ -8409,7 +8409,7 @@ function renderClientModal() {
         .map(
           (x) => `
         <div style="margin-bottom:14px;">
-          ${titularesCard.length > 1 ? `<div style="font-size:11.5px;font-weight:700;color:var(--navy);margin:0 0 6px;">Família de ${escHist(x.titular.nome || 'titular sem nome')}</div>` : ''}
+          ${titularesCard.length > 1 ? `<div style="font-size:11.5px;font-weight:700;color:var(--navy);margin:0 0 6px;">Grupo de ${escHist(x.titular.nome || 'titular sem nome')}</div>` : ''}
           <div style="display:grid;gap:10px;">${listPessoas(x)
             .map((p) => linhaVida(x, p))
             .join('')}</div>
