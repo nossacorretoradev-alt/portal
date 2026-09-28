@@ -6761,8 +6761,8 @@ async function preencherFichaInclusao(PDFLib, templateBytes, d) {
     const base = (topo + fundo) / 2 + 2.5;
     pessoas.forEach((pe, col) => {
       const r = pe.respostas[item];
-      if (r === 'Sim' || r === 'Não')
-        centro(p, r === 'Sim' ? 'SIM' : 'NÃO', colX[col], base, 20, 6.5, negrito);
+      // Unimed: só marca o SIM; resposta "Não" fica em branco na ficha
+      if (r === 'Sim') centro(p, 'SIM', colX[col], base, 20, 6.5, negrito);
     });
   }
   // item 28: peso / altura / IMC (uma linha por pessoa)
@@ -7573,20 +7573,16 @@ async function documentUploadApi(payload) {
   return data;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// LINKS DE DOCUMENTOS
+//  • um link por TITULAR: só os documentos dele e dos dependentes dele
+//  • um link da EMPRESA (por card): CNPJ, contrato social, comprovante e
+//    ficha associativa — enviado ao responsável pela empresa
+// Os arquivos que o cliente envia ficam no servidor; "Atualizar recebidos"
+// (e a abertura da aba Documentos) traz cada um pro lugar certo do card.
+// ═══════════════════════════════════════════════════════════════════════
 function documentRequestItems(c) {
-  const emp = getEmpresaDoCliente(c);
-  emp.codigoEmpresa = emp.codigoEmpresa || uid('emp');
   const items = [];
-  DOC_SLOTS_EMPRESA.forEach((s) =>
-    items.push({
-      key: `empresa-${s.key}`,
-      group: 'Documentos da empresa',
-      targetType: 'empresa',
-      targetCode: emp.codigoEmpresa,
-      slotKey: s.key,
-      label: s.label,
-    })
-  );
   DOC_SLOTS_PESSOA.forEach((s) =>
     items.push({
       key: `titular-${s.key}`,
@@ -7611,6 +7607,17 @@ function documentRequestItems(c) {
   );
   return items;
 }
+function documentRequestItemsEmpresa(c) {
+  const emp = getEmpresaDoCliente(c);
+  return DOC_SLOTS_EMPRESA.map((s) => ({
+    key: `empresa-${s.key}`,
+    group: 'Documentos da empresa',
+    targetType: 'empresa',
+    targetCode: emp.codigoEmpresa,
+    slotKey: s.key,
+    label: s.label,
+  }));
+}
 
 function solicitacaoDocumentoAtual(c) {
   return (
@@ -7621,101 +7628,230 @@ function solicitacaoDocumentoAtual(c) {
   );
 }
 
-// ─── Funções de link de documentos por titular específico ────────────────────
-
-async function criarLinkDocumentosPorTitular(titularClientId) {
-  const c = DB.clients.find((x) => x.id === titularClientId);
-  if (!c) return;
-  if (!c.titular.nome) {
-    toast('Preencha o nome do titular antes de gerar o link.');
-    return;
-  }
+// tipo = 'titular' (card daquele titular) ou 'empresa' (empresa do card)
+function contextoLinkDocs(tipo, clientId) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  if (!c) return null;
   const emp = getEmpresaDoCliente(c);
   emp.codigoEmpresa = emp.codigoEmpresa || uid('emp');
+  if (tipo === 'empresa') {
+    emp.documentUploadRequests = emp.documentUploadRequests || [];
+    const pa = c.propostaAdesao || {};
+    return {
+      c,
+      emp,
+      dono: emp,
+      nome: emp.razaoSocial || c.titular.razaoSocial || 'Empresa',
+      holderLifeCode: 'empresa',
+      celular: (pa.socios || [])[0]?.tel || c.titular.celular || '',
+      itens: () => documentRequestItemsEmpresa(c),
+    };
+  }
   c.titular.codigoVida = c.titular.codigoVida || uid('vida');
+  c.documentUploadRequests = c.documentUploadRequests || [];
+  return {
+    c,
+    emp,
+    dono: c,
+    nome: c.titular.nome,
+    holderLifeCode: c.titular.codigoVida,
+    celular: c.titular.celular || '',
+    itens: () => documentRequestItems(c),
+  };
+}
+
+async function criarLinkDocs(tipo, clientId) {
+  const ctx = contextoLinkDocs(tipo, clientId);
+  if (!ctx) return;
+  if (!ctx.nome) {
+    toast(
+      tipo === 'empresa'
+        ? 'Preencha a razão social antes de gerar o link.'
+        : 'Preencha o nome do titular antes de gerar o link.'
+    );
+    return;
+  }
   try {
     const result = await documentUploadApi({
       action: 'create',
-      clientId: c.id,
-      companyCode: emp.codigoEmpresa,
-      holderLifeCode: c.titular.codigoVida,
-      holderName: c.titular.nome,
+      clientId: ctx.c.id,
+      companyCode: ctx.emp.codigoEmpresa,
+      holderLifeCode: ctx.holderLifeCode,
+      holderName: ctx.nome,
       validDays: 7,
-      items: documentRequestItems(c),
+      items: ctx.itens(),
     });
     const link = DOCUMENT_UPLOAD_BASE_URL + '?token=' + encodeURIComponent(result.token);
-    c.documentUploadRequests = c.documentUploadRequests || [];
-    c.documentUploadRequests.push({
+    ctx.dono.documentUploadRequests.push({
       id: result.id,
       link,
       expiresAt: result.expiresAt,
       status: 'open',
       createdAt: nowISO(),
     });
-    c.historico.push({
+    ctx.c.historico.push({
       data: nowISO(),
-      texto: `Link de documentos gerado para ${c.titular.nome}.`,
+      texto:
+        tipo === 'empresa'
+          ? `Link de documentos da empresa gerado (${ctx.nome}).`
+          : `Link de documentos gerado para ${ctx.nome} (titular e dependentes).`,
     });
     await persist();
     try {
       await navigator.clipboard.writeText(link);
     } catch (e) {}
     renderClientModal();
-    toast(`✓ Link de ${c.titular.nome} copiado. Envie pelo WhatsApp.`);
+    toast(
+      `✓ Link ${tipo === 'empresa' ? 'da empresa' : 'de ' + ctx.nome} copiado. Envie pelo WhatsApp.`
+    );
   } catch (e) {
     toast(e.message);
   }
 }
 
-async function copiarLinkDocumentosPorTitular(titularClientId) {
-  const c = DB.clients.find((x) => x.id === titularClientId);
-  const sol = solicitacaoDocumentoAtual(c);
+async function copiarLinkDocs(tipo, clientId) {
+  const ctx = contextoLinkDocs(tipo, clientId);
+  const sol = ctx && solicitacaoDocumentoAtual(ctx.dono);
   if (!sol) return;
   try {
     await navigator.clipboard.writeText(sol.link);
-    toast(`Link de ${c.titular.nome} copiado.`);
+    toast('Link copiado.');
   } catch (e) {
     prompt('Copie o link:', sol.link);
   }
 }
 
-async function atualizarDocumentosDoLinkPorTitular(titularClientId) {
-  const c = DB.clients.find((x) => x.id === titularClientId);
-  const sol = solicitacaoDocumentoAtual(c);
-  if (!sol) return;
-  try {
-    const result = await documentUploadApi({
-      action: 'get',
-      requestId: sol.id,
-    });
-    const local = (c.documentUploadRequests || []).find((x) => x.id === sol.id);
-    if (local) {
-      local.receivedCount = result.receivedCount;
-      local.status = result.status;
-    }
-    await persist();
-    renderClientModal();
-    toast(`${result.receivedCount || 0} documento(s) recebido(s) de ${c.titular.nome}.`);
-  } catch (e) {
-    toast(e.message);
-  }
+function linkWhatsappDocs(tipo, clientId) {
+  const ctx = contextoLinkDocs(tipo, clientId);
+  const sol = ctx && solicitacaoDocumentoAtual(ctx.dono);
+  if (!sol || !onlyDigits(ctx.celular)) return null;
+  const msg =
+    tipo === 'empresa'
+      ? `Olá! Segue o link para enviar os documentos da empresa ${ctx.nome} (adesão CDL Mossoró × Unimed): ${sol.link}`
+      : `Olá ${(ctx.nome || '').split(' ')[0]}! Segue o link para enviar os seus documentos e os dos seus dependentes (adesão CDL Mossoró × Unimed): ${sol.link}`;
+  return `https://api.whatsapp.com/send?phone=55${onlyDigits(ctx.celular)}&text=${encodeURIComponent(msg)}`;
 }
 
-async function cancelarLinkDocumentosPorTitular(titularClientId) {
+// acha onde cada arquivo recebido deve entrar (empresa, titular ou dependente)
+function localizarAlvoUpload(u) {
+  if (u.target_type === 'empresa') {
+    const e = (DB.empresas || []).find((x) => x.codigoEmpresa === u.target_code);
+    const cli = e && DB.clients.find((x) => x.empresaId === e.id);
+    return e ? { obj: e, nomeDono: e.razaoSocial || 'empresa', cliente: cli } : null;
+  }
+  for (const x of DB.clients) {
+    if (u.target_type === 'titular' && x.titular.codigoVida === u.target_code)
+      return { obj: x.titular, nomeDono: x.titular.nome || 'titular', cliente: x };
+    const d = (x.dependentes || []).find((dd) => dd.codigoVida === u.target_code);
+    if (d) return { obj: d, nomeDono: d.nome || 'dependente', cliente: x };
+  }
+  return null;
+}
+
+async function importarDocsRecebidos(tipo, clientId, silencioso) {
+  const ctx = contextoLinkDocs(tipo, clientId);
+  const pedidos = (ctx?.dono.documentUploadRequests || []).filter(
+    (r) => r.id && r.status !== 'cancelled'
+  );
+  if (!pedidos.length) return 0;
+  let novos = 0;
+  for (const sol of pedidos) {
+    const res = await documentUploadApi({ action: 'status', requestId: sol.id });
+    const uploads = res.uploads || [];
+    sol.importados = sol.importados || {};
+    for (const u of uploads) {
+      if (!u.signedUrl || sol.importados[u.item_key] === u.uploaded_at) continue;
+      const alvo = localizarAlvoUpload(u);
+      if (!alvo) continue;
+      const ext = ((u.original_name || '').split('.').pop() || 'pdf').toLowerCase();
+      let url = u.signedUrl; // temporário (7 dias) — troca pela cópia no portal abaixo
+      try {
+        const blob = await (await fetch(u.signedUrl)).blob();
+        const slug = String(alvo.nomeDono)
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '');
+        url = await uploadArquivoPortal(
+          blob,
+          `documentos/${slug}/${u.slot_key}-${uid('d')}.${ext}`,
+          blob.type || u.mime_type
+        );
+      } catch (e) {
+        console.warn('Documento recebido mantido com link temporário', e);
+      }
+      alvo.obj.documentos = alvo.obj.documentos || {};
+      alvo.obj.documentos[u.slot_key] = {
+        nome: `${u.label} - ${alvo.nomeDono}.${ext}`,
+        nomeOriginal: u.original_name,
+        dataUrl: url,
+        confirmado: false,
+        criadoEm: u.uploaded_at || nowISO(),
+        origem: 'link do cliente',
+      };
+      if (alvo.cliente) {
+        alvo.cliente.historico = alvo.cliente.historico || [];
+        alvo.cliente.historico.push({
+          data: nowISO(),
+          texto: `Documento recebido pelo link: ${u.label} (${alvo.nomeDono}).`,
+        });
+      }
+      sol.importados[u.item_key] = u.uploaded_at;
+      novos++;
+    }
+    sol.receivedCount = uploads.length;
+    if (res.request?.status) sol.status = res.request.status;
+  }
+  await persist();
+  if (!silencioso)
+    toast(
+      novos
+        ? `✓ ${novos} documento(s) novo(s) trazido(s) para o card — confira e marque como OK.`
+        : 'Nenhum documento novo.'
+    );
+  return novos;
+}
+
+// abre a aba Documentos → traz o que chegou (no máximo 1x por minuto por card)
+const __ultimaSincDocs = {};
+function sincronizarDocsDoCardEmSegundoPlano(c) {
+  const chave = c.empresaId || c.id;
+  if (Date.now() - (__ultimaSincDocs[chave] || 0) < 60000) return;
+  __ultimaSincDocs[chave] = Date.now();
+  (async () => {
+    let novos = 0;
+    try {
+      novos += await importarDocsRecebidos('empresa', c.id, true);
+      for (const x of getTitularesDaEmpresa(c.empresaId))
+        novos += await importarDocsRecebidos('titular', x.id, true);
+    } catch (e) {
+      console.warn('Sincronização de documentos falhou', e);
+    }
+    if (novos) {
+      if (
+        ACTIVE_PERSON_TAB === 'documentacao' &&
+        document.getElementById('modalOverlay')?.classList.contains('active')
+      )
+        renderClientModal();
+      toast(`✓ ${novos} documento(s) recebido(s) pelo link — confira e marque como OK.`);
+    }
+  })();
+}
+
+async function cancelarLinkDocs(tipo, clientId) {
   if (
-    !(await showConfirmDialog('Cancelar o link de documentos deste titular?', {
-      confirmLabel: 'Cancelar link',
-    }))
+    !(await showConfirmDialog(
+      `Cancelar o link de documentos ${tipo === 'empresa' ? 'da empresa' : 'deste titular'}?`,
+      { confirmLabel: 'Cancelar link' }
+    ))
   )
     return;
-  const c = DB.clients.find((x) => x.id === titularClientId);
-  const sol = solicitacaoDocumentoAtual(c);
+  const ctx = contextoLinkDocs(tipo, clientId);
+  const sol = ctx && solicitacaoDocumentoAtual(ctx.dono);
   if (!sol) return;
   try {
-    await documentUploadApi({
-      action: 'cancel',
-      requestId: sol.id,
-    });
+    await documentUploadApi({ action: 'cancel', requestId: sol.id });
     sol.status = 'cancelled';
     await persist();
     renderClientModal();
@@ -7723,6 +7859,63 @@ async function cancelarLinkDocumentosPorTitular(titularClientId) {
   } catch (e) {
     toast(e.message);
   }
+}
+
+// nomes antigos (usados nos botões por titular)
+const criarLinkDocumentosPorTitular = (id) => criarLinkDocs('titular', id);
+const copiarLinkDocumentosPorTitular = (id) => copiarLinkDocs('titular', id);
+const atualizarDocumentosDoLinkPorTitular = async (id) => {
+  try {
+    await importarDocsRecebidos('titular', id);
+    renderClientModal();
+  } catch (e) {
+    toast(e.message);
+  }
+};
+const cancelarLinkDocumentosPorTitular = (id) => cancelarLinkDocs('titular', id);
+async function atualizarDocumentosEmpresa(id) {
+  try {
+    await importarDocsRecebidos('empresa', id);
+    renderClientModal();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+// bloco da aba Documentos (empresa ou titular)
+function blocoLinkDocs(tipo, clientId, titulo, descricao) {
+  const ctx = contextoLinkDocs(tipo, clientId);
+  const sol = solicitacaoDocumentoAtual(ctx.dono);
+  const wpp = linkWhatsappDocs(tipo, clientId);
+  const bt = (cls, onclick, txt) =>
+    `<button class="${cls}" style="padding:6px 9px;font-size:11px;" onclick="${onclick}">${txt}</button>`;
+  const f = tipo === 'empresa' ? 'Empresa' : 'Titular';
+  return `
+    <div class="anexo-person-block" style="border:1.5px solid var(--blue);background:linear-gradient(135deg,var(--navy-tint),#fff);padding:16px;">
+      <div class="anexo-person-head" style="align-items:flex-start;gap:12px;">
+        <div><b>${titulo}</b><div style="font-size:11.5px;font-weight:500;color:var(--text-muted);margin-top:4px;line-height:1.45;">${descricao}</div></div>
+        ${!sol || sol.status !== 'open' ? `<button class="btn-primary" style="white-space:nowrap;padding:8px 12px;font-size:11.5px;" onclick="criarLinkDocs('${tipo}','${clientId}')">${ICONS.upload} ${sol ? 'Gerar novo link' : 'Gerar link'}</button>` : ''}
+      </div>
+      ${
+        sol
+          ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <span class="status-pill ${sol.status === 'open' ? 'ativo' : 'inativo'}">${sol.status === 'open' ? 'Link ativo' : sol.status === 'cancelled' ? 'Link cancelado' : 'Solicitação encerrada'}</span>
+        <span style="font-size:11px;color:var(--text-muted);">${sol.receivedCount || 0} recebido(s) · validade ${fmtDate((sol.expiresAt || '').slice(0, 10))}</span>
+        ${
+          sol.status === 'open'
+            ? `${wpp ? `<a class="wpp-btn" style="padding:6px 9px;font-size:11px;" target="_blank" href="${wpp}">${ICONS.wpp} Enviar</a>` : ''}${bt('btn-ghost', `copiarLinkDocs('${tipo}','${clientId}')`, 'Copiar link')}${bt('btn-ghost', tipo === 'empresa' ? `atualizarDocumentosEmpresa('${clientId}')` : `atualizarDocumentosDoLinkPorTitular('${clientId}')`, 'Atualizar recebidos')}${bt('btn-danger', `cancelarLinkDocs('${tipo}','${clientId}')`, 'Cancelar link')}`
+            : bt(
+                'btn-ghost',
+                tipo === 'empresa'
+                  ? `atualizarDocumentosEmpresa('${clientId}')`
+                  : `atualizarDocumentosDoLinkPorTitular('${clientId}')`,
+                'Atualizar recebidos'
+              )
+        }
+      </div>`
+          : ''
+      }
+    </div>`;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -7876,6 +8069,7 @@ function renderClientModal() {
       <button class="btn-ghost add-holder-button" onclick="adicionarTitularNaEmpresa('${c.empresaId}')">${ICONS.plus} Adicionar titular</button>
     `;
   } else if (ACTIVE_PERSON_TAB === 'documentacao') {
+    sincronizarDocsDoCardEmSegundoPlano(c);
     const emp = getEmpresaDoCliente(c);
     const todosTitularesDoc = getTitularesDaEmpresa(c.empresaId);
     const totalOk = docsCompletos(c);
@@ -7884,31 +8078,16 @@ function renderClientModal() {
         ${totalOk ? `✓ Checklist completo — todos os documentos confirmados. Já dá pra enviar pra administradora.` : `⚠️ Ainda faltam documentos confirmados — o envio pra administradora só libera quando o checklist estiver 100%.`}
       </div>
 
+      ${blocoLinkDocs('empresa', c.id, `Documentos da empresa — link próprio`, `CNPJ, contrato social, comprovante de endereço e ficha associativa. Envie para o responsável pela empresa (sócio). Os titulares não precisam mandar esses documentos.`)}
       ${todosTitularesDoc
-        .map((x) => {
-          const xt = x.titular;
-          const solX = solicitacaoDocumentoAtual(x);
-          return `
-      <div class="anexo-person-block" style="border:1.5px solid var(--blue);background:linear-gradient(135deg,var(--navy-tint),#fff);padding:16px;">
-        <div class="anexo-person-head" style="align-items:flex-start;gap:12px;">
-          <div><b>Solicitar documentos por link — ${xt.nome || 'titular sem nome'}</b><div style="font-size:11.5px;font-weight:500;color:var(--text-muted);margin-top:4px;line-height:1.45;">Gere um link exclusivo para ${xt.nome || 'este titular'}. Ele poderá anexar os documentos da empresa, dele e de cada dependente, todos separados.</div></div>
-          ${!solX || solX.status !== 'open' ? `<button class="btn-primary" style="white-space:nowrap;padding:8px 12px;font-size:11.5px;" onclick="criarLinkDocumentosPorTitular('${x.id}')">${ICONS.upload} Gerar link</button>` : ''}
-        </div>
-        ${
-          solX
-            ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-          <span class="status-pill ${solX.status === 'open' ? 'ativo' : 'inativo'}">${solX.status === 'open' ? 'Link ativo' : solX.status === 'cancelled' ? 'Link cancelado' : 'Solicitação encerrada'}</span>
-          <span style="font-size:11px;color:var(--text-muted);">${solX.receivedCount || 0} recebido(s) · validade ${fmtDate((solX.expiresAt || '').slice(0, 10))}</span>
-          ${
-            solX.status === 'open'
-              ? `<button class="btn-ghost" style="padding:6px 9px;font-size:11px;" onclick="copiarLinkDocumentosPorTitular('${x.id}')">Copiar link</button><button class="btn-ghost" style="padding:6px 9px;font-size:11px;" onclick="atualizarDocumentosDoLinkPorTitular('${x.id}')">Atualizar recebidos</button><button class="btn-danger" style="padding:6px 9px;font-size:11px;" onclick="cancelarLinkDocumentosPorTitular('${x.id}')">Cancelar link</button>`
-              : `<button class="btn-primary" style="padding:6px 9px;font-size:11px;" onclick="criarLinkDocumentosPorTitular('${x.id}')">Gerar novo link</button>`
-          }
-        </div>`
-            : ''
-        }
-      </div>`;
-        })
+        .map((x) =>
+          blocoLinkDocs(
+            'titular',
+            x.id,
+            `Documentos de ${x.titular.nome || 'titular sem nome'}`,
+            `Link exclusivo deste titular: só os documentos dele e dos dependentes dele (${(x.dependentes || []).length} dependente(s)).`
+          )
+        )
         .join('')}
 
       <div class="anexo-person-block" style="border-color:var(--blue);background:var(--navy-tint);">
