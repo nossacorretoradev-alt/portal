@@ -6168,6 +6168,15 @@ function migrateClientShape(c) {
   });
   c.anexosLead = c.anexosLead || [];
   c.documentUploadRequests = c.documentUploadRequests || [];
+  // assinatura antiga "da família" (uma ficha por titular) passa a ser a do titular
+  if (c.assinaturaInclusao) {
+    if (!c.titular.assinaturaInclusao)
+      c.titular.assinaturaInclusao = {
+        vida: c.assinaturaInclusao.titular,
+        intermediario: c.assinaturaInclusao.intermediario,
+      };
+    delete c.assinaturaInclusao;
+  }
   if (!c.etapaAdesao) c.etapaAdesao = c.status === 'ativo' ? 'ativo' : 'nova';
   if (!c.pendencia)
     c.pendencia = {
@@ -6526,7 +6535,15 @@ function coletarAnexosDaEmpresa(c) {
             : null;
       const ult = itens[itens.length - 1];
       if (tipoGerado && ult && ult.url === d.dataUrl)
-        Object.assign(ult, { regerar: tipoGerado, clientId: x.id });
+        Object.assign(ult, {
+          regerar: tipoGerado,
+          clientId: x.id,
+          vidaKey: 'titular',
+          nome:
+            tipoGerado === 'inclusao'
+              ? `Ficha de inclusão — ${x.titular.nome || 'titular'}`
+              : ult.nome,
+        });
     });
     Object.values(x.titular.documentos || {}).forEach((d) => addDoc(itens, d));
     const af = x.assinaturaFicha || {};
@@ -6534,17 +6551,27 @@ function coletarAnexosDaEmpresa(c) {
       add(itens, 'Proposta PME III (assinada pelo contratante)', af.cliente.signedFile);
     if (af.corretora?.signedFile)
       add(itens, 'Proposta PME III (assinada pela corretora)', af.corretora.signedFile);
-    const ai = x.assinaturaInclusao || {};
-    if (ai.titular?.signedFile)
-      add(itens, 'Ficha de inclusão (assinada pelo titular)', ai.titular.signedFile);
-    if (ai.intermediario?.signedFile)
-      add(itens, 'Ficha de inclusão (assinada pelo intermediário)', ai.intermediario.signedFile);
+    // fichas de inclusão assinadas (uma por vida)
+    vidasDoTitular(x).forEach((v) => {
+      const ai = v.pessoa.assinaturaInclusao || {};
+      const arq = ai.vida?.signedFile || ai.intermediario?.signedFile;
+      if (arq) add(itens, `Ficha de inclusão assinada — ${v.pessoa.nome || v.rotulo}`, arq);
+    });
     (x.anexosLead || []).forEach((d) =>
       addDoc(itens, { ...d, nome: `${d.nome} (veio do Pipeline)` })
     );
     (x.dependentes || []).forEach((dep, i) => {
       const quem = dep.nome || `Dependente ${i + 1}`;
-      (dep.anexos || []).forEach((d) => addDoc(itens, { ...d, nome: `${quem} — ${d.nome}` }));
+      (dep.anexos || []).forEach((d) => {
+        const ehFicha = d.nome === 'Ficha de Inclusao Unimed.pdf';
+        addDoc(itens, {
+          ...d,
+          nome: ehFicha ? `Ficha de inclusão — ${quem}` : `${quem} — ${d.nome}`,
+        });
+        const ult = itens[itens.length - 1];
+        if (ehFicha && ult && ult.url === d.dataUrl)
+          Object.assign(ult, { regerar: 'inclusao', clientId: x.id, vidaKey: 'dep' + i });
+      });
       Object.values(dep.documentos || {}).forEach((d) =>
         addDoc(itens, { ...d, nome: `${quem} — ${d.nome}` })
       );
@@ -6573,7 +6600,7 @@ function renderAbaAnexos(c) {
       <span class="doc-slot-label">${item.nome}${item.criadoEm ? `<small style="display:block;color:var(--text-faint);font-weight:500;">${fmtDateTime(item.criadoEm)}</small>` : ''}</span>
       <button class="btn-ghost" style="padding:5px 10px;font-size:11px;" onclick="abrirAnexoVisivel(${idx})">Abrir</button>
       <button class="btn-primary" style="padding:5px 10px;font-size:11px;" onclick="baixarAnexoVisivel(${idx})">Baixar</button>
-      ${item.regerar ? `<button class="btn-ghost" style="padding:5px 10px;font-size:11px;" title="Refazer o documento (ex.: corrigir um dado)" onclick="regerarDocumento('${item.regerar}','${item.clientId}')">↻ Gerar novo</button>` : ''}
+      ${item.regerar ? `<button class="btn-ghost" style="padding:5px 10px;font-size:11px;" title="Refazer o documento (ex.: corrigir um dado)" onclick="regerarDocumento('${item.regerar}','${item.clientId}','${item.vidaKey || ''}')">↻ Gerar novo</button>` : ''}
     </div>`;
   };
   return `
@@ -6876,57 +6903,154 @@ function situacaoPessoaFicha(pessoa) {
   return '';
 }
 
-function openFichasInclusaoModal(apenasClientId) {
+// ═══════════════════════════════════════════════════════════════════════
+// FICHA DE INCLUSÃO POR VIDA — cada pessoa (titular e cada dependente) tem a
+// própria ficha oficial, só com os dados dela (na coluna/linha dela), e
+// assina a própria ficha junto com o corretor (intermediário).
+// Dependente MENOR de 18 anos: quem assina é o titular, como responsável.
+// ═══════════════════════════════════════════════════════════════════════
+const NOME_FICHA_INCLUSAO = 'Ficha de Inclusao Unimed.pdf';
+
+function idadeEmAnos(dataNasc) {
+  if (!dataNasc) return null;
+  const d = new Date(String(dataNasc).slice(0, 10) + 'T12:00:00');
+  if (isNaN(d)) return null;
+  const h = new Date();
+  let a = h.getFullYear() - d.getFullYear();
+  const m = h.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && h.getDate() < d.getDate())) a--;
+  return a;
+}
+// vidas de um titular: [{ key, idx (coluna na ficha), pessoa, rotulo }]
+function vidasDoTitular(x) {
+  return [{ key: 'titular', idx: 0, pessoa: x.titular, rotulo: 'Titular' }].concat(
+    (x.dependentes || []).map((d, i) => ({
+      key: 'dep' + i,
+      idx: i + 1,
+      pessoa: d,
+      rotulo: `${i + 1}º dependente`,
+    }))
+  );
+}
+function vidaPorChave(x, key) {
+  return vidasDoTitular(x).find((v) => v.key === key) || null;
+}
+// quem assina a ficha desta vida (a própria pessoa ou, se menor, o titular)
+function assinanteDaVida(x, v) {
+  const idade = v.key === 'titular' ? null : idadeEmAnos(v.pessoa.dataNascimento);
+  const menor = idade !== null && idade < 18;
+  const quem = menor ? x.titular : v.pessoa;
+  return {
+    menor,
+    semNascimento: v.key !== 'titular' && idade === null,
+    nome: quem.nome || '',
+    email: quem.email || (menor ? '' : '') || '',
+    celular: quem.celular || x.titular.celular || '',
+    cpf: quem.cpf || '',
+    rotulo: menor
+      ? `Responsável (titular) por ${v.pessoa.nome || 'dependente'}`
+      : v.key === 'titular'
+        ? 'Titular (beneficiário)'
+        : 'Dependente (beneficiário)',
+  };
+}
+// monta os dados da ficha de UMA vida (mesmo formato do gerador oficial)
+function dadosFichaDaVida(x, v, extra) {
+  const ds = v.pessoa.dsRespostas || null;
+  const resp = respostasDsUnimed(ds);
+  const obs = [];
+  Object.keys(resp).forEach((item) => {
+    if (resp[item] !== 'Sim') return;
+    const n = Number(item);
+    const det = n <= 24 ? ds['q' + (n - 1) + '_det'] : n === 27 ? ds.q24_det : '';
+    obs.push({ item: String(n), pessoa: v.rotulo, texto: det || '' });
+  });
+  const col = Math.min(v.idx, 5);
+  const pessoas = Array.from({ length: col + 1 }, (_, i) =>
+    i === col ? { respostas: resp, ...pesoAlturaImc(ds) } : { respostas: {} }
+  );
+  const rc = ['', '', '', ''];
+  if (v.idx < 4) rc[v.idx] = extra.rc || '58';
+  const sig = assinanteDaVida(x, v);
+  const nomeVida = v.pessoa.nome || '';
+  return {
+    numeroContrato: NUMERO_CONTRATO_CDL,
+    data: extra.data,
+    local: extra.local,
+    titularNome: sig.menor ? `${nomeVida} (resp.: ${sig.nome})` : nomeVida,
+    contratanteNome: sig.menor ? `${nomeVida} (resp.: ${sig.nome})` : nomeVida,
+    intermediarioNome: extra.intermediarioNome,
+    intermediarioCpf: extra.intermediarioCpf,
+    registroAns: REGISTRO_ANS_POR_PLANO[chavePlanoPorNome(x.planoEscolhido)] || '',
+    entrevista: 'c',
+    pessoas,
+    observacoes: obs,
+    rc,
+  };
+}
+function fichaDaVida(v) {
+  return (v.pessoa.anexos || []).find((a) => a.nome === NOME_FICHA_INCLUSAO) || null;
+}
+
+// ─── Gerar fichas (Conferência) ───────────────────────────────────────────
+let __abaRetornoDoc = null;
+let __fichasAlvo = null; // { clientId, key } quando refaz uma vida só
+let __vindoDeRegerar = false;
+function origemDoFormularioDoc() {
+  if (!__vindoDeRegerar) {
+    __abaRetornoDoc = null;
+    __fichasAlvo = null;
+  }
+  __vindoDeRegerar = false;
+}
+function vidasAlvoDaGeracao(c) {
+  const lista = [];
+  titularesDoMesmoCard(c).forEach((x) =>
+    vidasDoTitular(x).forEach((v) => {
+      if (__fichasAlvo && (__fichasAlvo.clientId !== x.id || __fichasAlvo.key !== v.key)) return;
+      lista.push({ x, v });
+    })
+  );
+  return lista;
+}
+
+function openFichasInclusaoModal() {
   origemDoFormularioDoc();
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
-  __fichasAlvoClientId = typeof apenasClientId === 'string' ? apenasClientId : null;
-  const card = titularesDoMesmoCard(c).filter(
-    (x) => !__fichasAlvoClientId || x.id === __fichasAlvoClientId
-  );
+  const alvos = vidasAlvoDaGeracao(c);
   const usuarios = (DB.users || []).filter((u) => u.ativo);
   const padraoInter =
     c.fichaInclusao?.intermediarioId ||
     usuarios.find((u) => /st[eê]nio/i.test(u.nome || ''))?.id ||
     CURRENT_USER?.id;
-  const blocos = card
-    .map((x) => {
-      const pessoas = [x.titular, ...(x.dependentes || [])];
-      const avisos = [];
-      if (pessoas.length > 6)
-        avisos.push('mais de 5 dependentes — a Declaração de Saúde só tem 5 colunas');
-      if (pessoas.length > 4) avisos.push('mais de 3 dependentes — o Aditivo RC só tem 3 campos');
-      return `<div class="dep-card" style="margin-bottom:10px;">
-        <b style="font-size:12.5px;">${escHist(x.titular.nome || 'Titular sem nome')}</b> <span style="font-size:11px;color:var(--text-muted);">· ${escHist(x.planoEscolhido || 'sem plano')}</span>
-        ${avisos.length ? `<div style="font-size:11px;color:var(--warning);margin-top:4px;">⚠️ ${avisos.join('; ')}.</div>` : ''}
-        ${pessoas
-          .map((pe, i) => {
-            const sit = situacaoPessoaFicha(pe);
-            return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px;">
-            <span>${rotuloPessoaDs(i)}: ${escHist(pe.nome || '—')} ${sit ? `<span style="color:var(--warning);font-weight:600;">· ${sit}</span>` : '<span style="color:var(--success);">· ok</span>'}</span>
-            ${i < 4 ? `<label style="display:flex;align-items:center;gap:6px;">RC <select id="fi_rc_${x.id}_${i}"><option value="58" ${(x.fichaInclusao?.rc?.[i] || '58') === '58' ? 'selected' : ''}>58</option><option value="90" ${x.fichaInclusao?.rc?.[i] === '90' ? 'selected' : ''}>90</option></select></label>` : '<span style="font-size:11px;color:var(--text-faint);">sem campo de RC</span>'}
-          </div>`;
-          })
-          .join('')}
+  const linhas = alvos
+    .map(({ x, v }) => {
+      const sit = situacaoPessoaFicha(v.pessoa);
+      const sig = assinanteDaVida(x, v);
+      const rcAtual = x.fichaInclusao?.rc?.[v.idx] || '58';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px;flex-wrap:wrap;">
+        <span><b>${escHist(v.pessoa.nome || '—')}</b> · ${v.rotulo}${x.id !== c.id || titularesDoMesmoCard(c).length > 1 ? ` <span style="color:var(--text-muted);">(família de ${escHist(x.titular.nome || '—')})</span>` : ''}
+          ${sit ? `<span style="color:var(--warning);font-weight:600;"> · ${sit}</span>` : '<span style="color:var(--success);"> · ok</span>'}
+          <div style="font-size:11px;color:var(--text-muted);">Assina: ${escHist(sig.nome || 'sem nome')}${sig.menor ? ' (responsável — menor de 18)' : ''}${sig.semNascimento ? ' · <span style="color:var(--warning);">sem data de nascimento</span>' : ''}</div></span>
+        ${v.idx < 4 ? `<label style="display:flex;align-items:center;gap:6px;">RC <select id="fi_rc_${x.id}_${v.key}"><option value="58" ${rcAtual === '58' ? 'selected' : ''}>58</option><option value="90" ${rcAtual === '90' ? 'selected' : ''}>90</option></select></label>` : '<span style="font-size:11px;color:var(--text-faint);">sem campo de RC</span>'}
       </div>`;
     })
     .join('');
-  openModalHTML(`<div class="modal modal-wide"><div class="modal-head"><div class="mh-info"><div class="mh-name">Fichas de inclusão — Declaração de Saúde + Aditivo RC</div><div class="mh-sub">Modelo oficial Unimed · uma ficha por titular, com os dependentes dele</div></div><button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button></div><div class="modal-body">
-    <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">As respostas vêm do questionário de risco de cada pessoa. Quem estiver "sem questionário" sai com a declaração em branco — complete antes de gerar. RC 58 é o padrão; use 90 para quem tem débito na Unimed ou vem de plano não regulamentado.</div>
-    ${blocos}
+  openModalHTML(`<div class="modal modal-wide"><div class="modal-head"><div class="mh-info"><div class="mh-name">${__fichasAlvo ? 'Gerar novamente a ficha de inclusão' : 'Fichas de inclusão — uma por vida'}</div><div class="mh-sub">Modelo oficial Unimed · cada vida tem a própria ficha e assina a própria</div></div><button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button></div><div class="modal-body">
+    <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">As respostas vêm do questionário de cada vida. Dependente menor de 18 anos é assinado pelo titular (responsável). RC 58 é o padrão; use 90 para quem tem débito na Unimed ou vem de plano não regulamentado.</div>
+    <div class="dep-card">${linhas || 'Nenhuma vida encontrada.'}</div>
     <div class="modal-section-title" style="margin-top:14px;">Intermediário (corretor que assina junto)</div>
     <div class="field-grid">
       <div class="fg"><label>Intermediário</label><select id="fi_intermediario">${usuarios.map((u) => `<option value="${u.id}" ${u.id === padraoInter ? 'selected' : ''}>${escHist(u.nome)}${u.cpf ? '' : ' (sem CPF cadastrado)'}</option>`).join('')}</select></div>
       <div class="fg"><label>Local</label><input id="fi_local" value="${escHist(c.fichaInclusao?.local || 'Mossoró')}"></div>
     </div>
     <div class="field-grid" style="margin-top:10px;"><div class="fg"><label>Data</label><input id="fi_data" value="${new Date().toLocaleDateString('pt-BR')}"></div><div></div></div>
-  </div><div class="modal-foot"><button class="btn-ghost" onclick="renderClientModal()">Cancelar</button><button class="btn-primary" id="fi_gerar" onclick="gerarFichasInclusao()">${ICONS.check} Gerar fichas de inclusão</button></div></div>`);
+  </div><div class="modal-foot"><button class="btn-ghost" onclick="renderClientModal()">Cancelar</button><button class="btn-primary" id="fi_gerar" onclick="gerarFichasInclusao()">${ICONS.check} Gerar ${alvos.length > 1 ? `${alvos.length} fichas` : 'ficha'}</button></div></div>`);
 }
 
 async function gerarFichasInclusao() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
-  const card = titularesDoMesmoCard(c).filter(
-    (x) => !__fichasAlvoClientId || x.id === __fichasAlvoClientId
-  );
+  const alvos = vidasAlvoDaGeracao(c);
   const g = (id) => (document.getElementById(id)?.value || '').trim();
   const inter = (DB.users || []).find((u) => u.id === g('fi_intermediario'));
   if (!inter?.cpf) {
@@ -6943,39 +7067,23 @@ async function gerarFichasInclusao() {
   try {
     const PDFLib = await carregarPdfLib();
     const tpl = await carregarModeloPdf('ficha-inclusao-ds-rc.pdf');
-    for (const x of card) {
-      const pessoas = [x.titular, ...(x.dependentes || [])];
-      const obs = [];
-      const dadosPessoas = pessoas.slice(0, 6).map((pe, i) => {
-        const ds = pe.dsRespostas || null;
-        const resp = respostasDsUnimed(ds);
-        Object.keys(resp).forEach((item) => {
-          if (resp[item] !== 'Sim') return;
-          const n = Number(item);
-          const det = n <= 24 ? ds['q' + (n - 1) + '_det'] : n === 27 ? ds.q24_det : '';
-          obs.push({ item: String(n), pessoa: rotuloPessoaDs(i), texto: det || '' });
-        });
-        return { respostas: resp, ...pesoAlturaImc(ds) };
-      });
-      const rc = pessoas.slice(0, 4).map((_, i) => g(`fi_rc_${x.id}_${i}`) || '58');
-      const bytes = await preencherFichaInclusao(PDFLib, tpl, {
-        numeroContrato: NUMERO_CONTRATO_CDL,
-        data: g('fi_data'),
-        local: g('fi_local'),
-        titularNome: x.titular.nome || '',
-        contratanteNome: x.titular.nome || '',
-        intermediarioNome: inter.nome,
-        intermediarioCpf: maskCpf(inter.cpf),
-        registroAns: REGISTRO_ANS_POR_PLANO[chavePlanoPorNome(x.planoEscolhido)] || '',
-        entrevista: 'c',
-        pessoas: dadosPessoas,
-        observacoes: obs,
-        rc,
-      });
+    for (const { x, v } of alvos) {
+      const rcEscolhido = g(`fi_rc_${x.id}_${v.key}`) || '58';
+      const bytes = await preencherFichaInclusao(
+        PDFLib,
+        tpl,
+        dadosFichaDaVida(x, v, {
+          rc: rcEscolhido,
+          data: g('fi_data'),
+          local: g('fi_local'),
+          intermediarioNome: inter.nome,
+          intermediarioCpf: maskCpf(inter.cpf),
+        })
+      );
       const blob = new Blob([bytes], { type: 'application/pdf' });
       let url;
       try {
-        const slug = (x.titular.nome || 'titular')
+        const slug = (v.pessoa.nome || 'vida')
           .toLowerCase()
           .normalize('NFD')
           .replace(/[\u0300-\u036f]/g, '')
@@ -6993,53 +7101,49 @@ async function gerarFichasInclusao() {
           fr.readAsDataURL(blob);
         });
       }
-      x.titular.anexos = (x.titular.anexos || []).filter(
-        (a) => a.nome !== 'Ficha de Inclusao Unimed.pdf'
-      );
-      x.titular.anexos.push({
+      v.pessoa.anexos = (v.pessoa.anexos || []).filter((a) => a.nome !== NOME_FICHA_INCLUSAO);
+      v.pessoa.anexos.push({
         id: uid('anx'),
-        nome: 'Ficha de Inclusao Unimed.pdf',
+        nome: NOME_FICHA_INCLUSAO,
         dataUrl: url,
         criadoEm: nowISO(),
       });
-      x.fichaInclusao = {
+      if (v.pessoa.assinaturaInclusao) delete v.pessoa.assinaturaInclusao; // documento novo: assinaturas antigas não valem
+      x.fichaInclusao = Object.assign({}, x.fichaInclusao, {
         intermediarioId: inter.id,
-        rc,
         local: g('fi_local'),
-        data: g('fi_data'),
         geradaEm: nowISO(),
-      };
-      if (x.assinaturaInclusao) delete x.assinaturaInclusao; // documento novo: assinaturas antigas não valem
+      });
+      x.fichaInclusao.rc = x.fichaInclusao.rc || [];
+      x.fichaInclusao.rc[v.idx] = rcEscolhido;
       x.historico = x.historico || [];
       x.historico.push({
         data: nowISO(),
-        texto: `Ficha de inclusão (Declaração de Saúde + Aditivo RC) gerada — ${pessoas.length} pessoa(s), RC ${rc.join('/')}.`,
+        texto: `Ficha de inclusão gerada para ${v.pessoa.nome || v.rotulo} (${v.rotulo}), RC ${v.idx < 4 ? rcEscolhido : '—'}.`,
       });
     }
     await persist();
     ACTIVE_PERSON_TAB = __abaRetornoDoc || 'conferencia';
     __abaRetornoDoc = null;
-    __fichasAlvoClientId = null;
+    __fichasAlvo = null;
     renderClientModal();
-    toast(`✓ ${card.length} ficha(s) de inclusão gerada(s).`);
+    toast(`✓ ${alvos.length} ficha(s) de inclusão gerada(s).`);
   } catch (e) {
     toast(e.message || 'Não foi possível gerar as fichas agora.');
     if (btn) {
       btn.disabled = false;
-      btn.innerHTML = `${ICONS.check} Gerar fichas de inclusão`;
+      btn.innerHTML = `${ICONS.check} Gerar fichas`;
     }
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// ETAPA "ASSINATURA" — os documentos que a Unimed exige assinados:
+// ETAPA "ASSINATURA"
 //  • Proposta PME III (empresa): contratante (sócio) + vendedor/corretora
-//  • Ficha de inclusão (uma por titular): titular + intermediário (corretor)
+//  • Ficha de inclusão de CADA VIDA: a vida (ou o titular, se menor) + corretor
 // ═══════════════════════════════════════════════════════════════════════
 const DOCS_ASSINATURA = {
   pme: {
-    anexo: 'Ficha de Adesao Unimed.pdf',
-    campo: 'assinaturaFicha',
     assinantes: [
       {
         quem: 'cliente',
@@ -7055,12 +7159,10 @@ const DOCS_ASSINATURA = {
     ],
   },
   inclusao: {
-    anexo: 'Ficha de Inclusao Unimed.pdf',
-    campo: 'assinaturaInclusao',
     assinantes: [
       {
-        quem: 'titular',
-        rotulo: 'Titular (beneficiário)',
+        quem: 'vida',
+        rotulo: 'Beneficiário',
         externo: true,
         // rubrica na carta (pág. 1) + beneficiário (2) + proponente (4 e 5) + contratante do RC (7)
         posicoes: [
@@ -7079,7 +7181,32 @@ const DOCS_ASSINATURA = {
     ],
   },
 };
-function signatarioDoc(tipo, x, quem) {
+// onde fica cada documento e suas assinaturas
+function refDoc(tipo, clientId, key) {
+  const x = DB.clients.find((v) => v.id === clientId);
+  if (!x) return null;
+  if (tipo === 'pme') {
+    x.assinaturaFicha = x.assinaturaFicha || {};
+    return {
+      x,
+      titulo: 'Proposta de Adesão PME III — empresa',
+      anexo: (x.titular.anexos || []).find((a) => a.nome === 'Ficha de Adesao Unimed.pdf'),
+      store: x.assinaturaFicha,
+      setStore: (s) => (x.assinaturaFicha = s),
+    };
+  }
+  const v = vidaPorChave(x, key);
+  if (!v) return null;
+  return {
+    x,
+    v,
+    titulo: `Ficha de inclusão — ${v.pessoa.nome || 'sem nome'} (${v.rotulo})`,
+    anexo: fichaDaVida(v),
+    store: v.pessoa.assinaturaInclusao || {},
+    setStore: (s) => (v.pessoa.assinaturaInclusao = s),
+  };
+}
+function signatarioDoc(tipo, x, quem, key) {
   if (tipo === 'pme' && quem === 'cliente') {
     const pa = x.propostaAdesao || {};
     const s0 = (pa.socios || [])[0] || {};
@@ -7090,17 +7217,14 @@ function signatarioDoc(tipo, x, quem) {
       cpf: s0.cpf || x.titular.cpf,
     };
   }
-  if (tipo === 'inclusao' && quem === 'titular') {
-    return {
-      nome: x.titular.nome,
-      email: x.titular.email,
-      celular: x.titular.celular,
-      cpf: x.titular.cpf,
-    };
+  if (tipo === 'inclusao' && quem === 'vida') {
+    const v = vidaPorChave(x, key);
+    const s = assinanteDaVida(x, v);
+    return { nome: s.nome, email: s.email, celular: s.celular, cpf: s.cpf, rotulo: s.rotulo };
   }
   const u =
     tipo === 'inclusao'
-      ? (DB.users || []).find((v) => v.id === x.fichaInclusao?.intermediarioId) || CURRENT_USER
+      ? (DB.users || []).find((w) => w.id === x.fichaInclusao?.intermediarioId) || CURRENT_USER
       : CURRENT_USER;
   return {
     nome: u?.nome,
@@ -7111,26 +7235,20 @@ function signatarioDoc(tipo, x, quem) {
   };
 }
 function documentosDoCard(c) {
-  const card = titularesDoMesmoCard(c);
   const docs = [
-    {
-      tipo: 'pme',
-      x: c,
-      titulo: 'Proposta de Adesão PME III — empresa',
-      anexo: (c.titular.anexos || []).find((a) => a.nome === DOCS_ASSINATURA.pme.anexo),
-      falta: 'Gere a Ficha Unimed na aba Conferência.',
-    },
+    { tipo: 'pme', clientId: c.id, key: '', falta: 'Gere a Ficha Unimed na aba Conferência.' },
   ];
-  card.forEach((x) =>
-    docs.push({
-      tipo: 'inclusao',
-      x,
-      titulo: `Ficha de inclusão — ${x.titular.nome || 'titular sem nome'}`,
-      anexo: (x.titular.anexos || []).find((a) => a.nome === DOCS_ASSINATURA.inclusao.anexo),
-      falta: 'Gere as fichas de inclusão na aba Conferência.',
-    })
+  titularesDoMesmoCard(c).forEach((x) =>
+    vidasDoTitular(x).forEach((v) =>
+      docs.push({
+        tipo: 'inclusao',
+        clientId: x.id,
+        key: v.key,
+        falta: 'Gere as fichas de inclusão na aba Conferência.',
+      })
+    )
   );
-  return docs;
+  return docs.map((d) => ({ ...d, ref: refDoc(d.tipo, d.clientId, d.key) })).filter((d) => d.ref);
 }
 
 function renderAbaAssinatura(c) {
@@ -7139,16 +7257,18 @@ function renderAbaAssinatura(c) {
   const html = docs
     .map((d) => {
       const def = DOCS_ASSINATURA[d.tipo];
-      const store = d.x[def.campo] || {};
-      if (!d.anexo) {
+      const { ref } = d;
+      const args = `'${d.tipo}','${d.clientId}','${d.key}'`;
+      if (!ref.anexo) {
         pendentes += def.assinantes.length;
-        return `<div class="dep-card" style="margin-bottom:12px;"><b>${escHist(d.titulo)}</b><div class="pendencia-banner" style="margin-top:8px;">⚠️ ${d.falta}</div></div>`;
+        return `<div class="dep-card" style="margin-bottom:12px;"><b>${escHist(ref.titulo)}</b><div class="pendencia-banner" style="margin-top:8px;">⚠️ ${d.falta}</div></div>`;
       }
+      const store = ref.store;
       const enviado = def.assinantes.some((a) => store[a.quem]?.documentId);
       const linhas = def.assinantes
         .map((a) => {
           const s = store[a.quem];
-          const sig = signatarioDoc(d.tipo, d.x, a.quem);
+          const sig = signatarioDoc(d.tipo, ref.x, a.quem, d.key);
           if (!s?.completed) pendentes++;
           const status = s?.completed
             ? `<span class="status-pill ativo">✓ Assinado${s.confirmedAt ? ` em ${fmtDateTime(s.confirmedAt)}` : ''}</span>`
@@ -7160,54 +7280,43 @@ function renderAbaAssinatura(c) {
             const wpp = a.externo
               ? linkWhatsappNumero(
                   sig.celular,
-                  `Olá ${(sig.nome || '').split(' ')[0]}! Segue o link pra assinar o documento do seu plano Unimed (CDL Mossoró): ${s.signUrl}`
+                  `Olá ${(sig.nome || '').split(' ')[0]}! Segue o link pra assinar a ${d.tipo === 'pme' ? 'proposta da empresa' : `ficha de inclusão de ${ref.v?.pessoa.nome || ''}`} (Unimed · CDL Mossoró): ${s.signUrl}`
                 )
               : null;
             acoes = `${wpp ? `<a class="wpp-btn" style="padding:6px 10px;font-size:11.5px;" target="_blank" href="${wpp}">${ICONS.wpp} Enviar link</a>` : ''}
               <a class="btn-ghost" style="padding:6px 10px;font-size:11.5px;" target="_blank" href="${s.signUrl}">${a.externo ? 'Abrir link' : 'Assinar'}</a>`;
           }
           return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--border);">
-            <div style="font-size:12px;"><b>${a.rotulo}</b><div style="color:var(--text-muted);">${escHist(sig.nome || 'sem nome cadastrado')}</div></div>
+            <div style="font-size:12px;"><b>${escHist(sig.rotulo || a.rotulo)}</b><div style="color:var(--text-muted);">${escHist(sig.nome || 'sem nome cadastrado')}</div></div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">${status}${acoes}</div>
           </div>`;
         })
         .join('');
       const todos = def.assinantes.every((a) => store[a.quem]?.completed);
       const botaoDoc = !enviado
-        ? `<button class="btn-primary" style="padding:6px 10px;font-size:11.5px;" id="assin_${d.tipo}_${d.x.id}" onclick="enviarDocParaAssinatura('${d.tipo}','${d.x.id}')">${ICONS.upload} Enviar para assinatura</button>`
+        ? `<button class="btn-primary" style="padding:6px 10px;font-size:11.5px;" id="assin_${d.tipo}_${d.clientId}_${d.key}" onclick="enviarDocParaAssinatura(${args})">${ICONS.upload} Enviar para assinatura</button>`
         : todos
           ? ''
-          : `<button class="btn-ghost" style="padding:6px 10px;font-size:11.5px;" onclick="consultarDocAssinatura('${d.tipo}','${d.x.id}')">Conferir assinaturas</button>`;
+          : `<button class="btn-ghost" style="padding:6px 10px;font-size:11.5px;" onclick="consultarDocAssinatura(${args})">Conferir assinaturas</button>`;
       return `<div class="dep-card" style="margin-bottom:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;"><b>${escHist(d.titulo)}</b><div style="display:flex;gap:6px;flex-wrap:wrap;">${botaoDoc}<a class="btn-ghost" style="padding:5px 9px;font-size:11px;" target="_blank" href="${d.anexo.dataUrl}">${ICONS.file} Ver</a><button class="btn-ghost" style="padding:5px 9px;font-size:11px;" title="Refazer o documento (ex.: corrigir um dado)" onclick="regerarDocumento('${d.tipo}','${d.x.id}')">↻ Gerar novo</button></div></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;"><b>${escHist(ref.titulo)}</b><div style="display:flex;gap:6px;flex-wrap:wrap;">${botaoDoc}<a class="btn-ghost" style="padding:5px 9px;font-size:11px;" target="_blank" href="${ref.anexo.dataUrl}">${ICONS.file} Ver</a><button class="btn-ghost" style="padding:5px 9px;font-size:11px;" title="Refazer o documento (ex.: corrigir um dado)" onclick="regerarDocumento(${args})">↻ Gerar novo</button></div></div>
         ${linhas}
       </div>`;
     })
     .join('');
   const temCelular = !!onlyDigits(c.titular.celular || '');
   return `
-    ${pendentes === 0 ? `<div class="pendencia-banner" style="background:var(--success-light);color:var(--success);border-color:transparent;margin-bottom:14px;">✓ Todos os documentos foram assinados. <button class="btn-primary" style="margin-left:8px;padding:6px 12px;font-size:11.5px;" onclick="setEtapaAdesao('enviado')">Avançar para Implantação</button></div>` : `<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">${pendentes} assinatura(s) pendente(s). Cada documento vai uma vez pra Autentique, com todos os assinantes; cada um recebe o próprio link.</div>`}
+    ${pendentes === 0 ? `<div class="pendencia-banner" style="background:var(--success-light);color:var(--success);border-color:transparent;margin-bottom:14px;">✓ Todos os documentos foram assinados. <button class="btn-primary" style="margin-left:8px;padding:6px 12px;font-size:11.5px;" onclick="setEtapaAdesao('enviado')">Avançar para Implantação</button></div>` : `<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">${pendentes} assinatura(s) pendente(s). Cada vida assina a própria ficha (o titular assina pelos menores de 18); o corretor assina junto.</div>`}
     ${html}
     ${temCelular ? `<a class="wpp-btn" target="_blank" href="${linkWhatsappCliente(c, `Olá ${(c.titular.nome || '').split(' ')[0]}, tudo bem?`)}">${ICONS.wpp} Falar com o cliente</a>` : ''}
   `;
 }
 
 // ─── Gerar um documento de novo (corrigir algo) ───────────────────────────
-// Abre o mesmo formulário de geração. Se o documento já foi enviado ou
-// assinado, avisa antes: um documento novo cancela as assinaturas atuais.
-let __abaRetornoDoc = null;
-let __fichasAlvoClientId = null;
-let __vindoDeRegerar = false;
-// aberto pela Conferência (não pelo "Gerar novo") → volta pra Conferência
-function origemDoFormularioDoc() {
-  if (!__vindoDeRegerar) __abaRetornoDoc = null;
-  __vindoDeRegerar = false;
-}
-async function regerarDocumento(tipo, clientId) {
-  const x = DB.clients.find((v) => v.id === clientId);
-  if (!x) return;
-  const def = DOCS_ASSINATURA[tipo];
-  const assinaturas = Object.values(x[def.campo] || {});
+async function regerarDocumento(tipo, clientId, key) {
+  const ref = refDoc(tipo, clientId, key);
+  if (!ref) return;
+  const assinaturas = Object.values(ref.store || {});
   const enviado = assinaturas.some((s) => s?.documentId);
   const assinado = assinaturas.some((s) => s?.completed);
   if (enviado) {
@@ -7222,23 +7331,23 @@ async function regerarDocumento(tipo, clientId) {
   __abaRetornoDoc = ACTIVE_PERSON_TAB;
   __vindoDeRegerar = true;
   if (tipo === 'pme') {
-    ACTIVE_CLIENT_ID = x.id;
+    ACTIVE_CLIENT_ID = clientId;
     openFichaUnimedModal();
   } else {
-    openFichasInclusaoModal(x.id);
+    __fichasAlvo = { clientId, key };
+    openFichasInclusaoModal();
   }
 }
 
-async function enviarDocParaAssinatura(tipo, clientId) {
-  const x = DB.clients.find((v) => v.id === clientId);
-  if (!x) return;
-  const def = DOCS_ASSINATURA[tipo];
-  const anexo = (x.titular.anexos || []).find((a) => a.nome === def.anexo);
-  if (!anexo) {
+async function enviarDocParaAssinatura(tipo, clientId, key) {
+  const ref = refDoc(tipo, clientId, key);
+  if (!ref) return;
+  if (!ref.anexo) {
     toast('Gere o documento na aba Conferência primeiro.');
     return;
   }
-  const sigs = def.assinantes.map((a) => ({ ...a, sig: signatarioDoc(tipo, x, a.quem) }));
+  const def = DOCS_ASSINATURA[tipo];
+  const sigs = def.assinantes.map((a) => ({ ...a, sig: signatarioDoc(tipo, ref.x, a.quem, key) }));
   const semNome = sigs.find((a) => !a.sig.nome);
   if (semNome) {
     toast(
@@ -7246,26 +7355,28 @@ async function enviarDocParaAssinatura(tipo, clientId) {
     );
     return;
   }
-  const btn = document.getElementById(`assin_${tipo}_${clientId}`);
+  const btn = document.getElementById(`assin_${tipo}_${clientId}_${key}`);
   if (btn) {
     btn.disabled = true;
     btn.textContent = 'Enviando...';
   }
   try {
-    const pdfBase64 = await documentoParaBase64(anexo.dataUrl);
-    const titulo = tipo === 'pme' ? 'Proposta PME III' : 'Ficha de inclusao';
+    const pdfBase64 = await documentoParaBase64(ref.anexo.dataUrl);
+    const titulo =
+      tipo === 'pme'
+        ? `Proposta PME III - ${ref.x.titular.razaoSocial || ''}`
+        : `Ficha de inclusao - ${ref.v.pessoa.nome || ''}`;
     const res = await fetch(AUTENTIQUE_CREATE_FUNCTION_URL, {
       method: 'POST',
       headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
-        tituloDocumento: `${titulo} - ${x.titular.razaoSocial || x.titular.nome || ''}`,
+        tituloDocumento: titulo,
         pdfBase64,
         signers: sigs.map((a) => ({
           nome: a.sig.nome,
           email: a.sig.email || '',
           posicoes: a.posicoes,
         })),
-        // formato antigo (se a função ainda não foi atualizada, assina só o primeiro)
         nome: sigs[0].sig.nome,
         email: sigs[0].sig.email || '',
       }),
@@ -7274,7 +7385,7 @@ async function enviarDocParaAssinatura(tipo, clientId) {
     if (!res.ok || !data.documentId)
       throw new Error(data.error || 'A Autentique não devolveu o documento.');
     const retorno = Array.isArray(data.signers) ? data.signers : null;
-    x[def.campo] = {};
+    const novo = {};
     sigs.forEach((a, i) => {
       const r = retorno
         ? retorno[i]
@@ -7282,7 +7393,7 @@ async function enviarDocParaAssinatura(tipo, clientId) {
           ? { publicId: data.signatureId, signUrl: data.signUrl }
           : null;
       if (!r) return;
-      x[def.campo][a.quem] = {
+      novo[a.quem] = {
         documentId: data.documentId,
         signatureId: r.publicId,
         signUrl: r.signUrl,
@@ -7291,16 +7402,17 @@ async function enviarDocParaAssinatura(tipo, clientId) {
         createdAt: nowISO(),
       };
     });
+    ref.setStore(novo);
     if (!retorno && sigs.length > 1)
       toast(
         'A função autentique-create ainda é a antiga: só o primeiro assinante recebeu link. Publique a versão nova.'
       );
-    x.historico = x.historico || [];
-    x.historico.push({
+    ref.x.historico = ref.x.historico || [];
+    ref.x.historico.push({
       data: nowISO(),
-      texto: `${titulo} enviada para assinatura: ${sigs.map((a) => `${a.sig.nome} (${a.rotulo.toLowerCase()})`).join(' e ')}.`,
+      texto: `${titulo} enviada para assinatura: ${sigs.map((a) => a.sig.nome).join(' e ')}.`,
     });
-    titularesDoMesmoCard(x).forEach((t) => {
+    titularesDoMesmoCard(ref.x).forEach((t) => {
       if (t.etapaAdesao === 'conferencia') t.etapaAdesao = 'assinatura';
     });
     await persist();
@@ -7316,10 +7428,9 @@ async function enviarDocParaAssinatura(tipo, clientId) {
   }
 }
 
-async function consultarDocAssinatura(tipo, clientId) {
-  const x = DB.clients.find((v) => v.id === clientId);
-  const def = DOCS_ASSINATURA[tipo];
-  const store = x?.[def.campo] || {};
+async function consultarDocAssinatura(tipo, clientId, key) {
+  const ref = refDoc(tipo, clientId, key);
+  const store = ref?.store || {};
   const ids = [
     ...new Set(
       Object.values(store)
@@ -7343,14 +7454,14 @@ async function consultarDocAssinatura(tipo, clientId) {
         const info = Array.isArray(data.signers)
           ? data.signers.find((v) => v.publicId === s.signatureId)
           : null;
-        const assinou = info ? !!info.signed : !!data.completed; // função antiga: só sabe do documento todo
+        const assinou = info ? !!info.signed : !!data.completed;
         if (assinou && !s.completed) {
           novas++;
           s.confirmedAt = info?.signedAt || nowISO();
-          x.historico = x.historico || [];
-          x.historico.push({
+          ref.x.historico = ref.x.historico || [];
+          ref.x.historico.push({
             data: nowISO(),
-            texto: `Assinatura confirmada: ${s.signerName || quem} (${tipo === 'pme' ? 'Proposta PME III' : 'ficha de inclusão'}).`,
+            texto: `Assinatura confirmada: ${s.signerName || quem} (${ref.titulo}).`,
           });
         }
         s.completed = assinou;
@@ -7358,6 +7469,7 @@ async function consultarDocAssinatura(tipo, clientId) {
         if (data.completed && data.signedFile) s.signedFile = data.signedFile;
       });
     }
+    ref.setStore(store);
     await persist();
     renderClientModal();
     toast(novas ? `✓ ${novas} assinatura(s) confirmada(s).` : 'Nenhuma assinatura nova ainda.');
@@ -8254,12 +8366,20 @@ function renderClientModal() {
   } else if (ACTIVE_PERSON_TAB === 'questionario') {
     const feito = listPessoas(c).every((p) => !!p.pessoa.questionarioRiscoConcluidoEm);
     tabContent = `
-      <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">O questionário de risco é individual para cada vida. Você pode preencher pelo sistema ou gerar um link exclusivo.</p>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">O questionário de saúde é individual: cada vida (titular e cada dependente) responde e assina a própria ficha, pelo link dela. Dependente menor de 18 anos é assinado pelo titular.</p>
+      <p style="font-size:11px;color:var(--text-faint);margin-bottom:12px;">Código da empresa: <code>${escHist(getEmpresaDoCliente(c)?.codigoEmpresa || 'gerado ao enviar o primeiro link')}</code></p>
       <div style="display:grid;gap:10px;">
         ${listPessoas(c)
-          .map(
-            (p) =>
-              `<div class="dep-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;"><div><b>${p.label}</b><div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${p.pessoa.dsRespostas ? '✓ Questionário preenchido' : 'Aguardando questionário'} · Código da vida: <code>${p.pessoa.codigoVida || 'será gerado'}</code></div></div><div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;"><button class="btn-ghost" onclick="openQuestionarioRiscoModalFor('${p.key}')">Preencher pelo implantador</button><button class="btn-primary" style="padding:7px 10px;font-size:11px;" onclick="gerarLinkRiscoPessoa('${p.key}')">Gerar link individual</button></div></div>`
+          .map((p) =>
+            (() => {
+              const sit = situacaoPessoaFicha(p.pessoa);
+              const status = !sit
+                ? '<span style="color:var(--success);font-weight:600;">✓ Respondido</span>'
+                : sit === 'sem questionário'
+                  ? `Aguardando resposta${p.pessoa.linkRiscoGeradoEm ? ` · link enviado em ${fmtDate(p.pessoa.linkRiscoGeradoEm.slice(0, 10))}` : ''}`
+                  : `<span style="color:var(--warning);font-weight:600;">⚠ Incompleto: ${sit}</span>`;
+              return `<div class="dep-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div><b>${p.label}</b><div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${status} · Código da vida: <code>${escHist(p.pessoa.codigoVida || 'gerado ao enviar o link')}</code></div></div><div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;"><button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="openQuestionarioRiscoModalFor('${p.key}')">Preencher pelo implantador</button><button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="gerarLinkRiscoPessoa('${p.key}')">Copiar link</button><button class="wpp-btn" style="padding:7px 10px;font-size:11px;" onclick="enviarLinkRiscoWhatsapp('${p.key}')">${ICONS.wpp} Enviar link</button></div></div>`;
+            })()
           )
           .join('')}
       </div>
@@ -8273,13 +8393,11 @@ function renderClientModal() {
       <div class="doc-actions-grid">
         <button type="button" class="doc-action-card" onclick="openFichaUnimedModal()"><span class="doc-icon">${ICONS.clipboard}</span><span class="doc-text">Ficha Unimed (Proposta PME III)<small>${fichaFeita ? '✓ Preenchida — clique pra revisar' : 'Preencher a proposta de adesão da empresa'}</small></span></button>
         <button type="button" class="doc-action-card" onclick="openFichasInclusaoModal()"><span class="doc-icon">${ICONS.clipboard}</span><span class="doc-text">Fichas de inclusão (Declaração de Saúde + RC)<small>${(() => {
-          const card = titularesDoMesmoCard(c);
-          const feitas = card.filter((x) =>
-            (x.titular.anexos || []).some((a) => a.nome === 'Ficha de Inclusao Unimed.pdf')
-          ).length;
+          const vidas = titularesDoMesmoCard(c).flatMap((x) => vidasDoTitular(x));
+          const feitas = vidas.filter((v) => fichaDaVida(v)).length;
           return feitas
-            ? `✓ ${feitas} de ${card.length} gerada(s) — clique pra refazer`
-            : `Uma por titular (${card.length})`;
+            ? `✓ ${feitas} de ${vidas.length} vida(s) — clique pra gerar de novo`
+            : `Uma por vida (${vidas.length})`;
         })()}</small></span></button>
       </div>
       <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">${fichaFeita ? 'Ficha pronta. Na próxima etapa (Assinatura), cliente e corretora assinam pela Autentique.' : 'Preencha a ficha. Depois disso, ela segue para assinatura na próxima etapa.'}</p>
@@ -8409,15 +8527,6 @@ function renderClientModal() {
           </div>
         </div>
         <div class="journey-tab-content">
-          ${
-            ACTIVE_PERSON_TAB === 'documentacao'
-              ? `
-            <button type="button" class="doc-action-card" style="margin-bottom:16px;" onclick="gerarLinkCliente()">
-              <span class="doc-icon">${ICONS.mail}</span>
-              <span class="doc-text">Link para o cliente<small>Ele mesmo completa os dados que faltam</small></span>
-            </button>`
-              : ''
-          }
           ${tabContent}
           <details style="margin-top:22px;border:1px solid var(--border);border-radius:12px;padding:10px 14px;background:#fff;">
             <summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:var(--navy);">Comentários da equipe (${(c.comentariosInternos || []).length})</summary>
@@ -9412,35 +9521,78 @@ function openQuestionarioRiscoModalFor(key) {
   setTimeout(() => switchDsPessoa(key), 0);
 }
 
-async function gerarLinkRiscoPessoa(key) {
+// O questionário de saúde é INDIVIDUAL por vida (titular e cada dependente):
+// cada link traz o código da vida (v=) e só mostra as perguntas daquela pessoa.
+async function montarLinkRisco(key) {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   const p = listPessoas(c).find((x) => x.key === key);
-  if (!p) return;
+  if (!p) return null;
   const emp = getEmpresaDoCliente(c);
   emp.codigoEmpresa = emp.codigoEmpresa || uid('emp');
   p.pessoa.codigoVida = p.pessoa.codigoVida || uid('vida');
-  p.pessoa.linkRiscoToken = p.pessoa.linkRiscoToken || uid('ds');
   const numero = getOrCreateClientNumero(c);
-  try {
-    // Salva TUDO de uma vez (empresa, código da vida e número do cliente) ANTES
-    // de gerar o link — sem isso o formulário público não acha os dados no banco.
+  // salva empresa, código da vida e número do cliente ANTES de mandar o link —
+  // sem isso o formulário público não acha os dados no banco
+  await persist();
+  const link =
+    FORM_BASE_URL +
+    '?c=' +
+    encodeURIComponent(numero) +
+    '&e=' +
+    encodeURIComponent(emp.codigoEmpresa) +
+    '&v=' +
+    encodeURIComponent(p.pessoa.codigoVida);
+  if (!p.pessoa.linkRiscoGeradoEm) {
+    p.pessoa.linkRiscoGeradoEm = nowISO();
+    c.historico.push({
+      data: nowISO(),
+      texto: `Link do questionário de saúde gerado para ${p.pessoa.nome || p.label}.`,
+    });
     await persist();
-    const link =
-      FORM_BASE_URL +
-      '?c=' +
-      encodeURIComponent(numero) +
-      '&e=' +
-      encodeURIComponent(emp.codigoEmpresa) +
-      '&v=' +
-      encodeURIComponent(p.pessoa.codigoVida);
+  }
+  return { c, p, link };
+}
+async function gerarLinkRiscoPessoa(key) {
+  try {
+    const r = await montarLinkRisco(key);
+    if (!r) return;
     try {
-      await navigator.clipboard.writeText(link);
+      await navigator.clipboard.writeText(r.link);
+      toast('✓ Link de ' + (r.p.pessoa.nome || 'a pessoa') + ' copiado.');
     } catch (e) {
-      prompt('Copie o link do questionário:', link);
+      prompt('Copie o link do questionário:', r.link);
     }
-    toast('✓ Link do questionário copiado. Envie para ' + (p.pessoa.nome || 'o titular') + '.');
+    renderClientModal();
   } catch (e) {
-    toast('Erro ao salvar antes de gerar o link: ' + e.message);
+    toast('Erro ao gerar o link: ' + e.message);
+  }
+}
+async function enviarLinkRiscoWhatsapp(key) {
+  // abre a janela já (antes de esperar o salvamento), senão o navegador bloqueia
+  const janela = window.open('about:blank', '_blank');
+  try {
+    const r = await montarLinkRisco(key);
+    if (!r) return janela && janela.close();
+    const { c, p, link } = r;
+    const proprio = onlyDigits(p.pessoa.celular || '');
+    const numero = proprio || onlyDigits(c.titular.celular || '');
+    if (!numero) {
+      if (janela) janela.close();
+      toast('Cadastre o celular da pessoa ou do titular (aba Pessoas) para enviar pelo WhatsApp.');
+      return;
+    }
+    const nomePessoa = (p.pessoa.nome || '').split(' ')[0];
+    const msg =
+      proprio || p.key === 'titular'
+        ? `Olá ${nomePessoa}! Segue o link para responder o seu questionário de saúde da adesão Unimed (CDL Mossoró): ${link}`
+        : `Olá ${(c.titular.nome || '').split(' ')[0]}! Segue o link para ${p.pessoa.nome || 'seu dependente'} responder o questionário de saúde (é individual, um por pessoa): ${link}`;
+    const url = `https://api.whatsapp.com/send?phone=55${numero}&text=${encodeURIComponent(msg)}`;
+    if (janela) janela.location.href = url;
+    else window.open(url, '_blank');
+    renderClientModal();
+  } catch (e) {
+    if (janela) janela.close();
+    toast('Erro ao gerar o link: ' + e.message);
   }
 }
 
