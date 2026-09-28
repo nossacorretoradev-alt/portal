@@ -6292,26 +6292,45 @@ async function anexarDocSlot(event, alvoTipo, depIndex, slotKey, slotLabel) {
     nomePessoaOuEmpresa = alvo.nome || `dependente-${depIndex + 1}`;
   }
   const nomeFinal = `${slotLabel} - ${nomePessoaOuEmpresa}.${ext}`;
-  const reader = new FileReader();
-  reader.onload = async () => {
+  event.target.value = '';
+  toast('Salvando documento...');
+  (async () => {
+    // vai pro armazenamento de arquivos (não pesa o banco); sem ele, guarda do jeito antigo
+    let url;
+    try {
+      const slug = String(nomePessoaOuEmpresa)
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '');
+      url = await uploadArquivoPortal(
+        file,
+        `documentos/${slug}/${slotKey}-${uid('d')}.${ext}`,
+        file.type
+      );
+    } catch (e) {
+      url = await new Promise((res) => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result);
+        reader.readAsDataURL(file);
+      });
+    }
     alvo.documentos = alvo.documentos || {};
+    // anexado pela equipe no portal = já conferido (não precisa aprovar)
     alvo.documentos[slotKey] = {
       nome: nomeFinal,
       nomeOriginal: file.name,
-      dataUrl: reader.result,
-      confirmado: false,
+      dataUrl: url,
+      confirmado: true,
+      confirmadoPor: CURRENT_USER?.nome || '',
       criadoEm: nowISO(),
     };
-    c.historico.push({
-      data: nowISO(),
-      texto: `Documento anexado: ${nomeFinal}.`,
-    });
+    c.historico.push({ data: nowISO(), texto: `Documento anexado: ${nomeFinal}.` });
     await persist();
     renderClientModal();
-    toast('Documento anexado — confira e marque como OK.');
-  };
-  reader.readAsDataURL(file);
-  event.target.value = '';
+    toast('✓ Documento anexado e salvo.');
+  })();
 }
 async function toggleDocSlotConfirmado(alvoTipo, depIndex, slotKey) {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
@@ -6340,7 +6359,13 @@ async function removeDocSlot(alvoTipo, depIndex, slotKey) {
   renderClientModal();
 }
 
-function renderDocSlotRow(slot, alvo, alvoTipo, depIndex) {
+// Os documentos de TODOS os titulares do card aparecem na mesma aba; antes de
+// agir num documento, aponta pro titular dono dele (senão ia pro titular aberto).
+function usarTitular(id) {
+  if (id && DB.clients.some((x) => x.id === id)) ACTIVE_CLIENT_ID = id;
+}
+function renderDocSlotRow(slot, alvo, alvoTipo, depIndex, clientId) {
+  const pre = clientId ? `usarTitular('${clientId}');` : '';
   const doc = alvo.documentos && alvo.documentos[slot.key];
   const inputId = `docslot_${alvoTipo}_${depIndex !== undefined ? depIndex : ''}_${slot.key}`;
   if (!doc) {
@@ -6349,7 +6374,7 @@ function renderDocSlotRow(slot, alvo, alvoTipo, depIndex) {
         <span class="doc-slot-icon pendente">${ICONS.file}</span>
         <span class="doc-slot-label">${slot.label}</span>
         <span class="status-pill inativo">Não enviado</span>
-        <label class="btn-ghost" style="padding:5px 10px;font-size:11px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" id="${inputId}" style="display:none;" onchange="anexarDocSlot(event,'${alvoTipo}',${depIndex !== undefined ? depIndex : 'undefined'},'${slot.key}','${slot.label}')"></label>
+        <label class="btn-ghost" style="padding:5px 10px;font-size:11px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" id="${inputId}" style="display:none;" onchange="${pre}anexarDocSlot(event,'${alvoTipo}',${depIndex !== undefined ? depIndex : 'undefined'},'${slot.key}','${slot.label}')"></label>
       </div>`;
   }
   return `
@@ -6362,12 +6387,12 @@ function renderDocSlotRow(slot, alvo, alvoTipo, depIndex) {
           ? doc.assinaturaDigital?.completed
             ? `<a class="btn-ghost" style="padding:5px 10px;font-size:11px;" href="${doc.assinaturaDigital.signedFile || doc.dataUrl}" target="_blank" rel="noopener">✓ Assinado</a>`
             : doc.assinaturaDigital?.documentId
-              ? `<button class="btn-primary" style="padding:5px 10px;font-size:11px;" onclick="consultarAssinaturaDocumento('${alvoTipo}',${depIndex !== undefined ? depIndex : 'undefined'},'${slot.key}')">Verificar assinatura</button>`
-              : `<button class="btn-primary" style="padding:5px 10px;font-size:11px;" onclick="abrirAssinaturaDocumento('${alvoTipo}',${depIndex !== undefined ? depIndex : 'undefined'},'${slot.key}')">Enviar para assinatura</button>`
+              ? `<button class="btn-primary" style="padding:5px 10px;font-size:11px;" onclick="${pre}consultarAssinaturaDocumento('${alvoTipo}',${depIndex !== undefined ? depIndex : 'undefined'},'${slot.key}')">Verificar assinatura</button>`
+              : `<button class="btn-primary" style="padding:5px 10px;font-size:11px;" onclick="${pre}abrirAssinaturaDocumento('${alvoTipo}',${depIndex !== undefined ? depIndex : 'undefined'},'${slot.key}')">Enviar para assinatura</button>`
           : ''
       }
-      <button class="btn-ghost" style="padding:5px 10px;font-size:11px;" onclick="toggleDocSlotConfirmado('${alvoTipo}',${depIndex !== undefined ? depIndex : 'undefined'},'${slot.key}')">${doc.confirmado ? 'Desfazer' : 'Dar OK'}</button>
-      <button class="btn-danger" style="padding:5px 8px;" onclick="removeDocSlot('${alvoTipo}',${depIndex !== undefined ? depIndex : 'undefined'},'${slot.key}')">${ICONS.trash}</button>
+      <button class="btn-ghost" style="padding:5px 10px;font-size:11px;" onclick="${pre}toggleDocSlotConfirmado('${alvoTipo}',${depIndex !== undefined ? depIndex : 'undefined'},'${slot.key}')">${doc.confirmado ? 'Desfazer' : 'Dar OK'}</button>
+      <button class="btn-danger" style="padding:5px 8px;" onclick="${pre}removeDocSlot('${alvoTipo}',${depIndex !== undefined ? depIndex : 'undefined'},'${slot.key}')">${ICONS.trash}</button>
     </div>`;
 }
 
@@ -7019,10 +7044,6 @@ function openFichasInclusaoModal() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   const alvos = vidasAlvoDaGeracao(c);
   const usuarios = (DB.users || []).filter((u) => u.ativo);
-  const padraoInter =
-    c.fichaInclusao?.intermediarioId ||
-    usuarios.find((u) => /st[eê]nio/i.test(u.nome || ''))?.id ||
-    CURRENT_USER?.id;
   const linhas = alvos
     .map(({ x, v }) => {
       const sit = situacaoPessoaFicha(v.pessoa);
@@ -7039,9 +7060,9 @@ function openFichasInclusaoModal() {
   openModalHTML(`<div class="modal modal-wide"><div class="modal-head"><div class="mh-info"><div class="mh-name">${__fichasAlvo ? 'Gerar novamente a ficha de inclusão' : 'Fichas de inclusão — uma por vida'}</div><div class="mh-sub">Modelo oficial Unimed · cada vida tem a própria ficha e assina a própria</div></div><button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button></div><div class="modal-body">
     <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">As respostas vêm do questionário de cada vida. Dependente menor de 18 anos é assinado pelo titular (responsável). RC 58 é o padrão; use 90 para quem tem débito na Unimed ou vem de plano não regulamentado.</div>
     <div class="dep-card">${linhas || 'Nenhuma vida encontrada.'}</div>
-    <div class="modal-section-title" style="margin-top:14px;">Intermediário (corretor que assina junto)</div>
+    <div class="modal-section-title" style="margin-top:14px;">Corretora (assina junto)</div>
+    <div style="font-size:12px;margin-bottom:10px;"><b>${CORRETORA_ASSINANTE.nome}</b> · CNPJ ${CORRETORA_ASSINANTE.cnpj}</div>
     <div class="field-grid">
-      <div class="fg"><label>Intermediário</label><select id="fi_intermediario">${usuarios.map((u) => `<option value="${u.id}" ${u.id === padraoInter ? 'selected' : ''}>${escHist(u.nome)}${u.cpf ? '' : ' (sem CPF cadastrado)'}</option>`).join('')}</select></div>
       <div class="fg"><label>Local</label><input id="fi_local" value="${escHist(c.fichaInclusao?.local || 'Mossoró')}"></div>
     </div>
     <div class="field-grid" style="margin-top:10px;"><div class="fg"><label>Data</label><input id="fi_data" value="${new Date().toLocaleDateString('pt-BR')}"></div><div></div></div>
@@ -7052,13 +7073,7 @@ async function gerarFichasInclusao() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   const alvos = vidasAlvoDaGeracao(c);
   const g = (id) => (document.getElementById(id)?.value || '').trim();
-  const inter = (DB.users || []).find((u) => u.id === g('fi_intermediario'));
-  if (!inter?.cpf) {
-    toast(
-      'O intermediário precisa ter CPF cadastrado (Usuários & Permissões) — ele aparece na ficha.'
-    );
-    return;
-  }
+  const inter = { id: null, nome: CORRETORA_ASSINANTE.nome, cpf: CORRETORA_ASSINANTE.cnpj };
   const btn = document.getElementById('fi_gerar');
   if (btn) {
     btn.disabled = true;
@@ -7077,7 +7092,7 @@ async function gerarFichasInclusao() {
           data: g('fi_data'),
           local: g('fi_local'),
           intermediarioNome: inter.nome,
-          intermediarioCpf: maskCpf(inter.cpf),
+          intermediarioCpf: inter.cpf,
         })
       );
       const blob = new Blob([bytes], { type: 'application/pdf' });
@@ -7142,6 +7157,11 @@ async function gerarFichasInclusao() {
 //  • Proposta PME III (empresa): contratante (sócio) + vendedor/corretora
 //  • Ficha de inclusão de CADA VIDA: a vida (ou o titular, se menor) + corretor
 // ═══════════════════════════════════════════════════════════════════════
+// Quem assina pela corretora é SEMPRE a Nossa Broker (não o vendedor).
+const CORRETORA_ASSINANTE = {
+  nome: 'NOSSA BROKER CORRETORA DE SEGUROS',
+  cnpj: '05.586.976/0001-01',
+};
 const DOCS_ASSINATURA = {
   pme: {
     assinantes: [
@@ -7153,7 +7173,7 @@ const DOCS_ASSINATURA = {
       },
       {
         quem: 'corretora',
-        rotulo: 'Vendedor / corretora',
+        rotulo: 'Corretora (Nossa Broker)',
         posicoes: [{ pagina: 2, x: 50.4, y: 57.9 }],
       },
     ],
@@ -7175,7 +7195,7 @@ const DOCS_ASSINATURA = {
       },
       {
         quem: 'intermediario',
-        rotulo: 'Intermediário (corretor)',
+        rotulo: 'Corretora (Nossa Broker)',
         posicoes: [{ pagina: 2, x: 63.3, y: 36.7 }],
       },
     ],
@@ -7222,17 +7242,8 @@ function signatarioDoc(tipo, x, quem, key) {
     const s = assinanteDaVida(x, v);
     return { nome: s.nome, email: s.email, celular: s.celular, cpf: s.cpf, rotulo: s.rotulo };
   }
-  const u =
-    tipo === 'inclusao'
-      ? (DB.users || []).find((w) => w.id === x.fichaInclusao?.intermediarioId) || CURRENT_USER
-      : CURRENT_USER;
-  return {
-    nome: u?.nome,
-    email: u?.email,
-    celular: u?.celular || '',
-    cpf: u?.cpf || '',
-    userId: u?.id,
-  };
+  // corretora / intermediário: sempre a Nossa Broker
+  return { nome: CORRETORA_ASSINANTE.nome, email: '', celular: '', cpf: '' };
 }
 function documentosDoCard(c) {
   const docs = [
@@ -7829,7 +7840,8 @@ function contextoLinkDocs(tipo, clientId) {
   };
 }
 
-async function criarLinkDocs(tipo, clientId) {
+async function criarLinkDocs(tipo, clientId, opts) {
+  opts = opts || {};
   const ctx = contextoLinkDocs(tipo, clientId);
   if (!ctx) return;
   if (!ctx.nome) {
@@ -7866,6 +7878,7 @@ async function criarLinkDocs(tipo, clientId) {
           : `Link de documentos gerado para ${ctx.nome} (titular e dependentes).`,
     });
     await persist();
+    if (opts.silencioso) return link;
     try {
       await navigator.clipboard.writeText(link);
     } catch (e) {}
@@ -7873,21 +7886,78 @@ async function criarLinkDocs(tipo, clientId) {
     toast(
       `✓ Link ${tipo === 'empresa' ? 'da empresa' : 'de ' + ctx.nome} copiado. Envie pelo WhatsApp.`
     );
+    return link;
   } catch (e) {
+    if (opts.silencioso) throw e;
     toast(e.message);
   }
 }
 
-async function copiarLinkDocs(tipo, clientId) {
+// devolve o link ativo; se não existir (ou venceu), gera um novo na hora
+async function obterLinkDocs(tipo, clientId) {
   const ctx = contextoLinkDocs(tipo, clientId);
-  const sol = ctx && solicitacaoDocumentoAtual(ctx.dono);
-  if (!sol) return;
+  if (!ctx) return null;
+  const sol = solicitacaoDocumentoAtual(ctx.dono);
+  const valido =
+    sol && sol.status === 'open' && (!sol.expiresAt || new Date(sol.expiresAt) > new Date());
+  if (valido) return sol.link;
+  return await criarLinkDocs(tipo, clientId, { silencioso: true });
+}
+
+async function copiarLinkDocs(tipo, clientId) {
   try {
-    await navigator.clipboard.writeText(sol.link);
-    toast('Link copiado.');
+    const link = await obterLinkDocs(tipo, clientId);
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      toast('✓ Link copiado.');
+    } catch (e) {
+      prompt('Copie o link:', link);
+    }
+    renderClientModal();
   } catch (e) {
-    prompt('Copie o link:', sol.link);
+    toast(e.message || 'Não foi possível gerar o link agora.');
   }
+}
+
+async function enviarLinkDocsWhatsapp(tipo, clientId) {
+  // abre a janela já (antes de esperar o link), senão o navegador bloqueia
+  const janela = window.open('about:blank', '_blank');
+  try {
+    const link = await obterLinkDocs(tipo, clientId);
+    const ctx = contextoLinkDocs(tipo, clientId);
+    const numero = onlyDigits(ctx?.celular || '');
+    if (!link || !numero) {
+      if (janela) janela.close();
+      if (link && !numero)
+        toast(
+          tipo === 'empresa'
+            ? 'Cadastre o telefone do sócio ou do titular pra enviar pelo WhatsApp.'
+            : 'Cadastre o celular do titular (aba Pessoas) pra enviar pelo WhatsApp.'
+        );
+      renderClientModal();
+      return;
+    }
+    const msg =
+      tipo === 'empresa'
+        ? `Olá! Segue o link para enviar os documentos da empresa ${ctx.nome} (adesão CDL Mossoró × Unimed): ${link}`
+        : `Olá ${(ctx.nome || '').split(' ')[0]}! Segue o link para enviar os seus documentos e os dos seus dependentes (adesão CDL Mossoró × Unimed): ${link}`;
+    const url = `https://api.whatsapp.com/send?phone=55${numero}&text=${encodeURIComponent(msg)}`;
+    if (janela) janela.location.href = url;
+    else window.open(url, '_blank');
+    renderClientModal();
+  } catch (e) {
+    if (janela) janela.close();
+    toast(e.message || 'Não foi possível gerar o link agora.');
+  }
+}
+
+function preencherDocsDoGrupo(tipo, clientId) {
+  const el = document.getElementById(tipo === 'empresa' ? 'docs_empresa' : `docs_tit_${clientId}`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  el.style.boxShadow = '0 0 0 3px rgba(203,32,21,.3)';
+  setTimeout(() => (el.style.boxShadow = ''), 2200);
 }
 
 function linkWhatsappDocs(tipo, clientId) {
@@ -8055,35 +8125,33 @@ async function atualizarDocumentosEmpresa(id) {
 function blocoLinkDocs(tipo, clientId, titulo, descricao) {
   const ctx = contextoLinkDocs(tipo, clientId);
   const sol = solicitacaoDocumentoAtual(ctx.dono);
-  const wpp = linkWhatsappDocs(tipo, clientId);
-  const bt = (cls, onclick, txt) =>
-    `<button class="${cls}" style="padding:6px 9px;font-size:11px;" onclick="${onclick}">${txt}</button>`;
-  const f = tipo === 'empresa' ? 'Empresa' : 'Titular';
+  const args = `'${tipo}','${clientId}'`;
+  const ativo = sol && sol.status === 'open';
+  const situacao = !sol
+    ? 'Link ainda não enviado'
+    : ativo
+      ? `<span style="color:var(--success);font-weight:600;">Link ativo</span> · ${sol.receivedCount || 0} recebido(s) · validade ${fmtDate((sol.expiresAt || '').slice(0, 10))}`
+      : sol.status === 'cancelled'
+        ? 'Link cancelado — copiar ou enviar gera um novo'
+        : 'Solicitação encerrada — copiar ou enviar gera um novo';
+  const atualizar =
+    tipo === 'empresa'
+      ? `atualizarDocumentosEmpresa('${clientId}')`
+      : `atualizarDocumentosDoLinkPorTitular('${clientId}')`;
   return `
-    <div class="anexo-person-block" style="border:1.5px solid var(--blue);background:linear-gradient(135deg,var(--navy-tint),#fff);padding:16px;">
-      <div class="anexo-person-head" style="align-items:flex-start;gap:12px;">
-        <div><b>${titulo}</b><div style="font-size:11.5px;font-weight:500;color:var(--text-muted);margin-top:4px;line-height:1.45;">${descricao}</div></div>
-        ${!sol || sol.status !== 'open' ? `<button class="btn-primary" style="white-space:nowrap;padding:8px 12px;font-size:11.5px;" onclick="criarLinkDocs('${tipo}','${clientId}')">${ICONS.upload} ${sol ? 'Gerar novo link' : 'Gerar link'}</button>` : ''}
+    <div class="dep-card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+      <div style="min-width:0;flex:1 1 320px;"><b>${titulo}</b>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${descricao}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${situacao}${
+          sol
+            ? ` · <a href="javascript:void(0)" onclick="${atualizar}">atualizar recebidos</a>${ativo ? ` · <a href="javascript:void(0)" style="color:var(--danger);" onclick="cancelarLinkDocs(${args})">cancelar link</a>` : ''}`
+            : ''
+        }</div></div>
+      <div style="display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;">
+        <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="preencherDocsDoGrupo(${args})">Preencher</button>
+        <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="copiarLinkDocs(${args})">Copiar link</button>
+        <button class="wpp-btn" style="padding:7px 10px;font-size:11px;" onclick="enviarLinkDocsWhatsapp(${args})">${ICONS.wpp} Enviar link</button>
       </div>
-      ${
-        sol
-          ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-        <span class="status-pill ${sol.status === 'open' ? 'ativo' : 'inativo'}">${sol.status === 'open' ? 'Link ativo' : sol.status === 'cancelled' ? 'Link cancelado' : 'Solicitação encerrada'}</span>
-        <span style="font-size:11px;color:var(--text-muted);">${sol.receivedCount || 0} recebido(s) · validade ${fmtDate((sol.expiresAt || '').slice(0, 10))}</span>
-        ${
-          sol.status === 'open'
-            ? `${wpp ? `<a class="wpp-btn" style="padding:6px 9px;font-size:11px;" target="_blank" href="${wpp}">${ICONS.wpp} Enviar</a>` : ''}${bt('btn-ghost', `copiarLinkDocs('${tipo}','${clientId}')`, 'Copiar link')}${bt('btn-ghost', tipo === 'empresa' ? `atualizarDocumentosEmpresa('${clientId}')` : `atualizarDocumentosDoLinkPorTitular('${clientId}')`, 'Atualizar recebidos')}${bt('btn-danger', `cancelarLinkDocs('${tipo}','${clientId}')`, 'Cancelar link')}`
-            : bt(
-                'btn-ghost',
-                tipo === 'empresa'
-                  ? `atualizarDocumentosEmpresa('${clientId}')`
-                  : `atualizarDocumentosDoLinkPorTitular('${clientId}')`,
-                'Atualizar recebidos'
-              )
-        }
-      </div>`
-          : ''
-      }
     </div>`;
 }
 
@@ -8247,14 +8315,14 @@ function renderClientModal() {
         ${totalOk ? `✓ Checklist completo — todos os documentos confirmados. Já dá pra enviar pra administradora.` : `⚠️ Ainda faltam documentos confirmados — o envio pra administradora só libera quando o checklist estiver 100%.`}
       </div>
 
-      ${blocoLinkDocs('empresa', c.id, `Documentos da empresa — link próprio`, `CNPJ, contrato social, comprovante de endereço e ficha associativa. Envie para o responsável pela empresa (sócio). Os titulares não precisam mandar esses documentos.`)}
+      ${blocoLinkDocs('empresa', c.id, `Empresa — ${escHist(emp.razaoSocial || 'sem nome')}`, `CNPJ, contrato social, comprovante de endereço e ficha associativa · enviado ao sócio`)}
       ${todosTitularesDoc
         .map((x) =>
           blocoLinkDocs(
             'titular',
             x.id,
-            `Documentos de ${x.titular.nome || 'titular sem nome'}`,
-            `Link exclusivo deste titular: só os documentos dele e dos dependentes dele (${(x.dependentes || []).length} dependente(s)).`
+            `Grupo de ${escHist(x.titular.nome || 'titular sem nome')}`,
+            `Documentos do titular e de ${(x.dependentes || []).length} dependente(s)`
           )
         )
         .join('')}
@@ -8264,11 +8332,11 @@ function renderClientModal() {
         <div class="attachment-list">${(c.anexosLead || []).map((a, i) => `<span class="attachment-chip">${ICONS.file}${a.nome}<a href="${a.dataUrl}" target="_blank" style="color:inherit;display:flex;">${ICONS.upload}</a><button onclick="removeAnexoLeadImplantacao(${i})">${ICONS.close}</button></span>`).join('') || '<span style="font-size:12px;color:var(--text-faint);">Nenhum anexo original do lead.</span>'}</div>
       </div>
 
-      <div class="anexo-person-block" style="border-color:var(--navy);">
+      <div class="anexo-person-block" id="docs_empresa" style="border-color:var(--navy);">
         <div class="anexo-person-head">
           <span><b>Documentos da empresa</b> — ${emp.razaoSocial || t.razaoSocial || 'sem nome'} ${docsEmpresaCompletos(emp) ? `<span class="status-pill ativo" style="margin-left:6px;">✓ Completo</span>` : ''}</span>
         </div>
-        ${DOC_SLOTS_EMPRESA.map((slot) => renderDocSlotRow(slot, emp, 'empresa', undefined)).join('')}
+        ${DOC_SLOTS_EMPRESA.map((slot) => renderDocSlotRow(slot, emp, 'empresa', undefined, c.id)).join('')}
         <p style="font-size:11px;color:var(--text-muted);margin-top:10px;">Esses documentos valem pra empresa inteira — servem pra todos os ${todosTitularesDoc.length} titular(es) acima.</p>
       </div>
 
@@ -8295,11 +8363,11 @@ function renderClientModal() {
             .map((p) => {
               const completo = docsPessoaCompletos(p.pessoa, p.ehDependente);
               return `
-        <div class="anexo-person-block">
+        <div class="anexo-person-block" ${!p.ehDependente ? `id="docs_tit_${x.id}"` : ''}>
           <div class="anexo-person-head">
             <span>${p.label} ${completo ? `<span class="status-pill ativo" style="margin-left:6px;">✓ Completo</span>` : ''}</span>
           </div>
-          ${DOC_SLOTS_PESSOA.map((slot) => renderDocSlotRow(slot, p.pessoa, p.type, p.index)).join('')}
+          ${DOC_SLOTS_PESSOA.map((slot) => renderDocSlotRow(slot, p.pessoa, p.type, p.index, x.id)).join('')}
           ${
             !p.ehDependente
               ? `
