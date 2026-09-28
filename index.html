@@ -6516,7 +6516,18 @@ function coletarAnexosDaEmpresa(c) {
 
   titulares.forEach((x) => {
     const itens = [];
-    (x.titular.anexos || []).forEach((d) => addDoc(itens, d));
+    (x.titular.anexos || []).forEach((d) => {
+      addDoc(itens, d);
+      const tipoGerado =
+        d.nome === 'Ficha de Adesao Unimed.pdf'
+          ? 'pme'
+          : d.nome === 'Ficha de Inclusao Unimed.pdf'
+            ? 'inclusao'
+            : null;
+      const ult = itens[itens.length - 1];
+      if (tipoGerado && ult && ult.url === d.dataUrl)
+        Object.assign(ult, { regerar: tipoGerado, clientId: x.id });
+    });
     Object.values(x.titular.documentos || {}).forEach((d) => addDoc(itens, d));
     const af = x.assinaturaFicha || {};
     if (af.cliente?.signedFile)
@@ -6562,6 +6573,7 @@ function renderAbaAnexos(c) {
       <span class="doc-slot-label">${item.nome}${item.criadoEm ? `<small style="display:block;color:var(--text-faint);font-weight:500;">${fmtDateTime(item.criadoEm)}</small>` : ''}</span>
       <button class="btn-ghost" style="padding:5px 10px;font-size:11px;" onclick="abrirAnexoVisivel(${idx})">Abrir</button>
       <button class="btn-primary" style="padding:5px 10px;font-size:11px;" onclick="baixarAnexoVisivel(${idx})">Baixar</button>
+      ${item.regerar ? `<button class="btn-ghost" style="padding:5px 10px;font-size:11px;" title="Refazer o documento (ex.: corrigir um dado)" onclick="regerarDocumento('${item.regerar}','${item.clientId}')">↻ Gerar novo</button>` : ''}
     </div>`;
   };
   return `
@@ -6864,9 +6876,13 @@ function situacaoPessoaFicha(pessoa) {
   return '';
 }
 
-function openFichasInclusaoModal() {
+function openFichasInclusaoModal(apenasClientId) {
+  origemDoFormularioDoc();
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
-  const card = titularesDoMesmoCard(c);
+  __fichasAlvoClientId = typeof apenasClientId === 'string' ? apenasClientId : null;
+  const card = titularesDoMesmoCard(c).filter(
+    (x) => !__fichasAlvoClientId || x.id === __fichasAlvoClientId
+  );
   const usuarios = (DB.users || []).filter((u) => u.ativo);
   const padraoInter =
     c.fichaInclusao?.intermediarioId ||
@@ -6908,7 +6924,9 @@ function openFichasInclusaoModal() {
 
 async function gerarFichasInclusao() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
-  const card = titularesDoMesmoCard(c);
+  const card = titularesDoMesmoCard(c).filter(
+    (x) => !__fichasAlvoClientId || x.id === __fichasAlvoClientId
+  );
   const g = (id) => (document.getElementById(id)?.value || '').trim();
   const inter = (DB.users || []).find((u) => u.id === g('fi_intermediario'));
   if (!inter?.cpf) {
@@ -6999,7 +7017,9 @@ async function gerarFichasInclusao() {
       });
     }
     await persist();
-    ACTIVE_PERSON_TAB = 'conferencia';
+    ACTIVE_PERSON_TAB = __abaRetornoDoc || 'conferencia';
+    __abaRetornoDoc = null;
+    __fichasAlvoClientId = null;
     renderClientModal();
     toast(`✓ ${card.length} ficha(s) de inclusão gerada(s).`);
   } catch (e) {
@@ -7159,7 +7179,7 @@ function renderAbaAssinatura(c) {
           ? ''
           : `<button class="btn-ghost" style="padding:6px 10px;font-size:11.5px;" onclick="consultarDocAssinatura('${d.tipo}','${d.x.id}')">Conferir assinaturas</button>`;
       return `<div class="dep-card" style="margin-bottom:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;"><b>${escHist(d.titulo)}</b><div style="display:flex;gap:6px;">${botaoDoc}<a class="btn-ghost" style="padding:5px 9px;font-size:11px;" target="_blank" href="${d.anexo.dataUrl}">${ICONS.file} Ver</a></div></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;"><b>${escHist(d.titulo)}</b><div style="display:flex;gap:6px;flex-wrap:wrap;">${botaoDoc}<a class="btn-ghost" style="padding:5px 9px;font-size:11px;" target="_blank" href="${d.anexo.dataUrl}">${ICONS.file} Ver</a><button class="btn-ghost" style="padding:5px 9px;font-size:11px;" title="Refazer o documento (ex.: corrigir um dado)" onclick="regerarDocumento('${d.tipo}','${d.x.id}')">↻ Gerar novo</button></div></div>
         ${linhas}
       </div>`;
     })
@@ -7170,6 +7190,43 @@ function renderAbaAssinatura(c) {
     ${html}
     ${temCelular ? `<a class="wpp-btn" target="_blank" href="${linkWhatsappCliente(c, `Olá ${(c.titular.nome || '').split(' ')[0]}, tudo bem?`)}">${ICONS.wpp} Falar com o cliente</a>` : ''}
   `;
+}
+
+// ─── Gerar um documento de novo (corrigir algo) ───────────────────────────
+// Abre o mesmo formulário de geração. Se o documento já foi enviado ou
+// assinado, avisa antes: um documento novo cancela as assinaturas atuais.
+let __abaRetornoDoc = null;
+let __fichasAlvoClientId = null;
+let __vindoDeRegerar = false;
+// aberto pela Conferência (não pelo "Gerar novo") → volta pra Conferência
+function origemDoFormularioDoc() {
+  if (!__vindoDeRegerar) __abaRetornoDoc = null;
+  __vindoDeRegerar = false;
+}
+async function regerarDocumento(tipo, clientId) {
+  const x = DB.clients.find((v) => v.id === clientId);
+  if (!x) return;
+  const def = DOCS_ASSINATURA[tipo];
+  const assinaturas = Object.values(x[def.campo] || {});
+  const enviado = assinaturas.some((s) => s?.documentId);
+  const assinado = assinaturas.some((s) => s?.completed);
+  if (enviado) {
+    const ok = await showConfirmDialog(
+      assinado
+        ? 'Este documento já tem assinatura. Gerar um novo cancela as assinaturas atuais — todos vão precisar assinar de novo. Continuar?'
+        : 'Este documento já foi enviado para assinatura. Gerar um novo invalida o link enviado — será preciso enviar de novo. Continuar?',
+      { confirmLabel: 'Gerar novo documento' }
+    );
+    if (!ok) return;
+  }
+  __abaRetornoDoc = ACTIVE_PERSON_TAB;
+  __vindoDeRegerar = true;
+  if (tipo === 'pme') {
+    ACTIVE_CLIENT_ID = x.id;
+    openFichaUnimedModal();
+  } else {
+    openFichasInclusaoModal(x.id);
+  }
 }
 
 async function enviarDocParaAssinatura(tipo, clientId) {
@@ -9900,6 +9957,7 @@ function resumoDoCardParaFicha(c) {
 }
 
 function openFichaUnimedModal() {
+  origemDoFormularioDoc();
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   const emp = getEmpresaDoCliente(c);
   const t = c.titular;
@@ -10118,7 +10176,8 @@ async function gerarFichaUnimed() {
       texto: `Ficha Unimed (modelo oficial PME III) gerada — ${r.vidas} vida(s), ${formatBRL(r.total)}/mês.`,
     });
     await persist();
-    ACTIVE_PERSON_TAB = 'conferencia';
+    ACTIVE_PERSON_TAB = __abaRetornoDoc || 'conferencia';
+    __abaRetornoDoc = null;
     renderClientModal();
     toast('✓ Ficha oficial gerada. Próximo passo: Assinatura.');
   } catch (e) {
