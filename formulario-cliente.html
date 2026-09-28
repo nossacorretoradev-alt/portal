@@ -997,8 +997,11 @@ function pesoAlturaImc(ds) {
   };
 }
 function formatarCpf(v) {
+  // CPF (11 dígitos) ou CNPJ (14 dígitos — a corretora assina como empresa)
   const d = String(v || '').replace(/\D/g, '');
-  return d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : v || '';
+  if (d.length === 11) return d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+  if (d.length === 14) return d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
+  return v || '';
 }
 let __pdfLibPromise = null;
 function carregarPdfLib() {
