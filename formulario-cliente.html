@@ -425,8 +425,8 @@ function renderEndereco(app) {
       <div class="step-icon">${ICONS.home}</div>
       <div class="eyebrow">Endereço</div>
     </div>
-    <h2 class="step-title">${e.cep && e.endereco ? 'Confira o endereço da empresa' : 'Onde fica sua empresa?'}</h2>
-    <p class="step-sub">${e.cep && e.endereco ? 'Já temos esse endereço no cadastro. Se estiver certo, é só continuar.' : 'Usamos o CEP pra preencher o resto automaticamente.'}</p>
+    <h2 class="step-title">${e.cep && e.endereco ? 'Confira o seu endereço residencial' : 'Qual é o seu endereço residencial?'}</h2>
+    <p class="step-sub">${e.cep && e.endereco ? 'Já temos esse endereço no cadastro. Se estiver certo, é só continuar.' : 'É o endereço da sua casa (vai no cadastro da Unimed). Usamos o CEP pra preencher o resto automaticamente.'}</p>
 
     <div class="fg"><label>CEP</label><input id="f_cep" placeholder="00000-000" value="${String(e.cep || '').replace(/^(\d{5})(\d{3})$/, '$1-$2')}"><div class="field-hint" id="cepStatus"></div></div>
     <div class="fg"><label>Endereço</label><input id="f_endereco" value="${e.endereco || ''}"></div>
@@ -531,11 +531,9 @@ function renderPessoa(app, key) {
     <div class="fg"><label>Estado civil</label>
       <select id="p_civil">
         <option value="">Selecione</option>
-        <option value="1" ${CLIENT.titular.estadoCivil === '1' ? 'selected' : ''}>Solteiro(a)</option>
-        <option value="2" ${CLIENT.titular.estadoCivil === '2' ? 'selected' : ''}>Casado(a)</option>
-        <option value="3" ${CLIENT.titular.estadoCivil === '3' ? 'selected' : ''}>Divorciado(a)</option>
-        <option value="4" ${CLIENT.titular.estadoCivil === '4' ? 'selected' : ''}>Viúvo(a)</option>
-        <option value="5" ${CLIENT.titular.estadoCivil === '5' ? 'selected' : ''}>União estável</option>
+        ${[['1', 'Solteiro(a)'], ['2', 'Casado(a)'], ['3', 'Divorciado(a)'], ['4', 'Desquitado(a)'], ['5', 'Viúvo(a)'], ['6', 'Separado(a)'], ['7', 'União estável'], ['9', 'Outros']]
+          .map(([cod, nome]) => `<option value="${cod}" ${CLIENT.titular.estadoCivil === cod ? 'selected' : ''}>${nome}</option>`)
+          .join('')}
       </select>
     </div>`
         : ''
