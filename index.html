@@ -2997,6 +2997,129 @@ function renderTopbar() {
 /* =========================================================
    NAVEGAÇÃO
    ========================================================= */
+// ═══════════════════════════════════════════════════════════════════════
+// CDLs (PONTOS DE VENDA) — matriz CDL Mossoró ou FCDL. Diz a quem pagar a
+// parte da CDL e quem assina os contratos de associação.
+// ═══════════════════════════════════════════════════════════════════════
+function garantirCdls() {
+  DB.cdls = DB.cdls || [];
+  if (!DB.cdls.length)
+    DB.cdls.push({
+      id: 'cdl_mossoro',
+      nome: 'CDL Mossoró',
+      cidade: 'Mossoró',
+      matriz: 'CDL',
+      cnpj: '08.302.325/0001-30',
+      responsavel: '',
+      email: '',
+      telefone: '',
+      pagamento: {},
+      assinanteNome: '',
+      assinanteEmail: '',
+    });
+  return DB.cdls;
+}
+function cdlPorId(id) {
+  return garantirCdls().find((x) => x.id === id) || null;
+}
+function cdlDaMatrizCdl() {
+  return garantirCdls().find((x) => x.matriz === 'CDL') || null;
+}
+function viewCdls() {
+  const lista = garantirCdls();
+  return `
+  <div class="view-wrap">
+    <div class="page-head">
+      <div class="page-title">CDLs (pontos de venda)</div>
+      <button class="btn-primary" onclick="openCdlModal()">${ICONS.plus} Nova CDL</button>
+    </div>
+    <p style="font-size:12.5px;color:var(--text-muted);margin:-6px 0 16px;">Cada venda é ligada a uma CDL. É ela que diz a quem pagar a parte da CDL no repasse e quem assina os contratos de associação.</p>
+    <div class="dep-card" style="padding:0;overflow-x:auto;">
+      <table class="data-table" style="width:100%;border-collapse:collapse;font-size:12.5px;">
+        <thead><tr style="text-align:left;"><th style="padding:10px 12px;">CDL</th><th style="padding:10px 12px;">Matriz</th><th style="padding:10px 12px;">CNPJ</th><th style="padding:10px 12px;">Assina as associações</th><th style="padding:10px 12px;">Pagamento</th><th></th></tr></thead>
+        <tbody>${lista
+          .map(
+            (d) => `<tr style="border-top:1px solid var(--border);">
+            <td style="padding:10px 12px;"><b>${escHist(d.nome)}</b><div style="color:var(--text-muted);font-size:11px;">${escHist(d.cidade || '')}</div></td>
+            <td style="padding:10px 12px;">${d.matriz === 'FCDL' ? 'FCDL' : 'CDL Mossoró'}</td>
+            <td style="padding:10px 12px;">${escHist(d.cnpj || '—')}</td>
+            <td style="padding:10px 12px;">${d.assinanteEmail ? `${escHist(d.assinanteNome || '')}<div style="color:var(--text-muted);font-size:11px;">${escHist(d.assinanteEmail)}</div>` : '<span style="color:var(--warning);">não cadastrado</span>'}</td>
+            <td style="padding:10px 12px;">${d.pagamento?.pixChave ? `PIX ${escHist(d.pagamento.pixChave)}` : d.pagamento?.conta ? `${escHist(d.pagamento.banco || '')} ag ${escHist(d.pagamento.agencia || '')} cc ${escHist(d.pagamento.conta)}` : '<span style="color:var(--text-faint);">—</span>'}</td>
+            <td style="padding:10px 12px;text-align:right;"><button class="btn-ghost" style="padding:6px 10px;font-size:11.5px;" onclick="openCdlModal('${d.id}')">Editar</button></td>
+          </tr>`
+          )
+          .join('')}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+function openCdlModal(id) {
+  const d = id ? cdlPorId(id) : { matriz: 'FCDL', pagamento: {} };
+  const v = (k) => escHist(d[k] || '');
+  const pg = d.pagamento || {};
+  openModalHTML(`<div class="modal modal-wide"><div class="modal-head"><div class="mh-info"><div class="mh-name">${id ? 'Editar CDL' : 'Nova CDL'}</div></div><button class="modal-close" onclick="closeModal()">${ICONS.close}</button></div><div class="modal-body">
+    <div class="field-grid">
+      <div class="fg"><label>Nome</label><input id="cdl_nome" value="${v('nome')}" placeholder="Ex.: CDL Natal"></div>
+      <div class="fg"><label>Cidade</label><input id="cdl_cidade" value="${v('cidade')}"></div>
+    </div>
+    <div class="field-grid" style="margin-top:12px;">
+      <div class="fg"><label>Matriz</label><select id="cdl_matriz"><option value="CDL" ${d.matriz === 'CDL' ? 'selected' : ''}>CDL Mossoró</option><option value="FCDL" ${d.matriz !== 'CDL' ? 'selected' : ''}>FCDL</option></select></div>
+      <div class="fg"><label>CNPJ</label><input id="cdl_cnpj" value="${v('cnpj')}" oninput="this.value=maskCnpj(this.value)"></div>
+    </div>
+    <div class="modal-section-title" style="margin-top:18px;">Responsável e contato</div>
+    <div class="field-grid">
+      <div class="fg"><label>Responsável</label><input id="cdl_responsavel" value="${v('responsavel')}"></div>
+      <div class="fg"><label>E-mail (recebe o recibo do repasse)</label><input id="cdl_email" value="${v('email')}"></div>
+    </div>
+    <div class="fg" style="margin-top:12px;"><label>Telefone</label><input id="cdl_telefone" value="${v('telefone')}" oninput="this.value=maskPhone(this.value)"></div>
+    <div class="modal-section-title" style="margin-top:18px;">Assina os contratos de associação</div>
+    <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 10px;">Recebe por e-mail (Autentique) o contrato de cada empresa nova, depois que a empresa assina. A assinatura dela é a aprovação da associação.</p>
+    <div class="field-grid">
+      <div class="fg"><label>Nome</label><input id="cdl_assNome" value="${v('assinanteNome')}"></div>
+      <div class="fg"><label>E-mail</label><input id="cdl_assEmail" value="${v('assinanteEmail')}"></div>
+    </div>
+    <div class="modal-section-title" style="margin-top:18px;">Dados de pagamento</div>
+    <div class="field-grid">
+      <div class="fg"><label>Banco</label><input id="cdl_banco" value="${escHist(pg.banco || '')}"></div>
+      <div class="fg"><label>Agência</label><input id="cdl_agencia" value="${escHist(pg.agencia || '')}"></div>
+    </div>
+    <div class="field-grid" style="margin-top:12px;">
+      <div class="fg"><label>Conta</label><input id="cdl_conta" value="${escHist(pg.conta || '')}"></div>
+      <div class="fg"><label>Chave PIX</label><input id="cdl_pix" value="${escHist(pg.pixChave || '')}"></div>
+    </div>
+  </div><div class="modal-foot"><button class="btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn-primary" onclick="saveCdl(${id ? `'${id}'` : 'null'})">${ICONS.check} Salvar</button></div></div>`);
+}
+async function saveCdl(id) {
+  const g = (k) => (document.getElementById(k)?.value || '').trim();
+  if (!g('cdl_nome')) {
+    toast('Informe o nome da CDL.');
+    return;
+  }
+  if (g('cdl_assEmail') && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(g('cdl_assEmail'))) {
+    toast('O e-mail de quem assina as associações não parece válido.');
+    return;
+  }
+  const dados = {
+    nome: g('cdl_nome'),
+    cidade: g('cdl_cidade'),
+    matriz: g('cdl_matriz') === 'CDL' ? 'CDL' : 'FCDL',
+    cnpj: g('cdl_cnpj'),
+    responsavel: g('cdl_responsavel'),
+    email: g('cdl_email'),
+    telefone: g('cdl_telefone'),
+    assinanteNome: g('cdl_assNome'),
+    assinanteEmail: g('cdl_assEmail').toLowerCase(),
+    pagamento: { banco: g('cdl_banco'), agencia: g('cdl_agencia'), conta: g('cdl_conta'), pixChave: g('cdl_pix') },
+  };
+  const lista = garantirCdls();
+  if (id) Object.assign(cdlPorId(id), dados);
+  else lista.push({ id: uid('cdl'), ...dados });
+  await persist();
+  closeModal();
+  switchView('cdls');
+  toast('✓ CDL salva.');
+}
+
 function getNavItems() {
   if (isVendedor()) {
     return [
@@ -3070,6 +3193,12 @@ function getNavItems() {
     });
   if (isAdmin())
     items.push({
+      id: 'cdls',
+      label: 'CDLs',
+      icon: ICONS.building,
+    });
+  if (isAdmin())
+    items.push({
       id: 'comissoes',
       label: 'Comissões',
       icon: ICONS.money,
@@ -3139,6 +3268,7 @@ function switchView(id) {
   else if (id === 'comissoes') views.innerHTML = viewComissoes();
   else if (id === 'gestao') views.innerHTML = viewGestao();
   else if (id === 'usuarios') views.innerHTML = viewUsuarios();
+  else if (id === 'cdls') views.innerHTML = viewCdls();
   else if (id === 'minhacomissao') views.innerHTML = viewMinhaComissao();
   else if (id === 'orcamento') {
     views.innerHTML = viewOrcamento();
@@ -3672,6 +3802,11 @@ function baixarOrcamentoCliente(clientId) {
   pdfInfo.doc.save(pdfInfo.filename);
 }
 
+function posicaoAssinaturaPortal(coluna) {
+  const l = window.__linhasAssinaturaPortal;
+  if (!l) return { pagina: 1, x: coluna === 'cdlX' ? 58 : 8, y: 80 };
+  return { pagina: l.pagina, x: Math.round(((l[coluna] + 2) / 210) * 1000) / 10, y: Math.max(1, Math.round(((l.yLinha - 16) / 297) * 1000) / 10) };
+}
 async function validarAssociadoPipeline(id) {
   const l = DB.pipeline.find((x) => x.id === id);
   if (!l) return;
@@ -3705,7 +3840,39 @@ async function validarAssociadoPipeline(id) {
       ? l.filiacao.assinaturaDigital
       : null;
 
+    // contrato com a CDL como 2ª assinante: a assinatura dela aprova sozinha
+    const docContrato =
+      l.contratoAssociacao?.documentId ||
+      l.filiacao?.assinaturaDigital?.documentId ||
+      (l.anexos || []).find((a) => a.assinaturaDigital?.documentId)?.assinaturaDigital?.documentId ||
+      null;
+    let statusContrato = null;
+    if (docContrato && !jaNaBase) {
+      try {
+        const res = await fetch(AUTENTIQUE_STATUS_FUNCTION_URL, {
+          method: 'POST',
+          headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ documentId: docContrato }),
+        });
+        statusContrato = await res.json();
+      } catch (e) {
+        statusContrato = null;
+      }
+      const sig = Array.isArray(statusContrato?.signers) ? statusContrato.signers : [];
+      if (statusContrato?.completed && sig.length >= 2) {
+        l.contratoAssociacao = { ...(l.contratoAssociacao || {}), documentId: docContrato, signedFile: statusContrato.signedFile || null, aprovadoCdlEm: sig[sig.length - 1].signedAt || nowISO() };
+        l.comentarios = l.comentarios || [];
+        l.comentarios.push({ data: nowISO(), texto: `Associação aprovada pela CDL (assinatura de ${sig[sig.length - 1].nome || 'CDL'} na Autentique).` });
+        await persist();
+        await confirmarEmpresaValidada(id, true);
+        toast('✓ A CDL assinou o contrato: associação aprovada.');
+        return;
+      }
+    }
+
     abrirJanelaConferenciaAssociado(id, {
+      statusContrato,
+      categoria: l.filiacao?.cdlTier || '',
       cnpj,
       jaNaBase,
       origemEncontrada,
@@ -3723,32 +3890,58 @@ async function validarAssociadoPipeline(id) {
 function abrirJanelaConferenciaAssociado(id, info) {
   const l = DB.pipeline.find((x) => x.id === id);
   if (!l) return;
-  const temEvidencia = info.jaNaBase || info.contratoAnexoSite || info.contratoPortal;
-  openModalHTML(`<div class="modal modal-small"><div class="modal-head"><div class="mh-info"><div class="mh-name">Conferir associação — ${l.empresa || l.nome || ''}</div><div class="mh-sub">CNPJ ${maskCnpj(info.cnpj)}</div></div><button class="modal-close" onclick="closeModal()">${ICONS.close}</button></div><div class="modal-body">
-    <div class="field-grid">
-      <div class="fg"><label>Razão social</label><input value="${l.empresa || l.nome || ''}" disabled></div>
-      <div class="fg"><label>CNPJ</label><input value="${maskCnpj(info.cnpj)}" disabled></div>
-    </div>
-    <div class="field-grid" style="margin-top:12px"><div class="fg"><label>Contato</label><input value="${l.nome || ''} · ${maskPhone(l.celular || '') || '—'}" disabled></div><div class="fg"><label>E-mail</label><input value="${l.email || '—'}" disabled></div></div>
-
-    <div class="dep-card" style="margin-top:16px;border-left:4px solid ${info.jaNaBase ? 'var(--success)' : 'var(--warning)'};">
-      ${
-        info.jaNaBase
-          ? `<b>✓ Já consta na base de associados</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">Encontrada em "${info.origemEncontrada === 'cdl_base' ? 'associados CDL' : 'novos afiliados'}"${info.statusBase ? ` — status: ${info.statusBase}` : ''}.</div>`
-          : `<b>⚠️ Ainda não consta na base de associados</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">Não foi encontrada em associados CDL nem em novos afiliados.</div>`
-      }
-    </div>
-
-    ${
-      info.contratoAnexoSite
-        ? `<div class="dep-card" style="margin-top:12px;"><b>Contrato assinado (enviado pelo site)</b><div style="margin-top:8px;"><a class="btn-ghost" target="_blank" href="${info.contratoAnexoSite.dataUrl}">${ICONS.file} Abrir contrato</a></div></div>`
-        : info.contratoPortal
-          ? `<div class="dep-card" style="margin-top:12px;"><b>Contrato de filiação assinado (gerado no portal)</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">Assinado por ${info.contratoPortal.signerName || '—'} · confirmado em ${fmtDateTime(info.contratoPortal.confirmedAt || info.contratoPortal.createdAt)}.</div>${info.contratoPortal.signedFile ? `<div style="margin-top:8px;"><a class="btn-ghost" target="_blank" href="${info.contratoPortal.signedFile}">${ICONS.file} Abrir contrato assinado</a></div>` : ''}</div>`
-          : `<div class="dep-card" style="margin-top:12px;"><b>Nenhum contrato encontrado</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">Se a empresa ainda não é associada e não tem contrato, use o botão "Associar" no card do lead antes de validar.</div></div>`
-    }
+  const nome = escHist(l.empresa || l.nome || 'Empresa sem nome');
+  const contrato = info.contratoAnexoSite
+    ? { url: info.contratoAnexoSite.dataUrl, quando: info.contratoAnexoSite.criadoEm, quem: '' }
+    : info.contratoPortal
+      ? {
+          url: info.contratoPortal.signedFile || '',
+          quando: info.contratoPortal.confirmedAt || info.contratoPortal.createdAt,
+          quem: info.contratoPortal.signerName || '',
+        }
+      : null;
+  const passo = (estado, texto) => {
+    const cor = estado === 'ok' ? 'var(--success)' : estado === 'espera' ? 'var(--warning)' : 'var(--text-faint)';
+    const sim = estado === 'ok' ? '✓' : estado === 'espera' ? '◷' : '○';
+    return `<div style="display:flex;gap:10px;align-items:center;font-size:13px;color:${cor};"><span style="width:18px;text-align:center;font-weight:700;">${sim}</span><span>${texto}</span></div>`;
+  };
+  let corpo;
+  let botao = '';
+  if (info.jaNaBase) {
+    corpo = `<div style="background:var(--success-light);color:var(--success);border-radius:10px;padding:12px 14px;font-size:13.5px;font-weight:600;">✓ Associada à CDL</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:8px;">Encontrada na base de ${info.origemEncontrada === 'cdl_base' ? 'associados CDL' : 'novos afiliados'}${info.statusBase ? ` · situação: ${escHist(info.statusBase)}` : ''}. Confira e confirme pra seguir.</div>`;
+    botao = `<button class="btn-primary" onclick="confirmarEmpresaValidada('${id}', false)">${ICONS.check} Confirmar e seguir</button>`;
+  } else if (contrato || info.statusContrato) {
+    const sig = Array.isArray(info.statusContrato?.signers) ? info.statusContrato.signers : [];
+    const empresaOk = sig.length ? !!sig[0].signed : true;
+    const quandoEmpresa = (sig[0] && sig[0].signedAt) || contrato?.quando || l.contratoAssociacao?.empresaAssinouEm;
+    const comCdl = sig.length >= 2;
+    const cat = CDL_TIERS_PORTAL[info.categoria];
+    const longo = cat && cat.valor >= 145;
+    const prazoDias = longo ? 8 : 2;
+    const decorridos = quandoEmpresa ? Math.floor((Date.now() - new Date(quandoEmpresa)) / 86400000) : 0;
+    const atrasado = empresaOk && decorridos > prazoDias;
+    const txtCdl = !empresaOk
+      ? 'Aguardando a empresa assinar'
+      : comCdl
+        ? `Aguardando ${escHist(sig[1].nome || 'a CDL')} assinar (e-mail enviado pela Autentique) · ${decorridos} de ${prazoDias} dia(s)${longo ? '' : cat ? '' : ' (8 dias na categoria de R$ 145)'}${atrasado ? ' · prazo passou' : ''}`
+        : 'Contrato antigo, sem a CDL como assinante: confirme a aprovação manualmente';
+    corpo = `<div style="display:grid;gap:10px;">
+        ${passo(empresaOk ? 'ok' : 'espera', empresaOk ? `Empresa assinou o contrato${quandoEmpresa ? ` · ${fmtDateTime(quandoEmpresa)}` : ''}${contrato?.quem ? ` · ${escHist(contrato.quem)}` : ''}` : 'Empresa ainda não assinou')}
+        <div style="${atrasado ? 'color:var(--danger);' : ''}">${passo(empresaOk ? 'espera' : '', txtCdl)}</div>
+        ${passo('', 'Aprovada')}
+      </div>
+      ${contrato?.url ? `<div style="margin-top:14px;"><a class="btn-ghost" target="_blank" href="${contrato.url}">${ICONS.file} Ver contrato</a></div>` : ''}`;
+    botao = `<button class="btn-primary" onclick="confirmarEmpresaValidada('${id}', true)">${ICONS.check} Confirmar aprovação da CDL</button>`;
+  } else {
+    corpo = `<div style="background:var(--bg-light, #F4F6F8);border-radius:10px;padding:12px 14px;font-size:13.5px;font-weight:600;color:var(--text-muted);">Ainda não associada</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:8px;">Não está na base da CDL e não tem contrato. Use "Associar" no card do lead pra enviar a associação.</div>`;
+  }
+  openModalHTML(`<div class="modal modal-small"><div class="modal-head"><div class="mh-info"><div class="mh-name">${nome}</div><div class="mh-sub">CNPJ ${maskCnpj(info.cnpj)}</div></div><button class="modal-close" onclick="closeModal()">${ICONS.close}</button></div><div class="modal-body">
+    ${corpo}
   </div><div class="modal-foot">
-    <button class="btn-ghost" onclick="closeModal()">Fechar sem validar</button>
-    ${temEvidencia ? `<button class="btn-primary" onclick="confirmarEmpresaValidada('${id}', ${info.jaNaBase ? 'false' : 'true'})">${ICONS.check} Empresa validada</button>` : ''}
+    <button class="btn-ghost" onclick="closeModal()">Fechar</button>
+    ${botao}
   </div></div>`);
 }
 
@@ -3868,6 +4061,11 @@ async function gerarEEnviarContratoFiliacao(id) {
         cpf: cpfDiretor,
         pdfBase64,
         tituloDocumento: pdfInfo.filename,
+        // empresa assina primeiro (link) e a CDL depois, por e-mail: a assinatura dela é a aprovação
+        signers: [{ nome: diretorResponsavel, posicoes: [posicaoAssinaturaPortal('associadaX')] }],
+        assinaturaCdl: true,
+        emOrdem: true,
+        posicoesCdl: [posicaoAssinaturaPortal('cdlX')],
       }),
     });
     const data = await res.json();
@@ -4219,6 +4417,58 @@ function abrirCardExistente(tipo, id) {
   }
 }
 
+// ─── Preenche a empresa com o que o sistema já sabe (nunca sobrescreve) ────
+// Ordem: ficha de associação feita no portal (l.filiacao) → base da CDL
+// (associados e novos afiliados) → contato do próprio lead.
+function registroBaseCdlPorCnpj(cnpj) {
+  const d = onlyDigits(cnpj || '');
+  if (!d) return null;
+  return (DB.companies || []).find((x) => onlyDigits(x.cnpj || '') === d) || null;
+}
+function completarEmpresa(emp, l) {
+  if (!emp) return false;
+  const f = (l && l.filiacao) || {};
+  const b = registroBaseCdlPorCnpj(emp.cnpj || (l && l.cnpj)) || {};
+  const fontes = {
+    razaoSocial: [f.razaoSocial, b.razaoSocial, b.nome, l && l.empresa],
+    nomeFantasia: [f.nomeFantasia, b.nomeFantasia],
+    cep: [f.cep, b.cep],
+    endereco: [f.enderecoRua, b.endereco],
+    numero: [f.enderecoNumero, b.numero],
+    complemento: [f.enderecoComplemento, b.complemento],
+    bairro: [f.bairro, b.bairro],
+    cidade: [f.cidade, b.cidade],
+    estado: [f.uf, b.estado],
+    email: [f.emailDiretor, b.email, l && l.email],
+    emailFinanceiro: [f.emailFinanceiro, b.emailCobranca],
+    telefone: [f.telFixo, b.fone],
+    whatsapp: [f.whatsapp, b.whatsapp, b.celular, l && l.celular],
+  };
+  let mudou = false;
+  Object.entries(fontes).forEach(([campo, opcoes]) => {
+    if (emp[campo]) return;
+    const v = opcoes.find((x) => x != null && String(x).trim() !== '');
+    if (v != null) {
+      emp[campo] = String(v).trim();
+      mudou = true;
+    }
+  });
+  // representante legal sugerido: diretor da ficha de associação (ou responsável na base)
+  if (!emp.representante || !emp.representante.nome) {
+    const nome = f.diretorResponsavel || b.responsavel || '';
+    if (nome) {
+      emp.representante = {
+        nome,
+        cpf: f.cpfDiretor || '',
+        telefone: f.whatsapp || f.celular || b.whatsapp || b.celular || '',
+        email: f.emailDiretor || '',
+      };
+      mudou = true;
+    }
+  }
+  return mudou;
+}
+
 async function converterPipelineParaImplantacao(l) {
   // Se a empresa já está na Implantação, não abre outro card: pergunta e, se
   // confirmado, os titulares deste lead entram no card existente (mesmo nº de
@@ -4236,6 +4486,7 @@ async function converterPipelineParaImplantacao(l) {
     cardExistente = DB.clients.find((x) => x.id === jaNaImplantacao[0].id);
   }
   const emp = getOrCreateEmpresaByCnpj(l.cnpj || '', l.empresa || '');
+  completarEmpresa(emp, l);
   let numeroLead;
   if (cardExistente) {
     numeroLead = cardExistente.numeroLead;
@@ -4248,6 +4499,8 @@ async function converterPipelineParaImplantacao(l) {
   const vendedores = l.vendedorId
     ? [{ vendedorId: l.vendedorId, percentual: 100, pagamentos: [] }]
     : [];
+  const vendLead = l.vendedorId ? (DB.users || []).find((u) => u.id === l.vendedorId) : null;
+  const cdlUnica = vendLead && (vendLead.cdlIds || []).length === 1 ? cdlPorId(vendLead.cdlIds[0]) : null;
   const base = (extra) => ({
     id: uid('cli'),
     status: 'ativo',
@@ -4259,15 +4512,19 @@ async function converterPipelineParaImplantacao(l) {
     associadoValidado: true,
     associadoValidadoEm: l.associadoValidadoEm,
     vendedores: vendedores.map((v) => ({ ...v, pagamentos: [] })),
+    vendedorTravado: !!(l.origemSite && l.vendedorId),
+    venda: cdlUnica ? { matriz: cdlUnica.matriz, cdlId: cdlUnica.id } : cardExistente?.venda || undefined,
+    dataVigencia: cardExistente?.dataVigencia || '',
     comissoes: [],
     emailAdministradoraEnviadoEm: null,
     criadoEm: l.criadoEm || nowISO(),
     ...extra,
   });
+  const vida1 = (l.vidasOriginais || [])[0] || {};
   const novoTitular = (nome, comContato) => ({
     nome: nome || '',
-    cpf: '',
-    dataNascimento: '',
+    cpf: comContato ? onlyDigits(vida1.cpf || '') : '',
+    dataNascimento: comContato ? vida1.dataNascimento || vida1.nascimento || '' : '',
     celular: comContato ? l.celular || '' : '',
     email: comContato ? l.email || '' : '',
     razaoSocial: l.empresa || '',
@@ -4598,6 +4855,13 @@ async function importarLeadsDoSite(opts) {
       novoAfiliado: !!lead.novo_afiliado,
       associadoValidado: false,
       contratoAssinado: !!lead.contrato_assinado,
+      contratoAssociacao: lead.assinatura_digital?.document_id
+        ? {
+            documentId: lead.assinatura_digital.document_id,
+            empresaAssinou: !!(lead.assinatura_digital.empresa_assinou || lead.assinatura_digital.completed),
+            empresaAssinouEm: lead.assinatura_digital.signed_at || null,
+          }
+        : null,
       anexos,
       comentarios: [
         {
@@ -5095,6 +5359,7 @@ function gerarContratoFiliacaoPDFPortal(dados, signatureDataUrl, signedAt) {
     } catch (e) {}
   }
   doc.setDrawColor(60, 60, 60);
+  window.__linhasAssinaturaPortal = { pagina: doc.internal.getNumberOfPages(), yLinha: y + 8, associadaX: col1X, cdlX: col2X };
   doc.line(col1X, y + 8, col1X + colW, y + 8);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
@@ -5129,55 +5394,14 @@ function gerarContratoFiliacaoPDFPortal(dados, signatureDataUrl, signedAt) {
 }
 
 const ADESAO_STAGES = [
-  {
-    id: 'nova',
-    label: 'Cadastro',
-    short: 'Cadastro',
-    color: '#6366F1',
-  },
-  {
-    id: 'pessoas',
-    label: 'Pessoas',
-    short: 'Pessoas',
-    color: '#14B8A6',
-  },
-  {
-    id: 'documentacao',
-    label: 'Validação de Documentos',
-    short: 'Documentos',
-    color: '#F79009',
-  },
-  {
-    id: 'questionario',
-    label: 'Questionário de Risco',
-    short: 'Questionário',
-    color: '#EC4899',
-  },
-  {
-    id: 'conferencia',
-    label: 'Conferência de Plano',
-    short: 'Conferência',
-    color: '#8B5CF6',
-  },
-  {
-    id: 'assinatura',
-    label: 'Assinatura',
-    short: 'Assinatura',
-    color: '#D946EF',
-  },
-  {
-    id: 'enviado',
-    label: 'Implantação',
-    short: 'Implantação',
-    color: '#0EA5E9',
-  },
-  {
-    id: 'ativo',
-    label: 'Ativo',
-    short: 'Ativo',
-    color: '#12B76A',
-  },
+  { id: 'nova', label: 'Cadastro da empresa', short: 'Cadastro', color: '#6366F1' },
+  { id: 'pessoas', label: 'Pessoas', short: 'Pessoas', color: '#14B8A6' },
+  { id: 'conferencia', label: 'Conferência', short: 'Conferência', color: '#8B5CF6' },
+  { id: 'enviado', label: 'Implantação', short: 'Implantação', color: '#0EA5E9' },
+  { id: 'ativo', label: 'Ativado', short: 'Ativado', color: '#12B76A' },
 ];
+// etapas antigas (antes de 5 etapas) → etapa nova
+const ETAPA_ANTIGA_PARA_NOVA = { documentacao: 'pessoas', questionario: 'pessoas', assinatura: 'conferencia' };
 
 /* =========================================================
    VIEW: NOVO ORÇAMENTO (vendedor ou admin criando direto no portal)
@@ -6104,6 +6328,7 @@ async function deleteClientFromList(id) {
   }
   if (await excluirClientePorId(id)) switchView('clientes');
 }
+let ACTIVE_PESSOAS_SUB = 'vidas';
 let ACTIVE_PERSON_TAB = 'nova';
 let PENDING_ANEXO_TARGET = null;
 
@@ -6168,6 +6393,7 @@ function migrateClientShape(c) {
   });
   c.anexosLead = c.anexosLead || [];
   c.documentUploadRequests = c.documentUploadRequests || [];
+  if (ETAPA_ANTIGA_PARA_NOVA[c.etapaAdesao]) c.etapaAdesao = ETAPA_ANTIGA_PARA_NOVA[c.etapaAdesao];
   // assinatura antiga "da família" (uma ficha por titular) passa a ser a do titular
   if (c.assinaturaInclusao) {
     if (!c.titular.assinaturaInclusao)
@@ -6254,9 +6480,8 @@ function documentoExigeAssinatura(nome) {
 }
 
 function docsEmpresaCompletos(emp) {
-  return DOC_SLOTS_EMPRESA.every(
-    (slot) => emp.documentos && emp.documentos[slot.key] && emp.documentos[slot.key].confirmado
-  );
+  const slots = emp.temPlanoAtivo ? [...DOC_SLOTS_EMPRESA, SLOT_CARTA_PERMANENCIA] : DOC_SLOTS_EMPRESA;
+  return slots.every((slot) => emp.documentos && emp.documentos[slot.key] && emp.documentos[slot.key].confirmado);
 }
 
 function docsPessoaCompletos(pessoa, ehDependente) {
@@ -7317,7 +7542,7 @@ function renderAbaAssinatura(c) {
     .join('');
   const temCelular = !!onlyDigits(c.titular.celular || '');
   return `
-    ${pendentes === 0 ? `<div class="pendencia-banner" style="background:var(--success-light);color:var(--success);border-color:transparent;margin-bottom:14px;">✓ Todos os documentos foram assinados. <button class="btn-primary" style="margin-left:8px;padding:6px 12px;font-size:11.5px;" onclick="setEtapaAdesao('enviado')">Avançar para Implantação</button></div>` : `<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">${pendentes} assinatura(s) pendente(s). Cada vida assina a própria ficha (o titular assina pelos menores de 18); o corretor assina junto.</div>`}
+    ${pendentes === 0 ? `<div class="pendencia-banner" style="background:var(--success-light);color:var(--success);border-color:transparent;margin-bottom:14px;">✓ Todos os documentos foram assinados.</div>` : `<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">${pendentes} assinatura(s) pendente(s). Cada vida assina a própria ficha (o titular assina pelos menores de 18); o corretor assina junto.</div>`}
     ${html}
     ${temCelular ? `<a class="wpp-btn" target="_blank" href="${linkWhatsappCliente(c, `Olá ${(c.titular.nome || '').split(' ')[0]}, tudo bem?`)}">${ICONS.wpp} Falar com o cliente</a>` : ''}
   `;
@@ -7422,9 +7647,6 @@ async function enviarDocParaAssinatura(tipo, clientId, key) {
     ref.x.historico.push({
       data: nowISO(),
       texto: `${titulo} enviada para assinatura: ${sigs.map((a) => a.sig.nome).join(' e ')}.`,
-    });
-    titularesDoMesmoCard(ref.x).forEach((t) => {
-      if (t.etapaAdesao === 'conferencia') t.etapaAdesao = 'assinatura';
     });
     await persist();
     renderClientModal();
@@ -8157,6 +8379,428 @@ function blocoLinkDocs(tipo, clientId, titulo, descricao) {
 
 // ────────────────────────────────────────────────────────────────────────────
 
+function renderDocumentosCard(c, modo) {
+  const t = c.titular;
+  sincronizarDocsDoCardEmSegundoPlano(c);
+  const emp = getEmpresaDoCliente(c);
+  const todosTitularesDoc = titularesDoMesmoCard(c);
+  if (modo === 'empresa') {
+    const ok = docsEmpresaCompletos(emp);
+    const blocoCarta = emp.temPlanoAtivo
+      ? `<div class="anexo-person-block"><div class="anexo-person-head"><span><b>Plano ativo anterior</b></span></div>${renderDocSlotRow(SLOT_CARTA_PERMANENCIA, emp, 'empresa', undefined, c.id)}</div>`
+      : '';
+    return `
+      <div class="pendencia-banner" style="${ok ? 'background:var(--success-light);color:var(--success);border-color:transparent;' : ''}margin-bottom:16px;">
+        ${ok ? '✓ Documentos da empresa completos e conferidos.' : '⚠️ Faltam documentos da empresa conferidos — o Cadastro só conclui com eles.'}
+      </div>
+      ${blocoLinkDocs('empresa', c.id, `Empresa — ${escHist(emp.razaoSocial || 'sem nome')}`, `CNPJ, contrato social, comprovante de endereço e ficha associativa · enviado ao sócio`)}
+      
+      <div class="anexo-person-block" id="docs_empresa" style="border-color:var(--navy);">
+        <div class="anexo-person-head">
+          <span><b>Documentos da empresa</b> — ${emp.razaoSocial || t.razaoSocial || 'sem nome'} ${docsEmpresaCompletos(emp) ? `<span class="status-pill ativo" style="margin-left:6px;">✓ Completo</span>` : ''}</span>
+        </div>
+        ${DOC_SLOTS_EMPRESA.map((slot) => renderDocSlotRow(slot, emp, 'empresa', undefined, c.id)).join('')}
+        <p style="font-size:11px;color:var(--text-muted);margin-top:10px;">Esses documentos valem pra empresa inteira — servem pra todos os ${todosTitularesDoc.length} titular(es) acima.</p>
+      </div>
+
+      
+      <div class="anexo-person-block" style="border-color:var(--blue);background:var(--navy-tint);">
+        <div class="anexo-person-head"><span><b>Anexos originais do lead</b> — recebidos no Pipeline</span><label class="btn-ghost" style="padding:6px 12px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" multiple style="display:none" onchange="addAnexosLeadImplantacao(event)"></label></div>
+        <div class="attachment-list">${(c.anexosLead || []).map((a, i) => `<span class="attachment-chip">${ICONS.file}${a.nome}<a href="${a.dataUrl}" target="_blank" style="color:inherit;display:flex;">${ICONS.upload}</a><button onclick="removeAnexoLeadImplantacao(${i})">${ICONS.close}</button></span>`).join('') || '<span style="font-size:12px;color:var(--text-faint);">Nenhum anexo original do lead.</span>'}</div>
+      </div>
+
+            ${blocoCarta}
+`;
+  }
+  const okPessoas = todosTitularesDoc.every((x) => vidasDoTitular(x).every((v) => docsPessoaCompletos(v.pessoa, v.key !== 'titular')));
+  return `
+      <div class="pendencia-banner" style="${okPessoas ? 'background:var(--success-light);color:var(--success);border-color:transparent;' : ''}margin-bottom:16px;">
+        ${okPessoas ? '✓ Documentos de todas as pessoas conferidos.' : '⚠️ Revise e aprove os documentos de cada pessoa — os enviados pelo cliente chegam "a conferir".'}
+      </div>
+      ${todosTitularesDoc
+        .map((x) =>
+          blocoLinkDocs(
+            'titular',
+            x.id,
+            `Grupo de ${escHist(x.titular.nome || 'titular sem nome')}`,
+            `Documentos do titular e de ${(x.dependentes || []).length} dependente(s)`
+          )
+        )
+        .join('')}
+
+      
+      ${todosTitularesDoc
+        .map((x) => {
+          const pessoasDeX = [
+            {
+              label: `Titular — ${x.titular.nome || 'sem nome'}`,
+              pessoa: x.titular,
+              type: 'titular',
+              ehDependente: false,
+            },
+          ].concat(
+            x.dependentes.map((d, i) => ({
+              label: `Dependente ${i + 1} de ${x.titular.nome || 'sem nome'} — ${d.nome || 'sem nome'}`,
+              pessoa: d,
+              type: 'dependente',
+              index: i,
+              ehDependente: true,
+              titularId: x.id,
+            }))
+          );
+          return pessoasDeX
+            .map((p) => {
+              const completo = docsPessoaCompletos(p.pessoa, p.ehDependente);
+              return `
+        <div class="anexo-person-block" ${!p.ehDependente ? `id="docs_tit_${x.id}"` : ''}>
+          <div class="anexo-person-head">
+            <span>${p.label} ${completo ? `<span class="status-pill ativo" style="margin-left:6px;">✓ Completo</span>` : ''}</span>
+          </div>
+          ${DOC_SLOTS_PESSOA.map((slot) => renderDocSlotRow(slot, p.pessoa, p.type, p.index, x.id)).join('')}
+          ${
+            !p.ehDependente
+              ? `
+            <div class="doc-slot-row">
+              <span class="doc-slot-icon ${p.pessoa.email && p.pessoa.celular ? 'ok' : 'pendente'}">${p.pessoa.email && p.pessoa.celular ? ICONS.check : ICONS.file}</span>
+              <span class="doc-slot-label">E-mail e telefone</span>
+              <span class="status-pill ${p.pessoa.email && p.pessoa.celular ? 'ativo' : 'inativo'}">${p.pessoa.email && p.pessoa.celular ? '✓ Preenchido' : 'Falta preencher na aba Pessoas'}</span>
+            </div>`
+              : `<p style="font-size:11px;color:var(--text-faint);margin-top:8px;">Usa o e-mail e celular do titular da família.</p>`
+          }
+        </div>`;
+            })
+            .join('');
+        })
+        .join('')}
+
+      
+      <div class="anexo-person-block">
+        <div class="anexo-person-head"><span>Outros anexos (opcional)</span>
+          <label class="btn-ghost" style="padding:6px 12px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" multiple style="display:none;" onchange="PENDING_ANEXO_TARGET={type:'titular'}; handleAttachFile(event)"></label>
+        </div>
+        <p style="font-size:11px;color:var(--text-muted);margin:2px 0 8px;">Qualquer documento extra que não se encaixe no checklist acima (ex: fatura antiga, contrato anterior).</p>
+        <div class="attachment-list">
+          ${
+            (t.anexos || [])
+              .map(
+                (a, i) => `
+            <span class="attachment-chip">${ICONS.file}${a.nome}
+              <a href="${a.dataUrl}" download="${a.nome}" style="color:inherit;display:flex;">${ICONS.upload}</a>
+              ${
+                /\.pdf$/i.test(a.nome || '') && documentoExigeAssinatura(a.nome)
+                  ? a.assinaturaDigital?.completed
+                    ? `<a href="${a.assinaturaDigital.signedFile || a.dataUrl}" target="_blank" rel="noopener" style="color:var(--success);font-weight:800;">✓ Assinado</a>`
+                    : a.assinaturaDigital?.documentId
+                      ? `<button onclick="consultarAssinaturaDocumento('anexoTitular',undefined,'${i}')">Verificar</button>`
+                      : `<button onclick="abrirAssinaturaDocumento('anexoTitular',undefined,'${i}')">Assinar</button>`
+                  : ''
+              }
+              <button onclick="removeAnexoFrom('titular',null,${i})">${ICONS.close}</button>
+            </span>
+          `
+              )
+              .join('') ||
+            `<span style="font-size:12px;color:var(--text-faint);">Nenhum anexo extra.</span>`
+          }
+        </div>
+      </div>
+
+      ${
+        c._leadFaturaPath || c._leadInternalPdfPath
+          ? `
+        <div class="pendencia-banner" style="background:var(--navy-tint);color:var(--navy);border-color:var(--border);margin-top:12px;">
+          <b>📎 Arquivos do site (Storage privado):</b>
+          ${c._leadFaturaPath ? `<div>Fatura enviada: <code>${c._leadFaturaPath}</code></div>` : ''}
+          ${c._leadInternalPdfPath ? `<div>Contrato + foto de verificação: <code>${c._leadInternalPdfPath}</code></div>` : ''}
+          <div style="margin-top:4px;font-size:11px;">Baixe pelo painel do Supabase → Storage → internal-docs (por segurança, o portal não busca esses arquivos automaticamente).</div>
+        </div>`
+          : ''
+      }
+    `;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// CADASTRO DA EMPRESA — venda (matriz, CDL, vendedor), vigência com prazo de
+// entrega e plano ativo anterior. Os dados valem para o card inteiro.
+// ═══════════════════════════════════════════════════════════════════════
+function vendaDoCard(c) {
+  const x = titularesDoMesmoCard(c).find((t) => t.venda && t.venda.matriz);
+  return (x && x.venda) || {};
+}
+function vigenciaDoCard(c) {
+  const x = titularesDoMesmoCard(c).find((t) => t.dataVigencia);
+  return (x && x.dataVigencia) || '';
+}
+function seloVenda(c) {
+  const v = vendaDoCard(c);
+  if (!v.matriz) return '';
+  const cdl = cdlPorId(v.cdlId);
+  const txt = v.matriz === 'FCDL' ? `FCDL · ${cdl ? cdl.nome : 'CDL a definir'}` : 'CDL Mossoró';
+  return `<span class="site-tag" style="background:var(--navy-tint);color:var(--navy);">${escHist(txt)}</span>`;
+}
+async function setVendaCampo(campo, valor) {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  if (!c) return;
+  const atual = { ...vendaDoCard(c) };
+  if (campo === 'matriz') {
+    atual.matriz = valor;
+    atual.cdlId = valor === 'CDL' ? cdlDaMatrizCdl()?.id || '' : cdlPorId(atual.cdlId)?.matriz === 'FCDL' ? atual.cdlId : '';
+  } else if (campo === 'cdlId') {
+    atual.cdlId = valor;
+  }
+  titularesDoMesmoCard(c).forEach((x) => (x.venda = { ...atual }));
+  const cdl = cdlPorId(atual.cdlId);
+  c.historico.push({ data: nowISO(), texto: `Venda definida: ${atual.matriz === 'FCDL' ? `FCDL · ${cdl ? cdl.nome : 'CDL a definir'}` : 'CDL Mossoró'}.` });
+  await persist();
+  renderClientModal();
+}
+async function setVendedorCadastro(clientId, vendedorId) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  if (!c) return;
+  const atual = vendedorResponsavelDoCard(c);
+  if (isAdmin()) {
+    await setVendedorImplantacao(clientId, vendedorId);
+  } else {
+    // atendente só ATRIBUI vendedor a card sem vendedor; trocar é do administrador
+    if (atual) {
+      toast('Só o administrador pode trocar o vendedor do card.');
+      renderClientModal();
+      return;
+    }
+    const nome = (DB.users || []).find((u) => u.id === vendedorId)?.nome || '';
+    titularesDoMesmoCard(c).forEach((x) => {
+      x.vendedores = vendedorId ? [{ vendedorId, percentual: 100, pagamentos: [] }] : [];
+      x.historico = x.historico || [];
+      x.historico.push({ data: nowISO(), texto: `Vendedor responsável atribuído: ${nome}.` });
+    });
+    await persist();
+  }
+  // vendedor de uma CDL só: matriz e CDL vêm sozinhas
+  const v = (DB.users || []).find((u) => u.id === vendedorId);
+  const venda = vendaDoCard(c);
+  if (v && (v.cdlIds || []).length === 1 && (!venda.matriz || !venda.cdlId)) {
+    const cdl = cdlPorId(v.cdlIds[0]);
+    if (cdl) {
+      titularesDoMesmoCard(c).forEach((x) => (x.venda = { matriz: cdl.matriz, cdlId: cdl.id }));
+      c.historico.push({ data: nowISO(), texto: `Venda preenchida pelo vendedor: ${cdl.matriz === 'FCDL' ? `FCDL · ${cdl.nome}` : 'CDL Mossoró'}.` });
+      await persist();
+    }
+  }
+  renderClientModal();
+}
+
+// vigências da Unimed: dias 01, 10 e 20, cada uma com um prazo de entrega
+function prazoEntregaVigencia(iso) {
+  const d = new Date(iso + 'T12:00:00');
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  if (d.getDate() === 20) return new Date(y, m, 9, 23, 59); // entrega de 01 a 09 do mesmo mês
+  if (d.getDate() === 1) return new Date(y, m - 1, 19, 23, 59); // entrega de 10 a 19 do mês anterior
+  return new Date(y, m, 0, 23, 59); // vigência dia 10: entrega de 20 ao fim do mês anterior
+}
+function isoData(dt) {
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+function proximasVigencias(qtd = 4) {
+  const hoje = new Date();
+  const lista = [];
+  for (let k = 0; k < 4; k++) {
+    [1, 10, 20].forEach((dia) => {
+      const iso = isoData(new Date(hoje.getFullYear(), hoje.getMonth() + k, dia));
+      if (prazoEntregaVigencia(iso) >= hoje) lista.push(iso);
+    });
+  }
+  return [...new Set(lista)].sort().slice(0, qtd);
+}
+async function setVigenciaCard(iso) {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  if (!c) return;
+  titularesDoMesmoCard(c).forEach((x) => (x.dataVigencia = iso || ''));
+  if (iso) c.historico.push({ data: nowISO(), texto: `Data de vigência definida: ${fmtDate(iso)} (documentação até ${prazoEntregaVigencia(iso).toLocaleDateString('pt-BR')}).` });
+  await persist();
+  renderClientModal();
+}
+function alertaVigencia(c) {
+  const iso = vigenciaDoCard(c);
+  if (!iso || ['enviado', 'ativo'].includes(c.etapaAdesao)) return '';
+  const prazo = prazoEntregaVigencia(iso);
+  const dias = Math.ceil((prazo - new Date()) / 86400000);
+  const quando = prazo.toLocaleDateString('pt-BR');
+  if (dias < 0)
+    return `<div class="pendencia-banner" style="margin-bottom:14px;">⚠️ Prazo da vigência ${fmtDate(iso)} perdido: a documentação precisava ser entregue até ${quando}. Escolha a próxima vigência no Cadastro.</div>`;
+  if (dias <= 3)
+    return `<div class="pendencia-banner" style="margin-bottom:14px;">⏳ Vigência ${fmtDate(iso)}: documentação até ${quando} — falta${dias === 1 ? '' : 'm'} ${dias} dia${dias === 1 ? '' : 's'}.</div>`;
+  return `<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">Vigência ${fmtDate(iso)} · documentação até ${quando} (${dias} dias).</div>`;
+}
+
+async function setPlanoAtivoEmpresa(campo, valor) {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const emp = getEmpresaDoCliente(c);
+  if (campo === 'tem') emp.temPlanoAtivo = !!valor;
+  if (campo === 'cartao') emp.numeroCartaoPlanoAnterior = String(valor || '').trim();
+  await persist();
+  if (campo === 'tem') renderClientModal();
+}
+const SLOT_CARTA_PERMANENCIA = { key: 'carta_permanencia', label: 'Carta de permanência do plano atual' };
+
+function secoesCadastroVenda(c) {
+  const venda = vendaDoCard(c);
+  const fcdl = garantirCdls().filter((d) => d.matriz === 'FCDL');
+  const vendedorAtual = vendedorResponsavelDoCard(c);
+  const travado = !!c.vendedorTravado && !isAdmin();
+  const elegiveis = vendedoresElegiveis().filter((u) => {
+    if (!venda.cdlId) return true;
+    return !(u.cdlIds || []).length || (u.cdlIds || []).includes(venda.cdlId) || u.id === vendedorAtual;
+  });
+  const nomeVend = (DB.users || []).find((u) => u.id === vendedorAtual)?.nome || '';
+  const vig = vigenciaDoCard(c);
+  const opcoes = proximasVigencias();
+  if (vig && !opcoes.includes(vig)) opcoes.unshift(vig);
+  const emp = getEmpresaDoCliente(c) || {};
+  return `
+    ${alertaVigencia(c)}
+    <div class="modal-section-title">Venda</div>
+    <div class="field-grid">
+      <div class="fg"><label>Matriz da venda</label>
+        <select onchange="setVendaCampo('matriz', this.value)">
+          <option value="" ${!venda.matriz ? 'selected' : ''}>Escolha…</option>
+          <option value="CDL" ${venda.matriz === 'CDL' ? 'selected' : ''}>CDL Mossoró</option>
+          <option value="FCDL" ${venda.matriz === 'FCDL' ? 'selected' : ''}>FCDL</option>
+        </select></div>
+      <div class="fg"><label>CDL (ponto de venda)</label>${
+        venda.matriz === 'FCDL'
+          ? `<select onchange="setVendaCampo('cdlId', this.value)"><option value="">Escolha a CDL…</option>${fcdl
+              .map((d) => `<option value="${d.id}" ${venda.cdlId === d.id ? 'selected' : ''}>${escHist(d.nome)}</option>`)
+              .join('')}</select>${fcdl.length ? '' : '<div style="font-size:11px;color:var(--warning);margin-top:4px;">Nenhuma CDL do FCDL cadastrada (menu CDLs).</div>'}`
+          : `<input value="${venda.matriz === 'CDL' ? 'CDL Mossoró' : '—'}" disabled>`
+      }</div>
+    </div>
+    <div class="fg" style="margin-top:12px;"><label>Vendedor responsável</label>${
+      travado
+        ? `<input value="${escHist(nomeVend)} (veio pelo link do vendedor)" disabled>`
+        : `<select onchange="setVendedorCadastro('${c.id}', this.value)"><option value="">${vendedorAtual ? 'Sem vendedor' : 'Escolha o vendedor…'}</option>${elegiveis
+            .map((u) => `<option value="${u.id}" ${u.id === vendedorAtual ? 'selected' : ''}>${escHist(u.nome)}${u.codigoVendedor ? ` · cód. ${u.codigoVendedor}` : ''}</option>`)
+            .join('')}</select>`
+    }</div>
+    <div class="modal-section-title" style="margin-top:18px;">Vigência</div>
+    <div class="field-grid">
+      <div class="fg"><label>Data de vigência</label>
+        <select onchange="setVigenciaCard(this.value)"><option value="">Escolha…</option>${opcoes
+          .map((iso) => `<option value="${iso}" ${iso === vig ? 'selected' : ''}>${fmtDate(iso)} · documentação até ${prazoEntregaVigencia(iso).toLocaleDateString('pt-BR')}</option>`)
+          .join('')}</select></div>
+      <div class="fg"><label>Plano de saúde ativo hoje?</label>
+        <select onchange="setPlanoAtivoEmpresa('tem', this.value === 'sim')"><option value="nao" ${emp.temPlanoAtivo ? '' : 'selected'}>Não</option><option value="sim" ${emp.temPlanoAtivo ? 'selected' : ''}>Sim, a empresa tem plano ativo</option></select></div>
+    </div>
+    ${
+      emp.temPlanoAtivo
+        ? `<div class="fg" style="margin-top:12px;max-width:360px;"><label>Número do cartão do plano atual</label><input value="${escHist(emp.numeroCartaoPlanoAnterior || '')}" onchange="setPlanoAtivoEmpresa('cartao', this.value)"></div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">A carta de permanência é anexada nos documentos da empresa, logo abaixo.</div>`
+        : ''
+    }
+    <div class="modal-section-title" style="margin-top:18px;">Dados da empresa</div>`;
+}
+
+// ─── Conteúdo das abas na jornada de 5 etapas ─────────────────────────────
+function montarConteudoAba(c, aba, conteudo) {
+  if (aba === 'nova') {
+    return `${secoesCadastroVenda(c)}${conteudo}
+      <div class="modal-section-title" style="margin-top:22px;">Documentos da empresa</div>
+      ${renderDocumentosCard(c, 'empresa')}`;
+  }
+  if (ACTIVE_PERSON_TAB === 'pessoas') return alertaVigencia(c) + navSubPessoas(c) + conteudo;
+  return alertaVigencia(c) + conteudo;
+}
+function navSubPessoas(c) {
+  const card = titularesDoMesmoCard(c);
+  const vidas = card.flatMap((x) => vidasDoTitular(x));
+  const ok = {
+    vidas: card.every((x) => x.planoEscolhido) && vidas.every((v) => v.pessoa.nome && onlyDigits(v.pessoa.cpf || '').length === 11 && v.pessoa.dataNascimento && (v.key === 'titular' || v.pessoa.parentesco)),
+    documentos: vidas.every((v) => docsPessoaCompletos(v.pessoa, v.key !== 'titular')),
+    questionario: vidas.every((v) => !situacaoPessoaFicha(v.pessoa)),
+    assinaturas: !pendenciasDaEtapa(c, 'pessoas').some((f) => /assinad|gerada/.test(f)),
+  };
+  const itens = [
+    ['vidas', '1. Vidas'],
+    ['documentos', '2. Documentos'],
+    ['questionario', '3. Questionário'],
+    ['assinaturas', '4. Assinaturas'],
+  ];
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">${itens
+    .map(([k, rot]) => {
+      const ativo = ACTIVE_PESSOAS_SUB === k;
+      return `<button class="${ativo ? 'btn-primary' : 'btn-ghost'}" style="padding:7px 12px;font-size:12px;" onclick="ACTIVE_PESSOAS_SUB='${k}'; renderClientModal();">${ok[k] ? '✓ ' : ''}${rot}</button>`;
+    })
+    .join('')}</div>`;
+}
+function renderSubAssinaturas(c) {
+  const vidas = titularesDoMesmoCard(c).flatMap((x) => vidasDoTitular(x));
+  const fichas = vidas.filter((v) => fichaDaVida(v)).length;
+  const pme = fichaPmeDoCard(c);
+  return `
+    <div class="doc-actions-grid" style="margin-bottom:16px;">
+      <button type="button" class="doc-action-card" onclick="openFichasInclusaoModal()"><span class="doc-icon">${ICONS.clipboard}</span><span class="doc-text">Fichas de inclusão (uma por vida)<small>${fichas ? `✓ ${fichas} de ${vidas.length} gerada(s) — clique pra gerar de novo` : `${vidas.length} vida(s) · cada uma assina ao terminar o questionário`}</small></span></button>
+      <button type="button" class="doc-action-card" onclick="openFichaUnimedModal()"><span class="doc-icon">${ICONS.clipboard}</span><span class="doc-text">Proposta PME III (último passo)<small>${pme ? '✓ Gerada — clique pra revisar' : 'Gerada com as vidas de cada plano, depois das fichas'}</small></span></button>
+    </div>
+    ${renderAbaAssinatura(c)}`;
+}
+function renderConferenciaNova(c) {
+  const r = resumoDoCardParaFicha(c);
+  const porPlano = {};
+  r.linhas.forEach((l) => {
+    const k = l.plano || 'Sem plano';
+    porPlano[k] = porPlano[k] || { vidas: 0, valor: 0 };
+    porPlano[k].vidas += l.qtd;
+    porPlano[k].valor += l.valor;
+  });
+  const pme = fichaPmeDoCard(c);
+  const naProposta = Number((pme && pme.propostaAdesao && pme.propostaAdesao.qtdeVidas) || 0);
+  const bate = pme && naProposta === r.vidas;
+  const card = titularesDoMesmoCard(c);
+  const conferido = card.find((x) => x.layoutConferidoEm);
+  const linhaCheck = (ok, txt) =>
+    `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 0;color:${ok ? 'var(--success)' : 'var(--warning)'};"><b style="width:16px;">${ok ? '✓' : '!'}</b><span style="color:var(--text);">${txt}</span></div>`;
+  const vidas = card.flatMap((x) => vidasDoTitular(x));
+  const emp = getEmpresaDoCliente(c) || {};
+  return `
+    <div class="modal-section-title">Ficha de adesão: vidas de cada plano</div>
+    <div class="dep-card" style="margin-bottom:16px;">
+      ${Object.entries(porPlano)
+        .map(([plano, v]) => `<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--border);"><span>${escHist(plano)}</span><span>${v.vidas} vida(s) · <b>${formatBRL(v.valor)}</b></span></div>`)
+        .join('')}
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:8px;"><b>${r.vidas} vida(s)</b><b>Total ${formatBRL(r.total)}/mês</b></div>
+      <div style="margin-top:10px;font-size:12px;color:${bate ? 'var(--success)' : 'var(--warning)'};">${!pme ? '! Proposta PME III ainda não gerada (etapa Pessoas).' : bate ? '✓ Bate com a Proposta PME III assinada.' : `! A proposta tem ${naProposta || '?'} vida(s) e o card tem ${r.vidas}: gere a proposta de novo na etapa Pessoas.`}</div>
+    </div>
+    <div class="modal-section-title">Layout da Unimed</div>
+    <div class="dep-card" style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="font-size:12.5px;">${card.length} titular(es) · ${r.vidas} vida(s), no formato aceito pela Unimed.${conferido ? `<div style="color:var(--success);font-size:11.5px;margin-top:3px;">✓ Conferido em ${fmtDateTime(conferido.layoutConferidoEm)}${conferido.layoutConferidoPor ? ` por ${escHist(conferido.layoutConferidoPor)}` : ''}</div>` : ''}</div>
+      <div style="display:flex;gap:7px;flex-wrap:wrap;"><button class="btn-ghost" style="padding:7px 12px;font-size:12px;" onclick="exportarLayoutUnimed()">${ICONS.upload} Baixar layout</button>${conferido ? '' : `<button class="btn-primary" style="padding:7px 12px;font-size:12px;" onclick="marcarLayoutConferido()">${ICONS.check} Conferi o layout</button>`}</div>
+    </div>
+    <div class="modal-section-title">Checklist dos documentos</div>
+    <div class="dep-card">
+      ${linhaCheck(docsEmpresaCompletos(emp), 'Documentos da empresa')}
+      ${linhaCheck(!!pme && !!(pme.assinaturaFicha || {}).cliente?.completed && !!(pme.assinaturaFicha || {}).corretora?.completed, 'Proposta PME III assinada')}
+      ${vidas
+        .map((v) => {
+          const ai = v.pessoa.assinaturaInclusao || {};
+          const okVida = docsPessoaCompletos(v.pessoa, v.key !== 'titular') && !situacaoPessoaFicha(v.pessoa) && ai.vida?.completed && ai.intermediario?.completed;
+          return linhaCheck(okVida, `${escHist(v.pessoa.nome || v.rotulo)} (${v.rotulo}): documentos, questionário e ficha assinada`);
+        })
+        .join('')}
+    </div>`;
+}
+async function marcarLayoutConferido() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  if (!c) return;
+  titularesDoMesmoCard(c).forEach((x) => {
+    x.layoutConferidoEm = nowISO();
+    x.layoutConferidoPor = CURRENT_USER?.nome || '';
+  });
+  c.historico.push({ data: nowISO(), texto: 'Layout da Unimed conferido.' });
+  await persist();
+  renderClientModal();
+  toast('✓ Layout marcado como conferido.');
+}
+
 function renderClientModal() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   if (!c) return;
@@ -8169,9 +8813,25 @@ function renderClientModal() {
     ? `<span class="status-pill ativo">Enviado em ${fmtDateTime(c.emailAdministradoraEnviadoEm)}</span>`
     : `<span class="status-pill inativo">Ainda não enviado</span>`;
 
+  // abas antigas (Documentos, Questionário, Assinatura) agora são sub-abas de Pessoas
+  const ANTIGA_PARA_SUB = { documentacao: 'documentos', questionario: 'questionario', assinatura: 'assinaturas' };
+  if (ANTIGA_PARA_SUB[ACTIVE_PERSON_TAB]) {
+    ACTIVE_PESSOAS_SUB = ANTIGA_PARA_SUB[ACTIVE_PERSON_TAB];
+    ACTIVE_PERSON_TAB = 'pessoas';
+  }
+  let ABA = ACTIVE_PERSON_TAB;
+  if (ABA === 'pessoas')
+    ABA = { vidas: 'pessoas', documentos: 'documentacao', questionario: 'questionario', assinaturas: '__assinaturas' }[ACTIVE_PESSOAS_SUB] || 'pessoas';
+  if (ABA === 'conferencia') ABA = '__conferencia';
+
   let tabContent = '';
-  if (ACTIVE_PERSON_TAB === 'nova') {
+  if (ABA === '__assinaturas') {
+    tabContent = renderSubAssinaturas(c);
+  } else if (ABA === '__conferencia') {
+    tabContent = renderConferenciaNova(c);
+  } else if (ABA === 'nova') {
     const emp = getEmpresaDoCliente(c);
+    if (completarEmpresa(emp, null)) persist(); // card antigo: completa pela base da CDL
     tabContent = `
       <div class="field-grid">
         <div class="fg"><label>Razão social / Empresa</label><input id="emp_razao" value="${emp.razaoSocial || ''}" onchange="updateEmpresa()"/></div>
@@ -8195,7 +8855,7 @@ function renderClientModal() {
       ${c.origemSite ? `<div class="site-tag" style="margin-top:14px;font-size:11px;padding:4px 10px;">✓ Identificado automaticamente como novo afiliado via site</div>` : ''}
       <p style="font-size:11.5px;color:var(--text-muted);margin-top:18px;">Esses dados valem pra empresa inteira — se ela tiver mais de um titular, todos compartilham o mesmo CNPJ e endereço. Pra cadastrar as pessoas (titulares, dependentes e o plano de cada um), vá na aba "Pessoas".</p>
     `;
-  } else if (ACTIVE_PERSON_TAB === 'pessoas') {
+  } else if (ABA === 'pessoas') {
     const todosTitulares = getTitularesDaEmpresa(c.empresaId);
     tabContent = `
       <div class="people-company-list">
@@ -8305,133 +8965,13 @@ function renderClientModal() {
       </div>
       <button class="btn-ghost add-holder-button" onclick="adicionarTitularNaEmpresa('${c.empresaId}')">${ICONS.plus} Adicionar titular</button>
     `;
-  } else if (ACTIVE_PERSON_TAB === 'documentacao') {
-    sincronizarDocsDoCardEmSegundoPlano(c);
-    const emp = getEmpresaDoCliente(c);
-    const todosTitularesDoc = getTitularesDaEmpresa(c.empresaId);
-    const totalOk = docsCompletos(c);
-    tabContent = `
-      <div class="pendencia-banner" style="${totalOk ? 'background:var(--success-light);color:var(--success);border-color:transparent;' : ''}margin-bottom:16px;">
-        ${totalOk ? `✓ Checklist completo — todos os documentos confirmados. Já dá pra enviar pra administradora.` : `⚠️ Ainda faltam documentos confirmados — o envio pra administradora só libera quando o checklist estiver 100%.`}
-      </div>
-
-      ${blocoLinkDocs('empresa', c.id, `Empresa — ${escHist(emp.razaoSocial || 'sem nome')}`, `CNPJ, contrato social, comprovante de endereço e ficha associativa · enviado ao sócio`)}
-      ${todosTitularesDoc
-        .map((x) =>
-          blocoLinkDocs(
-            'titular',
-            x.id,
-            `Grupo de ${escHist(x.titular.nome || 'titular sem nome')}`,
-            `Documentos do titular e de ${(x.dependentes || []).length} dependente(s)`
-          )
-        )
-        .join('')}
-
-      <div class="anexo-person-block" style="border-color:var(--blue);background:var(--navy-tint);">
-        <div class="anexo-person-head"><span><b>Anexos originais do lead</b> — recebidos no Pipeline</span><label class="btn-ghost" style="padding:6px 12px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" multiple style="display:none" onchange="addAnexosLeadImplantacao(event)"></label></div>
-        <div class="attachment-list">${(c.anexosLead || []).map((a, i) => `<span class="attachment-chip">${ICONS.file}${a.nome}<a href="${a.dataUrl}" target="_blank" style="color:inherit;display:flex;">${ICONS.upload}</a><button onclick="removeAnexoLeadImplantacao(${i})">${ICONS.close}</button></span>`).join('') || '<span style="font-size:12px;color:var(--text-faint);">Nenhum anexo original do lead.</span>'}</div>
-      </div>
-
-      <div class="anexo-person-block" id="docs_empresa" style="border-color:var(--navy);">
-        <div class="anexo-person-head">
-          <span><b>Documentos da empresa</b> — ${emp.razaoSocial || t.razaoSocial || 'sem nome'} ${docsEmpresaCompletos(emp) ? `<span class="status-pill ativo" style="margin-left:6px;">✓ Completo</span>` : ''}</span>
-        </div>
-        ${DOC_SLOTS_EMPRESA.map((slot) => renderDocSlotRow(slot, emp, 'empresa', undefined, c.id)).join('')}
-        <p style="font-size:11px;color:var(--text-muted);margin-top:10px;">Esses documentos valem pra empresa inteira — servem pra todos os ${todosTitularesDoc.length} titular(es) acima.</p>
-      </div>
-
-      ${todosTitularesDoc
-        .map((x) => {
-          const pessoasDeX = [
-            {
-              label: `Titular — ${x.titular.nome || 'sem nome'}`,
-              pessoa: x.titular,
-              type: 'titular',
-              ehDependente: false,
-            },
-          ].concat(
-            x.dependentes.map((d, i) => ({
-              label: `Dependente ${i + 1} de ${x.titular.nome || 'sem nome'} — ${d.nome || 'sem nome'}`,
-              pessoa: d,
-              type: 'dependente',
-              index: i,
-              ehDependente: true,
-              titularId: x.id,
-            }))
-          );
-          return pessoasDeX
-            .map((p) => {
-              const completo = docsPessoaCompletos(p.pessoa, p.ehDependente);
-              return `
-        <div class="anexo-person-block" ${!p.ehDependente ? `id="docs_tit_${x.id}"` : ''}>
-          <div class="anexo-person-head">
-            <span>${p.label} ${completo ? `<span class="status-pill ativo" style="margin-left:6px;">✓ Completo</span>` : ''}</span>
-          </div>
-          ${DOC_SLOTS_PESSOA.map((slot) => renderDocSlotRow(slot, p.pessoa, p.type, p.index, x.id)).join('')}
-          ${
-            !p.ehDependente
-              ? `
-            <div class="doc-slot-row">
-              <span class="doc-slot-icon ${p.pessoa.email && p.pessoa.celular ? 'ok' : 'pendente'}">${p.pessoa.email && p.pessoa.celular ? ICONS.check : ICONS.file}</span>
-              <span class="doc-slot-label">E-mail e telefone</span>
-              <span class="status-pill ${p.pessoa.email && p.pessoa.celular ? 'ativo' : 'inativo'}">${p.pessoa.email && p.pessoa.celular ? '✓ Preenchido' : 'Falta preencher na aba Pessoas'}</span>
-            </div>`
-              : `<p style="font-size:11px;color:var(--text-faint);margin-top:8px;">Usa o e-mail e celular do titular da família.</p>`
-          }
-        </div>`;
-            })
-            .join('');
-        })
-        .join('')}
-
-      <div class="anexo-person-block">
-        <div class="anexo-person-head"><span>Outros anexos (opcional)</span>
-          <label class="btn-ghost" style="padding:6px 12px;font-size:11.5px;cursor:pointer;">${ICONS.upload} Anexar<input type="file" multiple style="display:none;" onchange="PENDING_ANEXO_TARGET={type:'titular'}; handleAttachFile(event)"></label>
-        </div>
-        <p style="font-size:11px;color:var(--text-muted);margin:2px 0 8px;">Qualquer documento extra que não se encaixe no checklist acima (ex: fatura antiga, contrato anterior).</p>
-        <div class="attachment-list">
-          ${
-            (t.anexos || [])
-              .map(
-                (a, i) => `
-            <span class="attachment-chip">${ICONS.file}${a.nome}
-              <a href="${a.dataUrl}" download="${a.nome}" style="color:inherit;display:flex;">${ICONS.upload}</a>
-              ${
-                /\.pdf$/i.test(a.nome || '') && documentoExigeAssinatura(a.nome)
-                  ? a.assinaturaDigital?.completed
-                    ? `<a href="${a.assinaturaDigital.signedFile || a.dataUrl}" target="_blank" rel="noopener" style="color:var(--success);font-weight:800;">✓ Assinado</a>`
-                    : a.assinaturaDigital?.documentId
-                      ? `<button onclick="consultarAssinaturaDocumento('anexoTitular',undefined,'${i}')">Verificar</button>`
-                      : `<button onclick="abrirAssinaturaDocumento('anexoTitular',undefined,'${i}')">Assinar</button>`
-                  : ''
-              }
-              <button onclick="removeAnexoFrom('titular',null,${i})">${ICONS.close}</button>
-            </span>
-          `
-              )
-              .join('') ||
-            `<span style="font-size:12px;color:var(--text-faint);">Nenhum anexo extra.</span>`
-          }
-        </div>
-      </div>
-
-      ${
-        c._leadFaturaPath || c._leadInternalPdfPath
-          ? `
-        <div class="pendencia-banner" style="background:var(--navy-tint);color:var(--navy);border-color:var(--border);margin-top:12px;">
-          <b>📎 Arquivos do site (Storage privado):</b>
-          ${c._leadFaturaPath ? `<div>Fatura enviada: <code>${c._leadFaturaPath}</code></div>` : ''}
-          ${c._leadInternalPdfPath ? `<div>Contrato + foto de verificação: <code>${c._leadInternalPdfPath}</code></div>` : ''}
-          <div style="margin-top:4px;font-size:11px;">Baixe pelo painel do Supabase → Storage → internal-docs (por segurança, o portal não busca esses arquivos automaticamente).</div>
-        </div>`
-          : ''
-      }
-    `;
-  } else if (ACTIVE_PERSON_TAB === 'historico') {
+  } else if (ABA === 'documentacao') {
+    tabContent = renderDocumentosCard(c, 'pessoas');
+  } else if (ABA === 'historico') {
     tabContent = renderAbaHistorico(c);
-  } else if (ACTIVE_PERSON_TAB === 'ativo') {
+  } else if (ABA === 'ativo') {
     tabContent = `<div class="empty-state">${ICONS.check}<div><b>Implantação concluída.</b><br><span style="font-size:12px;color:var(--text-muted);">Comissões são tratadas exclusivamente no relatório de comissões.</span></div></div>`;
-  } else if (ACTIVE_PERSON_TAB === 'questionario') {
+  } else if (ABA === 'questionario') {
     const feito = listPessoas(c).every((p) => !!p.pessoa.questionarioRiscoConcluidoEm);
     const linhaVida = (x, p) => {
       const sit = situacaoPessoaFicha(p.pessoa);
@@ -8485,7 +9025,7 @@ function renderClientModal() {
         )
         .join('')}
     `;
-  } else if (ACTIVE_PERSON_TAB === 'conferencia') {
+  } else if (ABA === 'conferencia') {
     // Conferência agora é só uma coisa: preencher a ficha. Checklist e
     // Layout Unimed saíram daqui — o Layout foi pra aba Implantação, que é
     // onde ele é usado (no envio pra Unimed).
@@ -8503,11 +9043,11 @@ function renderClientModal() {
       </div>
       <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">${fichaFeita ? 'Ficha pronta. Na próxima etapa (Assinatura), cliente e corretora assinam pela Autentique.' : 'Preencha a ficha. Depois disso, ela segue para assinatura na próxima etapa.'}</p>
     `;
-  } else if (ACTIVE_PERSON_TAB === 'assinatura') {
+  } else if (ABA === 'assinatura') {
     tabContent = renderAbaAssinatura(c);
-  } else if (ACTIVE_PERSON_TAB === 'anexos') {
+  } else if (ABA === 'anexos') {
     tabContent = renderAbaAnexos(c);
-  } else if (ACTIVE_PERSON_TAB === 'enviado') {
+  } else if (ABA === 'enviado') {
     const aditivoFeito = temAnexoChamado(c, 'Aditivo RC.pdf');
     tabContent = `
       <div class="doc-actions-grid" style="margin-bottom:16px;">
@@ -8596,7 +9136,7 @@ function renderClientModal() {
       <div class="modal-head">
         <div class="mh-avatar" style="background:${avatarColor(t.razaoSocial || t.nome)};">${initials(t.nome || t.razaoSocial)}</div>
         <div class="mh-info">
-          <div class="mh-name">${t.razaoSocial || t.nome || 'Novo cliente'} ${c.origemSite ? `<span class="site-tag">Novo filiado · site</span>` : ''}</div>
+          <div class="mh-name">${t.razaoSocial || t.nome || 'Novo cliente'} ${c.origemSite ? `<span class="site-tag">Novo filiado · site</span>` : ''} ${seloVenda(c)}</div>
           <div class="mh-sub">${t.nome || ''} <span style="opacity:.6;">· Lead nº ${c.numeroLead || '—'}</span></div>
         </div>
         <label class="toggle-switch" title="Ativo / Inativo">
@@ -8628,7 +9168,7 @@ function renderClientModal() {
           </div>
         </div>
         <div class="journey-tab-content">
-          ${tabContent}
+          ${montarConteudoAba(c, ABA, tabContent)}
           <details style="margin-top:22px;border:1px solid var(--border);border-radius:12px;padding:10px 14px;background:#fff;">
             <summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:var(--navy);">Comentários da equipe (${(c.comentariosInternos || []).length})</summary>
             <div class="history-list" style="max-height:190px;margin:10px 0;">${
@@ -9466,103 +10006,151 @@ function copiarLinkCliente() {
   navigator.clipboard.writeText(input.value).then(() => toast('Link copiado.'));
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// LAYOUT DA UNIMED — segue o manual que vem nos comentários da planilha aceita
+// pela Unimed: UM layout por EMPRESA (todos os titulares e dependentes do
+// card), cada titular com o próprio plano e endereço residencial, datas em
+// dd/mm/aaaa, data de adesão = vigência, nomes em maiúsculas sem acento.
+// ═══════════════════════════════════════════════════════════════════════
+function textoLayoutUnimed(v) {
+  // "Nome por extenso, sem acento, abreviatura ou caractere especial"
+  return String(v || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+// endereço: só maiúsculas (o manual pede "sem acento" apenas nos nomes; o layout aceito mantém acento no endereço)
+function maiusculasLayout(v) {
+  return String(v || '').replace(/\s+/g, ' ').trim().toUpperCase();
+}
+// nome do plano exatamente como no layout aceito pela Unimed
+const NOME_PLANO_LAYOUT = {
+  essencial: 'ESSENCIAL FLEX II',
+  greenEnf: 'GREEN FLEX II EMP C -E',
+  greenApt: 'GREEN FLEX II EMP C -A',
+};
+function dataParaLayout(v) {
+  // aceita 2026-09-01, 01/09/2026 ou Date; devolve Date (célula de data dd/mm/aaaa)
+  if (!v) return '';
+  if (v instanceof Date) return isNaN(v) ? '' : v;
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  return '';
+}
+function ibgePorCidade(cidade) {
+  const alvo = textoLayoutUnimed(cidade);
+  if (!alvo) return '';
+  const achado = RN_CITIES_IBGE.find(([, nome]) => textoLayoutUnimed(nome) === alvo);
+  return achado ? achado[0] : '';
+}
+// endereço residencial do titular (aba Pessoas); sem ele, usa o da empresa e avisa
+function enderecoParaLayout(x) {
+  const r = x.titular.residencia || {};
+  if (r.cep && r.endereco) return { ...r, origem: 'residencia' };
+  const pa = x.propostaAdesao || {};
+  const emp = getEmpresaDoCliente(x) || {};
+  return {
+    cep: pa.cep || emp.cep || '',
+    endereco: pa.endereco || emp.endereco || '',
+    numero: pa.numero || emp.numero || '',
+    complemento: pa.complemento || emp.complemento || '',
+    bairro: pa.bairro || emp.bairro || '',
+    cidade: pa.cidade || emp.cidade || '',
+    uf: pa.uf || emp.estado || 'RN',
+    origem: 'empresa',
+  };
+}
+
 async function exportarLayoutUnimed() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
-  const pa = c.propostaAdesao || {};
-  const produtoInfo = PRODUTO_CODIGO_UNIMED[pa.produto] || PRODUTO_CODIGO_UNIMED.essencial;
-  const pessoas = listPessoas(c);
-  const ibge = lookupIbge(pa.cidade);
-  const hoje = todayISO();
+  if (!c) return;
+  const card = titularesDoMesmoCard(c);
+  const avisos = [];
+  // data de adesão = data de vigência (escolhida no Cadastro / ficha de adesão)
+  const vigencia =
+    dataParaLayout(vigenciaDoCard(c)) ||
+    dataParaLayout(card.map((x) => (x.propostaAdesao || {}).dataVigencia).find(Boolean));
+  if (!vigencia) avisos.push('data de vigência não definida (coluna DT ADESAO ficou vazia)');
 
   const header = [
-    'TIPO OPERACAO',
-    'NOME',
-    'TITULAR',
-    'DATA NASC',
-    'ESTADO CIVIL',
-    'NACIONALIDADE',
-    'SEXO',
-    'NOME DA MAE',
-    'CPF',
-    'EMAIL',
-    'CEP',
-    'ENDERECO',
-    'NUMERO',
-    'COMPLEMENTO',
-    'BAIRRO',
-    'CIDADE',
-    'ESTADO',
-    'TELEFONE',
-    'CELULAR',
-    'GRAU PARENTESCO',
-    'NR CARTAO SUS',
-    'PLANO',
-    'SCA',
-    'DT ADESAO',
-    'NR MOTIVO INCLUSAO',
-    'NR SUBESTIPULANTE',
-    'NOME SOCIAL',
-    'CARENCIA',
-    'CID',
-    'EQUIPE',
-    'AGENTE',
+    'TIPO OPERACAO', 'NOME', 'TITULAR', 'DATA NASC', 'ESTADO CIVIL', 'NACIONALIDADE', 'SEXO',
+    'NOME DA MAE', 'CPF', 'EMAIL', 'CEP', 'ENDERECO', 'NUMERO', 'COMPLEMENTO', 'BAIRRO', 'CIDADE',
+    'ESTADO', 'TELEFONE', 'CELULAR', 'GRAU PARENTESCO', 'NR CARTAO SUS', 'PLANO', 'SCA', 'DT ADESAO',
+    'NR MOTIVO INCLUSAO', 'NR SUBESTIPULANTE', 'NOME SOCIAL', 'CARENCIA', 'CID', 'EQUIPE', 'AGENTE',
   ];
   const rows = [header];
-
-  pessoas.forEach((p) => {
-    const pessoa = p.pessoa;
-    const isTitular = p.key === 'titular';
-    rows.push([
-      'I',
-      pessoa.nome || '',
-      c.titular.nome || '',
-      pessoa.dataNascimento || '',
-      pessoa.estadoCivil || (isTitular ? '' : '1'),
-      10, // Nacionalidade: Brasileira (padrão)
-      pessoa.sexo || '',
-      pessoa.nomeMae || '',
-      onlyDigits(pessoa.cpf || ''),
-      isTitular ? pessoa.email || '' : '',
-      onlyDigits(pa.cep || ''),
-      pa.endereco || '',
-      pa.numero || '',
-      pa.complemento || '',
-      pa.bairro || '',
-      ibge,
-      pa.uf || 'RN',
-      '',
-      onlyDigits(pessoa.celular || c.titular.celular || ''),
-      isTitular ? 11 : 12, // 11=titular, 12=dependente (confirmar com a Unimed / CDL)
-      '', // Nº cartão SUS — preencher manualmente se disponível
-      produtoInfo.nome,
-      15, // SCA — valor do exemplo fornecido, confirmar com a Unimed
-      hoje,
-      1, // Motivo de inclusão: 1 = Inclusão (padrão)
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-    ]);
+  let vidas = 0;
+  card.forEach((x) => {
+    const chave = chavePlanoPorNome(x.planoEscolhido);
+    const produto = NOME_PLANO_LAYOUT[chave] ? { nome: NOME_PLANO_LAYOUT[chave] } : null;
+    if (!produto) avisos.push(`${x.titular.nome || 'titular sem nome'}: sem plano escolhido`);
+    const end = enderecoParaLayout(x);
+    if (end.origem === 'empresa') avisos.push(`${x.titular.nome || 'titular sem nome'}: sem endereço residencial (usado o da empresa)`);
+    const nomeTitular = textoLayoutUnimed(x.titular.nome);
+    const pessoas = [x.titular, ...(x.dependentes || [])];
+    pessoas.forEach((pessoa, i) => {
+      const isTitular = i === 0;
+      if (!pessoa.cpf || !pessoa.dataNascimento) avisos.push(`${pessoa.nome || 'pessoa sem nome'}: falta CPF ou data de nascimento`);
+      vidas++;
+      rows.push([
+        'I',
+        textoLayoutUnimed(pessoa.nome),
+        nomeTitular,
+        dataParaLayout(pessoa.dataNascimento),
+        pessoa.estadoCivil ? Number(pessoa.estadoCivil) || pessoa.estadoCivil : isTitular ? '' : 1,
+        10, // nacionalidade brasileira
+        pessoa.sexo || '',
+        textoLayoutUnimed(pessoa.nomeMae),
+        onlyDigits(pessoa.cpf || ''),
+        x.titular.email || pessoa.email || '', // dependente repete o e-mail do titular
+        onlyDigits(end.cep || ''),
+        maiusculasLayout(end.endereco),
+        maiusculasLayout(end.numero),
+        maiusculasLayout(end.complemento),
+        maiusculasLayout(end.bairro),
+        ibgePorCidade(end.cidade) || 240800,
+        (end.uf || 'RN').toUpperCase(),
+        '',
+        onlyDigits(pessoa.celular || x.titular.celular || ''),
+        isTitular ? 11 : 12, // 11 titular · 12 dependente (como no layout aceito)
+        '',
+        produto ? produto.nome : '',
+        15, // SCA
+        vigencia || '',
+        '', // motivo de inclusão: vazio, como no layout aceito
+        '', '', '', '', '', '',
+      ]);
+    });
   });
 
-  const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = header.map(() => ({
-    wch: 16,
-  }));
+  const ws = XLSX.utils.aoa_to_sheet(rows, { cellDates: true, dateNF: 'dd/mm/yyyy' });
+  // garante o formato dd/mm/aaaa nas colunas de data (D e X)
+  Object.keys(ws).forEach((ref) => {
+    if (ref[0] === '!') return;
+    const cel = ws[ref];
+    if (cel && (cel.t === 'd' || cel.v instanceof Date)) cel.z = 'dd/mm/yyyy';
+  });
+  ws['!cols'] = header.map(() => ({ wch: 18 }));
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Layout');
-  const nomeArquivo = `layout-unimed-${(c.titular.razaoSocial || 'cliente').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.xlsx`;
-  XLSX.writeFile(wb, nomeArquivo);
-  c.historico.push({
-    data: nowISO(),
-    texto: 'Planilha (layout Unimed) exportada.',
-  });
+  XLSX.utils.book_append_sheet(wb, ws, 'Plan1');
+  const emp = getEmpresaDoCliente(c) || {};
+  const nomeArquivo = `layout-unimed-${(emp.razaoSocial || c.titular.razaoSocial || 'empresa').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}.xlsx`;
+  XLSX.writeFile(wb, nomeArquivo, { cellDates: true });
+  c.historico.push({ data: nowISO(), texto: `Layout Unimed exportado: ${card.length} titular(es), ${vidas} vida(s).` });
   await persist();
-  toast(
-    'Planilha exportada. Confira os códigos marcados como "confirmar" antes de enviar à Unimed.'
-  );
+  if (avisos.length) {
+    const unicos = [...new Set(avisos)];
+    toast(`Layout exportado com ${unicos.length} aviso(s): ${unicos.slice(0, 3).join('; ')}${unicos.length > 3 ? '…' : ''}`);
+  } else {
+    toast(`✓ Layout exportado: ${card.length} titular(es), ${vidas} vida(s).`);
+  }
+  return { rows, avisos: [...new Set(avisos)] };
 }
 
 function listPessoas(c) {
@@ -10213,6 +10801,11 @@ function resumoDoCardParaFicha(c) {
   return { card, planos, vidas, total, linhas };
 }
 
+function faixaPelaVigencia(vig) {
+  const m = String(vig || '').match(/^(\d{2})\//) || String(vig || '').match(/^\d{4}-\d{2}-(\d{2})/);
+  const dia = m ? Number(m[1]) : 0;
+  return dia === 20 ? '01-09' : dia === 1 ? '10-19' : dia === 10 ? '20-31' : '';
+}
 function openFichaUnimedModal() {
   origemDoFormularioDoc();
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
@@ -10223,10 +10816,8 @@ function openFichaUnimedModal() {
   const vend = (DB.users || []).find((u) => u.id === vendedorResponsavelDoCard(c));
   const hojeISO = todayISO();
   const fv = faixaEVigenciaPorData(pa.dataEntrega || hojeISO);
-  const socios =
-    pa.socios && pa.socios.length
-      ? pa.socios
-      : [{ nome: t.nome || '', tel: t.celular || '', cpf: t.cpf || '' }];
+  const rep = emp?.representante || {};
+  const socios = pa.socios && pa.socios.length ? pa.socios : [{ nome: rep.nome || t.nome || '', tel: rep.telefone || t.celular || '', cpf: rep.cpf || t.cpf || '' }];
   const v = (k, padrao) => escHist(pa[k] != null && pa[k] !== '' ? pa[k] : padrao || '');
   const semPlano = r.linhas.filter((l) => !l.chave);
 
@@ -10248,7 +10839,7 @@ function openFichaUnimedModal() {
         <div class="modal-section-title">Contrato e vigência</div>
         <div class="field-grid">
           <div class="fg"><label>Data de entrega da documentação</label><input type="date" id="pa_dataentrega" value="${v('dataEntrega', hojeISO)}" onchange="atualizarVigenciaFicha(this.value)"></div>
-          <div class="fg"><label>Data de vigência (sugerida pela regra do contrato)</label><input id="pa_datavigencia" value="${v('dataVigencia', fv.vigencia)}"></div>
+          <div class="fg"><label>Data de vigência (sugerida pela regra do contrato)</label><input id="pa_datavigencia" value="${v('dataVigencia', vigenciaDoCard(c) ? fmtDate(vigenciaDoCard(c)) : fv.vigencia)}"></div>
         </div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:4px;" id="pa_faixainfo">Entrega entre os dias ${fv.faixa.replace('-', ' e ')} → marca essa faixa na ficha.</div>
 
@@ -10281,7 +10872,7 @@ function openFichaUnimedModal() {
         </div>
         <div class="field-grid" style="margin-top:10px;">
           <div class="fg"><label>UF</label><input id="pa_uf" maxlength="2" value="${v('uf', emp?.estado || 'RN')}"></div>
-          <div class="fg"><label>E-mail</label><input id="pa_email" value="${v('email', t.email)}"></div>
+          <div class="fg"><label>E-mail</label><input id="pa_email" value="${v('email', emp?.email || t.email)}"></div>
         </div>
         <label style="display:flex;gap:8px;align-items:flex-start;font-size:11.5px;margin-top:10px;"><input type="checkbox" id="pa_rn432" ${pa.declaracaoRN432 === false ? '' : 'checked'}> Marcar a declaração da RN 432/2017 (o contratante é o responsável legal da empresa)</label>
 
@@ -10350,7 +10941,7 @@ async function gerarFichaUnimed() {
   const dataEntrega = g('pa_dataentrega');
   const base = {
     dataEntrega,
-    faixaEntrega: faixaEVigenciaPorData(dataEntrega).faixa,
+    faixaEntrega: faixaPelaVigencia(g('pa_datavigencia')) || faixaEVigenciaPorData(dataEntrega).faixa,
     dataVigencia: g('pa_datavigencia'),
     codCorretora: g('pa_codcorretora'),
     nomeCorretora: g('pa_nomecorretora'),
@@ -10724,24 +11315,104 @@ function abrirTarefaImplantacao() {
   abrirNovaTarefa(ACTIVE_CLIENT_ID);
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// REGRA DA JORNADA: só avança com a etapa 100% concluída. Cada etapa diz o
+// que falta; a etapa vale para o card inteiro (todos os titulares da empresa).
+// ═══════════════════════════════════════════════════════════════════════
+function fichaPmeDoCard(c) {
+  return (
+    titularesDoMesmoCard(c).find((x) => (x.titular.anexos || []).some((a) => a.nome === 'Ficha de Adesao Unimed.pdf')) || null
+  );
+}
+function pendenciasDaEtapa(c, etapa) {
+  const falta = [];
+  const card = titularesDoMesmoCard(c);
+  const emp = getEmpresaDoCliente(c) || {};
+  if (etapa === 'nova') {
+    if (!emp.razaoSocial) falta.push('Razão social da empresa');
+    if (onlyDigits(emp.cnpj || '').length !== 14) falta.push('CNPJ da empresa');
+    if (!emp.cep || !emp.endereco || !emp.cidade) falta.push('Endereço da empresa (CEP, endereço e cidade)');
+    const venda = vendaDoCard(c);
+    if (!venda.matriz) falta.push('Matriz da venda (CDL Mossoró ou FCDL)');
+    else if (venda.matriz === 'FCDL' && !venda.cdlId) falta.push('CDL (ponto de venda) da venda FCDL');
+    if (!vendedorResponsavelDoCard(c)) falta.push('Vendedor responsável');
+    if (!vigenciaDoCard(c)) falta.push('Data de vigência');
+    else if (prazoEntregaVigencia(vigenciaDoCard(c)) < new Date()) falta.push('Data de vigência com prazo de entrega vencido: escolha a próxima');
+    if (emp.temPlanoAtivo && !emp.numeroCartaoPlanoAnterior) falta.push('Número do cartão do plano atual');
+    if (!card.some((x) => x.associadoValidado)) falta.push('Associação à CDL validada');
+    if (!docsEmpresaCompletos(emp)) falta.push('Documentos da empresa anexados e conferidos');
+  }
+  if (etapa === 'pessoas') {
+    card.forEach((x) =>
+      vidasDoTitular(x).forEach((v) => {
+        const quem = v.pessoa.nome || v.rotulo;
+        if (!v.pessoa.nome || onlyDigits(v.pessoa.cpf || '').length !== 11 || !v.pessoa.dataNascimento)
+          falta.push(`${quem}: nome, CPF e data de nascimento`);
+        if (v.key === 'titular' && !x.planoEscolhido) falta.push(`${quem}: plano escolhido`);
+        if (v.key !== 'titular' && !v.pessoa.parentesco) falta.push(`${quem}: grau de parentesco`);
+        if (!docsPessoaCompletos(v.pessoa, v.key !== 'titular')) falta.push(`${quem}: documentos conferidos`);
+        const sit = situacaoPessoaFicha(v.pessoa);
+        if (sit) falta.push(`${quem}: questionário (${sit})`);
+        const ai = v.pessoa.assinaturaInclusao || {};
+        if (!ai.vida?.completed || !ai.intermediario?.completed) falta.push(`${quem}: ficha de inclusão assinada`);
+      })
+    );
+    const pme = fichaPmeDoCard(c);
+    const af = (pme && pme.assinaturaFicha) || {};
+    if (!pme) falta.push('Proposta PME III gerada');
+    else if (!af.cliente?.completed || !af.corretora?.completed) falta.push('Proposta PME III assinada (representante legal e Nossa Broker)');
+  }
+  if (etapa === 'conferencia') {
+    const pme = fichaPmeDoCard(c);
+    const r = resumoDoCardParaFicha(c);
+    const naProposta = Number((pme && pme.propostaAdesao && pme.propostaAdesao.qtdeVidas) || 0);
+    if (pme && naProposta && naProposta !== r.vidas)
+      falta.push(`Proposta PME III desatualizada: ${naProposta} vida(s) na proposta, ${r.vidas} no card`);
+    if (!card.some((x) => x.layoutConferidoEm)) falta.push('Layout da Unimed conferido');
+  }
+  if (etapa === 'enviado') {
+    if (!card.some((x) => x.emailAdministradoraEnviadoEm)) falta.push('E-mail da implantação enviado para a Unimed');
+  }
+  return falta;
+}
+function mostrarPendencias(titulo, falta) {
+  const unicas = [...new Set(falta)];
+  openModalHTML(`<div class="modal modal-small"><div class="modal-head"><div class="mh-info"><div class="mh-name">${titulo}</div><div class="mh-sub">Só avança com a etapa 100% concluída</div></div><button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button></div><div class="modal-body">
+    <div style="font-size:12.5px;margin-bottom:8px;">Falta ${unicas.length === 1 ? '1 item' : `${unicas.length} itens`}:</div>
+    <ul style="margin:0;padding-left:18px;font-size:12.5px;line-height:1.7;">${unicas.slice(0, 40).map((f) => `<li>${escHist(f)}</li>`).join('')}</ul>
+    ${unicas.length > 40 ? `<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">… e mais ${unicas.length - 40}.</div>` : ''}
+  </div><div class="modal-foot"><button class="btn-primary" onclick="renderClientModal()">Entendi</button></div></div>`);
+}
+function moverCardParaEtapa(c, etapaId) {
+  // a etapa é do card inteiro: todos os titulares da mesma empresa andam juntos
+  titularesDoMesmoCard(c).forEach((x) => {
+    x.etapaAdesao = etapaId;
+    if (etapaId === 'ativo') x.status = 'ativo';
+  });
+}
+
 async function concluirEtapaImplantacao() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   if (!c) return;
-  const idx = ADESAO_STAGES.findIndex((s) => s.id === c.etapaAdesao);
+  const idx = ADESAO_STAGES.findIndex((st) => st.id === c.etapaAdesao);
   if (idx < 0 || idx >= ADESAO_STAGES.length - 1) {
     toast('Esta já é a última etapa.');
     return;
   }
   const atual = ADESAO_STAGES[idx];
   const proxima = ADESAO_STAGES[idx + 1];
-  c.etapasConcluidas = c.etapasConcluidas || {};
-  c.etapasConcluidas[atual.id] = nowISO();
-  c.etapaAdesao = proxima.id;
-  ACTIVE_PERSON_TAB = proxima.id;
-  c.historico.push({
-    data: nowISO(),
-    texto: `Etapa "${atual.label}" concluída. Avançou para "${proxima.label}".`,
+  const falta = pendenciasDaEtapa(c, atual.id);
+  if (falta.length) {
+    mostrarPendencias(`${atual.label}: ainda não está 100%`, falta);
+    return;
+  }
+  titularesDoMesmoCard(c).forEach((x) => {
+    x.etapasConcluidas = x.etapasConcluidas || {};
+    x.etapasConcluidas[atual.id] = nowISO();
   });
+  moverCardParaEtapa(c, proxima.id);
+  ACTIVE_PERSON_TAB = proxima.id;
+  c.historico.push({ data: nowISO(), texto: `Etapa "${atual.label}" concluída (100%). Avançou para "${proxima.label}".` });
   await persist();
   renderClientModal();
   toast(`✓ ${atual.label} concluída. Próxima etapa: ${proxima.label}.`);
@@ -10749,17 +11420,23 @@ async function concluirEtapaImplantacao() {
 
 async function setEtapaAdesao(stageId) {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
-  c.etapaAdesao = stageId;
+  if (!c) return;
+  const de = ADESAO_STAGES.findIndex((st) => st.id === c.etapaAdesao);
+  const para = ADESAO_STAGES.findIndex((st) => st.id === stageId);
+  if (para > de) {
+    const falta = [];
+    for (let i = Math.max(0, de); i < para; i++) {
+      pendenciasDaEtapa(c, ADESAO_STAGES[i].id).forEach((f) => falta.push(`${ADESAO_STAGES[i].short}: ${f}`));
+    }
+    if (falta.length) {
+      mostrarPendencias(`Não dá pra pular para "${stageLabel(stageId)}"`, falta);
+      return;
+    }
+  }
+  moverCardParaEtapa(c, stageId);
   ACTIVE_PERSON_TAB = stageId;
-  if (stageId === 'ativo') c.status = 'ativo';
-  c.historico.push({
-    data: nowISO(),
-    texto: `Etapa da adesão alterada para "${stageLabel(stageId)}".`,
-  });
-  await registrarLog(
-    'Etapa da adesão alterada',
-    `${c.titular.razaoSocial || c.titular.nome} → ${stageLabel(stageId)}`
-  );
+  c.historico.push({ data: nowISO(), texto: `Etapa da adesão alterada para "${stageLabel(stageId)}".` });
+  await registrarLog('Etapa da adesão alterada', `${c.titular.razaoSocial || c.titular.nome} → ${stageLabel(stageId)}`);
   await persist();
   renderClientModal();
 }
@@ -22820,6 +23497,14 @@ function openUserModal(id) {
             : ''
         }
 
+        <div class="modal-section-title" style="margin-top:22px;">Vendas pelas CDLs</div>
+        <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 10px;">Marque por quais CDLs esta pessoa vende. Na implantação, só aparecem os vendedores da CDL escolhida.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:8px 16px;">${garantirCdls()
+          .map((d) => `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;"><input type="checkbox" id="us_cdl_${d.id}" ${(u.cdlIds || []).includes(d.id) ? 'checked' : ''}/> ${escHist(d.nome)} <span style="color:var(--text-faint);font-size:11px;">(${d.matriz === 'FCDL' ? 'FCDL' : 'CDL Mossoró'})</span></label>`)
+          .join('')}</div>
+        <div class="fg" style="margin-top:12px;max-width:260px;"><label>Percentual nas vendas CDL Mossoró (%)</label><input id="us_pctCdl" type="number" min="0" max="100" step="0.5" value="${u.percentualCdlMossoro ?? 35}"/></div>
+        <p style="font-size:11px;color:var(--text-faint);margin-top:4px;">No FCDL o vendedor recebe sempre 20% da adesão. Na CDL Mossoró, a Nossa Corretora fica com o restante.</p>
+
         <div id="permBlock" style="margin-top:18px;${u.papel !== 'atendente' ? 'display:none;' : ''}">
           <div style="font-size:11px;font-weight:800;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;">Permissões (Atendente)</div>
           ${MODULOS.map(
@@ -22888,6 +23573,10 @@ async function saveUser(id) {
     conta: document.getElementById('us_conta').value.trim(),
     pixTipo: document.getElementById('us_pixTipo').value,
     pixChave: document.getElementById('us_pixChave').value.trim(),
+    cdlIds: garantirCdls()
+      .filter((d) => document.getElementById(`us_cdl_${d.id}`)?.checked)
+      .map((d) => d.id),
+    percentualCdlMossoro: Math.min(100, Math.max(0, Number(document.getElementById('us_pctCdl')?.value) || 35)),
   };
 
   const permissoes = {};
