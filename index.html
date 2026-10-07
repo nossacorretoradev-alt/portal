@@ -8968,6 +8968,408 @@ async function confirmarImportacaoVidas() {
   toast(`✓ Importado: ${novos} titular(es) novo(s), ${atualizados} atualizado(s).`);
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// IMPLANTAÇÃO — resumo das pessoas (PDF) e página de conferência da Unimed.
+// O portal monta o "pacote" (lista de arquivos do card) e um link com token;
+// a página pública mostra tudo e baixa. Os arquivos são entregues por uma
+// função do servidor, com links que expiram.
+// ═══════════════════════════════════════════════════════════════════════
+const PORTAL_PACOTE_URL = new URL('unimed-conferencia.html', location.href).href;
+function anexoDoCard(c, nome) {
+  for (const x of titularesDoMesmoCard(c)) {
+    const a = (x.titular.anexos || []).find((y) => y.nome === nome);
+    if (a) return { x, a };
+  }
+  return null;
+}
+async function dataUrlParaStorage(url, caminho) {
+  if (!url || !String(url).startsWith('data:')) return url;
+  try {
+    const blob = await (await fetch(url)).blob();
+    return await uploadArquivoPortal(blob, caminho, blob.type || 'application/pdf');
+  } catch (e) {
+    return '';
+  }
+}
+
+// ─── Resumo das pessoas (PDF) ─────────────────────────────────────────────
+async function gerarResumoPessoas(c, silencioso) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape' });
+  const emp = getEmpresaDoCliente(c) || {};
+  const card = titularesDoMesmoCard(c);
+  const r = resumoDoCardParaFicha(c);
+  const venda = vendaDoCard(c);
+  const cdl = cdlPorId(venda.cdlId);
+  let y = 16;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text('Resumo das pessoas — implantação Unimed', 14, y);
+  y += 7;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.text(`${emp.razaoSocial || ''} · CNPJ ${maskCnpj(emp.cnpj || '')} · vigência ${vigenciaDoCard(c) ? fmtDate(vigenciaDoCard(c)) : '—'} · ${venda.matriz === 'FCDL' ? `FCDL · ${cdl ? cdl.nome : ''}` : 'CDL Mossoró'}`, 14, y);
+  y += 5;
+  doc.text(`${card.length} titular(es) · ${r.vidas} vida(s) · total ${formatBRL(r.total)}/mês · gerado em ${new Date().toLocaleString('pt-BR')}`, 14, y);
+  y += 7;
+  const cols = [
+    ['Nome', 14, 70],
+    ['Tipo', 86, 28],
+    ['CPF', 116, 30],
+    ['Nascimento', 148, 24],
+    ['Plano', 174, 62],
+    ['Valor/mês', 238, 26],
+    ['Repic', 266, 16],
+  ];
+  const cabecalho = () => {
+    doc.setFillColor(0, 4, 45);
+    doc.rect(12, y - 4.5, 272, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    cols.forEach(([t, x]) => doc.text(t, x, y));
+    doc.setTextColor(20, 20, 20);
+    doc.setFont('helvetica', 'normal');
+    y += 7;
+  };
+  cabecalho();
+  card.forEach((x) => {
+    const valor = PLAN_VALUES_PORTAL[chavePlanoPorNome(x.planoEscolhido)]?.valor || 0;
+    vidasDoTitular(x).forEach((v) => {
+      if (y > 192) {
+        doc.addPage();
+        y = 16;
+        cabecalho();
+      }
+      const p = v.pessoa;
+      const linha = [
+        doc.splitTextToSize(p.nome || '—', 68)[0],
+        v.key === 'titular' ? 'Titular' : p.parentesco || 'Dependente',
+        p.cpf ? maskCpf(p.cpf) : '—',
+        p.dataNascimento ? fmtDate(p.dataNascimento) : '—',
+        doc.splitTextToSize(x.planoEscolhido || '—', 60)[0],
+        formatBRL(valor),
+        p.repic === true ? 'Sim' : p.repic === false ? 'Não' : '—',
+      ];
+      if (v.key === 'titular') {
+        doc.setDrawColor(220, 224, 230);
+        doc.line(12, y - 4.5, 284, y - 4.5);
+      }
+      doc.setFontSize(8.5);
+      linha.forEach((t, i) => doc.text(String(t), cols[i][1], y));
+      y += 6;
+    });
+  });
+  const blob = doc.output('blob');
+  const slug = (emp.razaoSocial || 'empresa').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  let url;
+  try {
+    url = await uploadArquivoPortal(blob, `implantacao/${slug}-resumo-${uid('r')}.pdf`, 'application/pdf');
+  } catch (e) {
+    url = doc.output('datauristring');
+  }
+  card.forEach((x) => (x.titular.anexos = (x.titular.anexos || []).filter((a) => a.nome !== 'Resumo das pessoas.pdf')));
+  c.titular.anexos = c.titular.anexos || [];
+  c.titular.anexos.push({ id: uid('anx'), nome: 'Resumo das pessoas.pdf', dataUrl: url, criadoEm: nowISO() });
+  c.historico.push({ data: nowISO(), texto: `Resumo das pessoas gerado: ${r.vidas} vida(s).` });
+  await persist();
+  if (!silencioso) {
+    renderClientModal();
+    toast('✓ Resumo das pessoas gerado.');
+  }
+  return url;
+}
+
+// ─── Pacote e página de conferência da Unimed ─────────────────────────────
+function tokenAleatorio() {
+  const b = new Uint8Array(24);
+  crypto.getRandomValues(b);
+  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+}
+function pacoteDoCard(c) {
+  const x = titularesDoMesmoCard(c).find((t) => t.pacoteUnimed && t.pacoteUnimed.token);
+  return (x && x.pacoteUnimed) || null;
+}
+async function montarManifestoPacote(c) {
+  const emp = getEmpresaDoCliente(c) || {};
+  const card = titularesDoMesmoCard(c);
+  const slug = (emp.razaoSocial || 'empresa').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  const arq = async (nome, url, pasta) => {
+    const u = await dataUrlParaStorage(url, `implantacao/${slug}/${pasta}-${uid('f')}.pdf`);
+    return u ? { nome, url: u } : null;
+  };
+  const limpa = (l) => l.filter(Boolean);
+
+  // documentos gerais da implantação
+  const gerais = [];
+  const pme = fichaPmeDoCard(c);
+  if (pme) {
+    const af = pme.assinaturaFicha || {};
+    const a = (pme.titular.anexos || []).find((y) => y.nome === 'Ficha de Adesao Unimed.pdf');
+    gerais.push(await arq('Ficha de adesão (Proposta PME III) assinada', af.cliente?.signedFile || af.corretora?.signedFile || a?.dataUrl, 'proposta'));
+  }
+  let nContrato = 0;
+  let nOrc = 0;
+  for (const x of card) {
+    for (const a of x.anexosLead || []) {
+      if (/contrato|filia/i.test(a.nome)) {
+        nContrato++;
+        gerais.push(await arq(`Ficha de associado da CDL${nContrato > 1 ? ` ${nContrato}` : ''}`, a.dataUrl, 'contrato-cdl'));
+      } else if (/or[cç]amento/i.test(a.nome)) {
+        nOrc++;
+        gerais.push(await arq(`Orçamento${nOrc > 1 ? ` ${nOrc}` : ''}`, a.dataUrl, 'orcamento'));
+      }
+    }
+  }
+  let resumo = anexoDoCard(c, 'Resumo das pessoas.pdf');
+  const urlResumo = resumo ? resumo.a.dataUrl : await gerarResumoPessoas(c, true);
+  gerais.push(await arq('Resumo das pessoas', urlResumo, 'resumo'));
+  // layout da Unimed (planilha) no armazenamento
+  try {
+    const { wb } = montarLayoutUnimedWb(c);
+    const bytes = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellDates: true });
+    const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = await uploadArquivoPortal(blob, `implantacao/${slug}/layout-${uid('l')}.xlsx`, blob.type);
+    gerais.push({ nome: 'Layout da Unimed (planilha)', url });
+  } catch (e) {
+    console.warn('layout no pacote', e);
+  }
+
+  // documentos da empresa
+  const slotsEmp = emp.temPlanoAtivo ? [...DOC_SLOTS_EMPRESA, SLOT_CARTA_PERMANENCIA] : DOC_SLOTS_EMPRESA;
+  const empresa = limpa(await Promise.all(slotsEmp.map((s) => (emp.documentos?.[s.key] ? arq(s.label, emp.documentos[s.key].dataUrl, 'empresa') : null))));
+
+  // cada vida
+  const vidas = [];
+  for (const x of card) {
+    for (const v of vidasDoTitular(x)) {
+      const p = v.pessoa;
+      const ai = p.assinaturaInclusao || {};
+      const ficha = fichaDaVida(v);
+      const docs = limpa(await Promise.all(DOC_SLOTS_PESSOA.map((s) => (p.documentos?.[s.key] ? arq(s.label, p.documentos[s.key].dataUrl, 'pessoa') : null))));
+      const fichaUrl = ai.vida?.signedFile || ai.intermediario?.signedFile || ficha?.dataUrl;
+      if (fichaUrl) docs.unshift(await arq('Ficha de inclusão assinada (Declaração de Saúde + RC)', fichaUrl, 'ficha'));
+      vidas.push({
+        nome: p.nome || '',
+        cpf: p.cpf ? maskCpf(p.cpf) : '',
+        tipo: v.key === 'titular' ? 'Titular' : `Dependente${p.parentesco ? ` · ${p.parentesco}` : ''}`,
+        titular: x.titular.nome || '',
+        plano: x.planoEscolhido || '',
+        documentos: limpa(docs),
+      });
+    }
+  }
+  const r = resumoDoCardParaFicha(c);
+  return {
+    empresa: {
+      razaoSocial: emp.razaoSocial || '',
+      cnpj: maskCnpj(emp.cnpj || ''),
+      vigencia: vigenciaDoCard(c) ? fmtDate(vigenciaDoCard(c)) : '',
+      vidas: r.vidas,
+      total: formatBRL(r.total),
+    },
+    gerais: limpa(gerais),
+    documentosEmpresa: empresa,
+    vidas,
+    montadoEm: nowISO(),
+  };
+}
+async function gerarPacoteUnimed(silencioso) {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  if (!c) return;
+  if (!silencioso) toast('Montando o pacote da Unimed…');
+  try {
+    const manifesto = await montarManifestoPacote(c);
+    const atual = pacoteDoCard(c);
+    const pacote = {
+      token: atual && atual.status === 'ativo' ? atual.token : tokenAleatorio(),
+      criadoEm: atual?.criadoEm || nowISO(),
+      expiraEm: new Date(Date.now() + 30 * 86400000).toISOString(),
+      status: 'ativo',
+      acessos: atual?.acessos || [],
+      manifesto,
+    };
+    titularesDoMesmoCard(c).forEach((x) => (x.pacoteUnimed = pacote));
+    c.historico.push({ data: nowISO(), texto: `Pacote da Unimed ${atual ? 'atualizado' : 'gerado'}: ${manifesto.vidas.length} vida(s), link válido até ${fmtDate(pacote.expiraEm.slice(0, 10))}.` });
+    await persist();
+    renderClientModal();
+    if (!silencioso) toast('✓ Pacote da Unimed pronto.');
+  } catch (e) {
+    console.warn('pacote', e);
+    toast('Não consegui montar o pacote: ' + (e.message || 'tente de novo.'));
+  }
+}
+function linkPacoteUnimed(c) {
+  const p = pacoteDoCard(c);
+  return p && p.status === 'ativo' ? `${PORTAL_PACOTE_URL}?t=${p.token}` : '';
+}
+async function copiarLinkPacote() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const link = linkPacoteUnimed(c);
+  if (!link) return;
+  try {
+    await navigator.clipboard.writeText(link);
+    toast('✓ Link da página da Unimed copiado.');
+  } catch (e) {
+    prompt('Copie o link:', link);
+  }
+}
+async function cancelarPacoteUnimed() {
+  if (!(await showConfirmDialog('Cancelar o link da página da Unimed? Quem tiver o link não conseguirá mais abrir.', { confirmLabel: 'Cancelar link' }))) return;
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  titularesDoMesmoCard(c).forEach((x) => x.pacoteUnimed && (x.pacoteUnimed.status = 'cancelado'));
+  c.historico.push({ data: nowISO(), texto: 'Link da página da Unimed cancelado.' });
+  await persist();
+  renderClientModal();
+}
+
+// ─── E-mail da implantação para a Unimed (Gmail da corretora) ──────────────
+const EMAIL_UNIMED_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/enviar-email-unimed`;
+function configEmailUnimed() {
+  DB.config = DB.config || {};
+  DB.config.emailUnimed = DB.config.emailUnimed || { para: '', cc: '' };
+  return DB.config.emailUnimed;
+}
+async function salvarConfigEmailUnimed(campo, valor) {
+  configEmailUnimed()[campo] = String(valor || '').trim();
+  await persist();
+}
+function montarEmailImplantacao(c) {
+  const p = pacoteDoCard(c);
+  const m = (p && p.manifesto) || {};
+  const e = m.empresa || {};
+  const r = resumoDoCardParaFicha(c);
+  const porPlano = {};
+  r.linhas.forEach((l) => {
+    porPlano[l.plano] = porPlano[l.plano] || { vidas: 0, valor: 0 };
+    porPlano[l.plano].vidas += l.qtd;
+    porPlano[l.plano].valor += l.valor;
+  });
+  const link = linkPacoteUnimed(c);
+  const assunto = `Implantação · ${e.razaoSocial || ''} · CNPJ ${e.cnpj || ''} · vigência ${e.vigencia || ''}`;
+  const linhas = Object.entries(porPlano)
+    .map(([plano, v]) => `<tr><td style="padding:4px 12px 4px 0;">${escHist(plano)}</td><td style="padding:4px 12px 4px 0;">${v.vidas} vida(s)</td><td style="padding:4px 0;">${formatBRL(v.valor)}</td></tr>`)
+    .join('');
+  const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1B2733;">
+    <p>Olá,</p>
+    <p>Segue a documentação para implantação da empresa <b>${escHist(e.razaoSocial || '')}</b> (CNPJ ${escHist(e.cnpj || '')}), vigência <b>${escHist(e.vigencia || '')}</b>.</p>
+    <table style="border-collapse:collapse;font-size:13px;margin:8px 0 4px;">${linhas}</table>
+    <p style="margin-top:4px;"><b>Total: ${r.vidas} vida(s) · ${formatBRL(r.total)}/mês</b></p>
+    <p>Todos os documentos (empresa, fichas de inclusão assinadas de cada vida, documentos pessoais e layout) estão na página de conferência:</p>
+    <p><a href="${link}" style="background:#00042D;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;display:inline-block;">Abrir página de conferência</a></p>
+    <p style="font-size:12px;color:#64748B;">Anexados a este e-mail: ficha de associado da CDL, orçamento, ficha de adesão e resumo das pessoas. Link válido até ${p ? fmtDate(p.expiraEm.slice(0, 10)) : ''}.</p>
+    <p>Atenciosamente,<br>Nossa Corretora</p></div>`;
+  const texto = `Implantação ${e.razaoSocial || ''} (CNPJ ${e.cnpj || ''}), vigência ${e.vigencia || ''}. ${r.vidas} vida(s), ${formatBRL(r.total)}/mês. Página de conferência: ${link}`;
+  const anexos = (m.gerais || [])
+    .filter((a) => /ficha de associado|or[cç]amento|ficha de ades|resumo/i.test(a.nome))
+    .map((a) => ({ nome: a.nome, arquivo: `${a.nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9 ()-]+/g, '').trim()}.pdf`, url: a.url }));
+  return { assunto, html, texto, anexos };
+}
+function abrirEnvioUnimed() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  if (!linkPacoteUnimed(c)) {
+    toast('Monte o pacote da Unimed antes de enviar.');
+    return;
+  }
+  const cfg = configEmailUnimed();
+  if (!cfg.para) {
+    toast('Configure o e-mail da Unimed (campo "Para") antes de enviar.');
+    return;
+  }
+  const em = montarEmailImplantacao(c);
+  openModalHTML(`<div class="modal modal-wide"><div class="modal-head"><div class="mh-info"><div class="mh-name">Enviar implantação para a Unimed</div><div class="mh-sub">Sai da conta Google da corretora</div></div><button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button></div><div class="modal-body">
+    <div style="font-size:12.5px;line-height:1.8;"><b>Para:</b> ${escHist(cfg.para)}${cfg.cc ? `<br><b>Cópia:</b> ${escHist(cfg.cc)}` : ''}<br><b>Assunto:</b> ${escHist(em.assunto)}<br><b>Anexos:</b> ${em.anexos.map((a) => escHist(a.nome)).join(' · ') || 'nenhum'}</div>
+    <div class="dep-card" style="margin-top:12px;">${em.html}</div>
+  </div><div class="modal-foot"><button class="btn-ghost" onclick="renderClientModal()">Cancelar</button><button class="btn-primary" id="btnEnviarUnimed" onclick="enviarImplantacaoUnimed()">${ICONS.mail} Enviar agora</button></div></div>`);
+}
+async function enviarImplantacaoUnimed() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const cfg = configEmailUnimed();
+  const em = montarEmailImplantacao(c);
+  const btn = document.getElementById('btnEnviarUnimed');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Enviando…';
+  }
+  try {
+    const res = await fetch(EMAIL_UNIMED_FUNCTION_URL, {
+      method: 'POST',
+      headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ para: cfg.para, cc: cfg.cc, ...em }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 501 || data.error === 'nao-configurado') {
+      toast('O envio automático pelo Google ainda não foi configurado. Abrindo o envio manual.');
+      openSendAdminEmailModal();
+      return;
+    }
+    if (!res.ok || !data.ok) throw new Error(data.error || 'O e-mail não foi enviado.');
+    const agora = nowISO();
+    titularesDoMesmoCard(c).forEach((x) => (x.emailAdministradoraEnviadoEm = agora));
+    c.historico.push({
+      data: agora,
+      texto: `Implantação enviada para a Unimed (${cfg.para}${cfg.cc ? `, cópia ${cfg.cc}` : ''}): ${data.anexados || 0} anexo(s)${(data.naoAnexados || []).length ? `; ficaram só no link: ${data.naoAnexados.join(', ')}` : ''}.`,
+    });
+    await persist();
+    renderClientModal();
+    toast('✓ E-mail enviado para a Unimed.');
+  } catch (e) {
+    toast(e.message || 'Não foi possível enviar agora.');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `${ICONS.mail} Enviar agora`;
+    }
+  }
+}
+
+function renderImplantacaoNova(c) {
+  const resumo = anexoDoCard(c, 'Resumo das pessoas.pdf');
+  const p = pacoteDoCard(c);
+  const link = linkPacoteUnimed(c);
+  const acessos = (p && p.acessos) || [];
+  const vencido = p && new Date(p.expiraEm) < new Date();
+  return `
+    <div class="modal-section-title">Resumo das pessoas</div>
+    <div class="dep-card" style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="font-size:12.5px;">PDF com todas as vidas, planos e valores.${resumo ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px;">Gerado em ${fmtDateTime(resumo.a.criadoEm)}</div>` : ''}</div>
+      <div style="display:flex;gap:7px;">${resumo ? `<a class="btn-ghost" style="padding:7px 12px;font-size:12px;" target="_blank" href="${resumo.a.dataUrl}">${ICONS.file} Ver</a>` : ''}<button class="btn-ghost" style="padding:7px 12px;font-size:12px;" onclick="gerarResumoPessoas(DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID))">↻ ${resumo ? 'Gerar de novo' : 'Gerar'}</button></div>
+    </div>
+    <div class="modal-section-title">Página de conferência da Unimed</div>
+    <div class="dep-card" style="margin-bottom:16px;">
+      ${
+        !p || p.status !== 'ativo'
+          ? `<div style="font-size:12.5px;margin-bottom:10px;">${p ? 'O link foi cancelado.' : 'A página reúne tudo o que a Unimed precisa ver e baixar.'}</div>
+             <button class="btn-primary" style="padding:8px 14px;font-size:12px;" onclick="gerarPacoteUnimed()">${ICONS.upload} Montar pacote e gerar link</button>`
+          : `<div style="font-size:12.5px;">${p.manifesto.vidas.length} vida(s) · ${p.manifesto.gerais.length + p.manifesto.documentosEmpresa.length} documento(s) da empresa e gerais · montado em ${fmtDateTime(p.manifesto.montadoEm)}</div>
+             <div style="font-size:11.5px;margin-top:4px;color:${vencido ? 'var(--danger)' : 'var(--text-muted)'};">${vencido ? 'Link vencido' : 'Link válido até'} ${fmtDate(p.expiraEm.slice(0, 10))} · ${acessos.length ? `Unimed abriu ${acessos.length}x (última: ${fmtDateTime(acessos[acessos.length - 1])})` : 'ainda não foi aberto'}</div>
+             <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;">
+               <a class="btn-primary" style="padding:7px 12px;font-size:12px;" target="_blank" href="${link}">Abrir página</a>
+               <button class="btn-ghost" style="padding:7px 12px;font-size:12px;" onclick="copiarLinkPacote()">Copiar link</button>
+               <button class="btn-ghost" style="padding:7px 12px;font-size:12px;" onclick="gerarPacoteUnimed()">↻ Atualizar pacote (e renovar 30 dias)</button>
+               <button class="btn-danger" style="padding:7px 12px;font-size:12px;" onclick="cancelarPacoteUnimed()">Cancelar link</button>
+             </div>`
+      }
+    </div>
+    <div class="modal-section-title">Envio para a Unimed</div>
+    <div class="dep-card">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12.5px;">Status do envio: ${statusEmailImplantacao(c)}</div>
+      ${
+        isAdmin()
+          ? `<div class="field-grid" style="margin-bottom:12px;">
+        <div class="fg"><label>E-mail da Unimed (Para)</label><input value="${escHist(configEmailUnimed().para)}" placeholder="implantacao@unimed..." onchange="salvarConfigEmailUnimed('para', this.value)"></div>
+        <div class="fg"><label>Cópia (opcional, separe com vírgula)</label><input value="${escHist(configEmailUnimed().cc)}" onchange="salvarConfigEmailUnimed('cc', this.value)"></div>
+      </div>`
+          : `<div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">Para: ${escHist(configEmailUnimed().para || 'não configurado (peça ao administrador)')}</div>`
+      }
+      <button class="btn-primary" onclick="${link ? 'abrirEnvioUnimed()' : 'gerarPacoteUnimed()'}">${ICONS.mail} ${link ? 'Enviar implantação para a Unimed' : 'Monte o pacote antes de enviar'}</button>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-top:10px;">O e-mail leva o link da página e, anexados, a ficha de associado da CDL, o orçamento, a ficha de adesão e o resumo das pessoas.</p>
+    </div>`;
+}
+function statusEmailImplantacao(c) {
+  const x = titularesDoMesmoCard(c).find((t) => t.emailAdministradoraEnviadoEm);
+  return x ? `<span class="status-pill ativo">✓ Enviado em ${fmtDateTime(x.emailAdministradoraEnviadoEm)}</span>` : '<span class="status-pill inativo">Ainda não enviado</span>';
+}
+
 // ─── Conteúdo das abas na jornada de 5 etapas ─────────────────────────────
 function montarConteudoAba(c, aba, conteudo) {
   if (aba === 'nova') {
@@ -9321,18 +9723,7 @@ function renderClientModal() {
   } else if (ABA === 'anexos') {
     tabContent = renderAbaAnexos(c);
   } else if (ABA === 'enviado') {
-    const aditivoFeito = temAnexoChamado(c, 'Aditivo RC.pdf');
-    tabContent = `
-      <div class="doc-actions-grid" style="margin-bottom:16px;">
-        <button type="button" class="doc-action-card" onclick="exportarLayoutUnimed()"><span class="doc-icon">${ICONS.upload}</span><span class="doc-text">Layout Unimed (.xlsx)<small>Gerar e revisar antes do envio</small></span></button>
-      </div>
-      <div style="margin-bottom:16px;">${aditivoFeito ? `<span class="status-pill ativo">✓ Aditivo já gerado</span>` : `<span class="status-pill inativo">Aditivo ainda não gerado</span>`}</div>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
-        <span style="font-size:12.5px;color:var(--text-muted);">Status do envio:</span> ${emailStatusInline}
-      </div>
-      <button class="btn-primary" onclick="openSendAdminEmailModal()">${ICONS.mail} Enviar implantação para Unimed</button>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-top:14px;">O envio deve incluir a ficha Unimed, o layout e todos os anexos do lead. Confira o pacote completo antes de enviar.</p>
-    `;
+    tabContent = renderImplantacaoNova(c);
   }
 
   const stageIdx = ADESAO_STAGES.findIndex((s) => s.id === c.etapaAdesao);
@@ -10340,9 +10731,7 @@ function enderecoParaLayout(x) {
   };
 }
 
-async function exportarLayoutUnimed() {
-  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
-  if (!c) return;
+function montarLayoutUnimedWb(c) {
   const card = titularesDoMesmoCard(c);
   const avisos = [];
   // data de adesão = data de vigência (escolhida no Cadastro / ficha de adesão)
@@ -10412,6 +10801,15 @@ async function exportarLayoutUnimed() {
   ws['!cols'] = header.map(() => ({ wch: 18 }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Plan1');
+  return { wb, rows, avisos: [...new Set(avisos)], card, vidas };
+}
+
+async function exportarLayoutUnimed() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  if (!c) return;
+  const { wb, avisos: avisosLista, card, vidas } = montarLayoutUnimedWb(c);
+  const avisos = avisosLista;
+  const rows = null;
   const emp = getEmpresaDoCliente(c) || {};
   const nomeArquivo = `layout-unimed-${(emp.razaoSocial || c.titular.razaoSocial || 'empresa').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}.xlsx`;
   XLSX.writeFile(wb, nomeArquivo, { cellDates: true });
