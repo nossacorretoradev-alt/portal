@@ -6394,8 +6394,6 @@ function migrateClientShape(c) {
   c.anexosLead = c.anexosLead || [];
   c.documentUploadRequests = c.documentUploadRequests || [];
   if (ETAPA_ANTIGA_PARA_NOVA[c.etapaAdesao]) c.etapaAdesao = ETAPA_ANTIGA_PARA_NOVA[c.etapaAdesao];
-  corrigirEstadoCivilAntigo(c.titular);
-  (c.dependentes || []).forEach(corrigirEstadoCivilAntigo);
   // assinatura antiga "da família" (uma ficha por titular) passa a ser a do titular
   if (c.assinaturaInclusao) {
     if (!c.titular.assinaturaInclusao)
@@ -7882,17 +7880,11 @@ async function adicionarTitularNaEmpresa(empresaId) {
   const titularesExistentes = getTitularesDaEmpresa(empresaId);
   const etapaDaEmpresa =
     titularesExistentes.length > 0 ? titularesExistentes[0].etapaAdesao || 'nova' : 'nova';
-  const ref = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID && x.empresaId === empresaId) || titularesExistentes[0] || {};
   const c = {
     id: uid('cli'),
     status: 'ativo',
     origemSite: false,
-    etapaAdesao: ref.etapaAdesao || etapaDaEmpresa,
-    numeroLead: ref.numeroLead,
-    venda: ref.venda ? { ...ref.venda } : undefined,
-    dataVigencia: ref.dataVigencia || '',
-    associadoValidado: !!ref.associadoValidado,
-    vendedorTravado: !!ref.vendedorTravado,
+    etapaAdesao: etapaDaEmpresa,
     pendencia: {
       ativa: false,
       motivo: '',
@@ -7906,14 +7898,13 @@ async function adicionarTitularNaEmpresa(empresaId) {
       celular: '',
       email: '',
       cargo: '',
-      _ec2: true,
       razaoSocial: emp.razaoSocial,
       cnpj: emp.cnpj,
       anexos: [],
     },
     dependentes: [],
     planoEscolhido: '',
-    vendedores: (ref.vendedores || []).map((v) => ({ vendedorId: v.vendedorId, percentual: v.percentual, pagamentos: [] })),
+    vendedores: [],
     comissoes: [],
     historico: [
       {
@@ -8709,265 +8700,6 @@ function secoesCadastroVenda(c) {
     <div class="modal-section-title" style="margin-top:18px;">Dados da empresa</div>`;
 }
 
-// ─── Pessoas: códigos e campos da Unimed ──────────────────────────────────
-const ESTADO_CIVIL_UNIMED = [
-  ['1', 'Solteiro(a)'],
-  ['2', 'Casado(a)'],
-  ['3', 'Divorciado(a)'],
-  ['4', 'Desquitado(a)'],
-  ['5', 'Viúvo(a)'],
-  ['6', 'Separado(a)'],
-  ['7', 'União estável / concubinato'],
-  ['9', 'Outros'],
-];
-const PARENTESCOS = ['Cônjuge', 'Companheiro(a)', 'Filho(a)', 'Enteado(a)', 'Pai / Mãe', 'Outro'];
-// antes, o sistema gravava 4 = viúvo e 5 = união estável; converte uma vez só
-function corrigirEstadoCivilAntigo(pessoa) {
-  if (!pessoa || pessoa._ec2) return;
-  if (pessoa.estadoCivil === '4') pessoa.estadoCivil = '5';
-  else if (pessoa.estadoCivil === '5') pessoa.estadoCivil = '7';
-  pessoa._ec2 = true;
-}
-function selectRepic(onchange, valor) {
-  const v = valor === true ? 'sim' : valor === false ? 'nao' : '';
-  return `<select onchange="${onchange}"><option value="" ${v === '' ? 'selected' : ''}>Definir…</option><option value="nao" ${v === 'nao' ? 'selected' : ''}>Não</option><option value="sim" ${v === 'sim' ? 'selected' : ''}>Sim (não gera comissão)</option></select>`;
-}
-async function setRepic(clientId, quem, valor) {
-  const c = DB.clients.find((x) => x.id === clientId);
-  if (!c) return;
-  const pessoa = quem === 'titular' ? c.titular : c.dependentes[quem];
-  if (!pessoa) return;
-  pessoa.repic = valor === 'sim' ? true : valor === 'nao' ? false : undefined;
-  c.historico.push({ data: nowISO(), texto: `${pessoa.nome || 'Pessoa sem nome'}: repic ${valor === 'sim' ? 'sim' : valor === 'nao' ? 'não' : 'não definido'}.` });
-  await persist();
-}
-function blocoResidencia(x) {
-  const r = x.titular.residencia || {};
-  const f = (campo, rotulo, extra = '') =>
-    `<div class="fg"><label>${rotulo}</label><input value="${escHist(r[campo] || '')}" ${extra} onchange="setResidencia('${x.id}','${campo}',this.value)"/></div>`;
-  return `
-    <div class="modal-section-title" style="margin-top:16px;">Endereço residencial <span style="font-weight:500;text-transform:none;color:var(--text-muted);">(vai no layout da Unimed; os dependentes usam o mesmo)</span></div>
-    <div class="field-grid">
-      <div class="fg"><label>CEP</label><input value="${escHist(r.cep ? maskCep(r.cep) : '')}" oninput="this.value=maskCep(this.value)" onchange="buscarCepResidencia('${x.id}', this.value)"/></div>
-      ${f('endereco', 'Endereço')}
-    </div>
-    <div class="field-grid" style="margin-top:10px;">${f('numero', 'Número')}${f('complemento', 'Complemento')}</div>
-    <div class="field-grid" style="margin-top:10px;">${f('bairro', 'Bairro')}<div class="fg" style="display:grid;grid-template-columns:1fr 70px;gap:8px;"><div><label>Cidade</label><input value="${escHist(r.cidade || '')}" onchange="setResidencia('${x.id}','cidade',this.value)"/></div><div><label>UF</label><input value="${escHist(r.uf || '')}" maxlength="2" onchange="setResidencia('${x.id}','uf',this.value.toUpperCase())"/></div></div></div>`;
-}
-async function setResidencia(clientId, campo, valor) {
-  const c = DB.clients.find((x) => x.id === clientId);
-  if (!c) return;
-  c.titular.residencia = c.titular.residencia || {};
-  c.titular.residencia[campo] = campo === 'cep' ? onlyDigits(valor) : String(valor || '').trim();
-  await persist();
-}
-async function buscarCepResidencia(clientId, cep) {
-  const c = DB.clients.find((x) => x.id === clientId);
-  if (!c) return;
-  const d = onlyDigits(cep);
-  c.titular.residencia = c.titular.residencia || {};
-  const r = c.titular.residencia;
-  r.cep = d;
-  if (d.length === 8) {
-    try {
-      const j = await (await fetch(`https://viacep.com.br/ws/${d}/json/`)).json();
-      if (!j.erro) {
-        r.endereco = j.logradouro || r.endereco || '';
-        r.bairro = j.bairro || r.bairro || '';
-        r.cidade = j.localidade || r.cidade || '';
-        r.uf = j.uf || r.uf || '';
-      }
-    } catch (e) {}
-  }
-  await persist();
-  renderClientModal();
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// IMPORTAR VIDAS — planilha no modelo do layout da Unimed (o mesmo que o
-// sistema exporta). A coluna TITULAR liga cada dependente à família; GRAU
-// PARENTESCO 11 = titular, 12 = dependente. Mostra uma prévia antes de gravar.
-// ═══════════════════════════════════════════════════════════════════════
-let __importVidas = null;
-function chaveColuna(k) {
-  return String(k || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
-}
-function nomeComparavel(v) {
-  return String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z ]+/g, ' ').replace(/\s+/g, ' ').trim();
-}
-function cpfDaPlanilha(v) {
-  let d = onlyDigits(String(v == null ? '' : v));
-  if (d && d.length < 11) d = d.padStart(11, '0'); // o Excel tira o zero da frente
-  return d;
-}
-function dataDaPlanilha(v) {
-  if (!v) return '';
-  if (v instanceof Date && !isNaN(v)) return isoData(v);
-  if (typeof v === 'number') return isoData(new Date(Math.round((v - 25569) * 86400000) + 43200000));
-  const m = String(v).trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
-  const m2 = String(v).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m2 ? `${m2[1]}-${m2[2]}-${m2[3]}` : '';
-}
-function planoDaPlanilha(v) {
-  const t = String(v || '').toUpperCase().replace(/\s+/g, '');
-  const chave = /C-?A$|APART/.test(t) ? 'greenApt' : /GREEN|C-?E$|ENFERM/.test(t) ? 'greenEnf' : /ESSENCIAL/.test(t) ? 'essencial' : '';
-  return chave && PLAN_VALUES_PORTAL[chave] ? PLAN_VALUES_PORTAL[chave].nome : '';
-}
-function cidadeDaPlanilha(v) {
-  const n = Number(v);
-  if (n) {
-    const achado = RN_CITIES_IBGE.find(([cod]) => Number(cod) === n);
-    return achado ? achado[1] : '';
-  }
-  return String(v || '').trim();
-}
-
-async function importarPlanilhaVidas(event) {
-  const file = event.target.files && event.target.files[0];
-  event.target.value = '';
-  if (!file) return;
-  try {
-    const wb = XLSX.read(await file.arrayBuffer(), { cellDates: true });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const linhas = XLSX.utils.sheet_to_json(ws, { defval: '', raw: true }).map((r) => {
-      const o = {};
-      Object.keys(r).forEach((k) => (o[chaveColuna(k)] = r[k]));
-      return o;
-    });
-    const validas = linhas.filter((r) => String(r['NOME'] || '').trim());
-    if (!validas.length) {
-      toast('Não achei vidas na planilha. Use o modelo do layout da Unimed (colunas NOME, TITULAR, CPF…).');
-      return;
-    }
-    const pessoaDe = (r) => ({
-      nome: String(r['NOME']).trim(),
-      cpf: cpfDaPlanilha(r['CPF']),
-      dataNascimento: dataDaPlanilha(r['DATA NASC']),
-      estadoCivil: r['ESTADO CIVIL'] !== '' ? String(r['ESTADO CIVIL']) : '',
-      sexo: String(r['SEXO'] || '').trim().toUpperCase().slice(0, 1),
-      nomeMae: String(r['NOME DA MAE'] || '').trim(),
-      email: String(r['EMAIL'] || '').trim(),
-      celular: onlyDigits(String(r['CELULAR'] || '')),
-      _ec2: true,
-    });
-    const familias = [];
-    validas.forEach((r) => {
-      const ehTitular = String(r['GRAU PARENTESCO']).trim() === '11' || nomeComparavel(r['NOME']) === nomeComparavel(r['TITULAR']) || !String(r['TITULAR'] || '').trim();
-      if (ehTitular) {
-        familias.push({
-          chave: nomeComparavel(r['NOME']),
-          titular: pessoaDe(r),
-          plano: planoDaPlanilha(r['PLANO']),
-          residencia: {
-            cep: onlyDigits(String(r['CEP'] || '')),
-            endereco: String(r['ENDERECO'] || '').trim(),
-            numero: String(r['NUMERO'] || '').trim(),
-            complemento: String(r['COMPLEMENTO'] || '').trim(),
-            bairro: String(r['BAIRRO'] || '').trim(),
-            cidade: cidadeDaPlanilha(r['CIDADE']),
-            uf: String(r['ESTADO'] || '').trim().toUpperCase(),
-          },
-          dependentes: [],
-        });
-      }
-    });
-    const semFamilia = [];
-    validas.forEach((r) => {
-      const ehTitular = familias.some((f) => f.titular.nome === String(r['NOME']).trim() && f.chave === nomeComparavel(r['NOME']));
-      if (ehTitular) return;
-      const fam = familias.find((f) => f.chave === nomeComparavel(r['TITULAR']));
-      if (fam) fam.dependentes.push(pessoaDe(r));
-      else semFamilia.push(String(r['NOME']).trim());
-    });
-    const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
-    const card = titularesDoMesmoCard(c);
-    familias.forEach((f) => {
-      f.existente =
-        card.find((x) => f.titular.cpf && onlyDigits(x.titular.cpf || '') === f.titular.cpf) ||
-        card.find((x) => nomeComparavel(x.titular.nome) === f.chave) ||
-        null;
-    });
-    __importVidas = { familias, semFamilia };
-    const totalDep = familias.reduce((n, f) => n + f.dependentes.length, 0);
-    openModalHTML(`<div class="modal modal-wide"><div class="modal-head"><div class="mh-info"><div class="mh-name">Importar vidas da planilha</div><div class="mh-sub">${escHist(file.name)} · ${familias.length} titular(es) · ${totalDep} dependente(s)</div></div><button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button></div><div class="modal-body">
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">Confira antes de gravar. Titulares que já existem no card são atualizados (pelo CPF ou pelo nome); os outros entram como titulares novos. O grau de parentesco dos dependentes não vem no layout: escolha depois, na aba Pessoas.</div>
-      ${familias
-        .map(
-          (f) => `<div class="dep-card" style="margin-bottom:8px;font-size:12.5px;"><b>${escHist(f.titular.nome)}</b> <span class="status-pill ${f.existente ? 'inativo' : 'ativo'}" style="margin-left:6px;">${f.existente ? 'atualiza' : 'novo'}</span>
-          <div style="color:var(--text-muted);font-size:11.5px;margin-top:3px;">${f.plano || 'plano não reconhecido'} · CPF ${f.titular.cpf ? maskCpf(f.titular.cpf) : '—'} · ${f.residencia.cidade || 'sem cidade'}${f.dependentes.length ? ` · dependentes: ${f.dependentes.map((d) => escHist(d.nome)).join(', ')}` : ''}</div></div>`
-        )
-        .join('')}
-      ${semFamilia.length ? `<div class="pendencia-banner" style="margin-top:10px;">⚠️ Sem titular correspondente na planilha (não serão importados): ${semFamilia.map(escHist).join(', ')}</div>` : ''}
-    </div><div class="modal-foot"><button class="btn-ghost" onclick="renderClientModal()">Cancelar</button><button class="btn-primary" onclick="confirmarImportacaoVidas()">${ICONS.check} Importar ${familias.length + totalDep} vida(s)</button></div></div>`);
-  } catch (e) {
-    console.warn(e);
-    toast('Não consegui ler a planilha. Confira se é um .xlsx no modelo do layout da Unimed.');
-  }
-}
-
-async function confirmarImportacaoVidas() {
-  const imp = __importVidas;
-  if (!imp) return;
-  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
-  const emp = getEmpresaDoCliente(c);
-  let novos = 0;
-  let atualizados = 0;
-  const preencher = (alvo, dados) =>
-    Object.entries(dados).forEach(([k, v]) => {
-      if (v !== '' && v != null) alvo[k] = v;
-    });
-  for (const f of imp.familias) {
-    let x = f.existente;
-    if (!x) {
-      x = {
-        id: uid('cli'),
-        status: 'ativo',
-        origemSite: false,
-        etapaAdesao: c.etapaAdesao,
-        numeroLead: c.numeroLead,
-        venda: c.venda ? { ...c.venda } : undefined,
-        dataVigencia: c.dataVigencia || '',
-        associadoValidado: !!c.associadoValidado,
-        vendedorTravado: !!c.vendedorTravado,
-        pendencia: { ativa: false, motivo: '' },
-        empresaId: c.empresaId,
-        titular: { codigoVida: uid('vida'), razaoSocial: emp.razaoSocial, cnpj: emp.cnpj, anexos: [] },
-        dependentes: [],
-        planoEscolhido: '',
-        vendedores: (c.vendedores || []).map((v) => ({ vendedorId: v.vendedorId, percentual: v.percentual, pagamentos: [] })),
-        comissoes: [],
-        historico: [],
-        criadoEm: nowISO(),
-      };
-      DB.clients.push(x);
-      novos++;
-    } else atualizados++;
-    preencher(x.titular, f.titular);
-    x.titular.residencia = { ...(x.titular.residencia || {}) };
-    preencher(x.titular.residencia, f.residencia);
-    if (f.plano) x.planoEscolhido = f.plano;
-    f.dependentes.forEach((d) => {
-      let dep =
-        x.dependentes.find((e) => d.cpf && onlyDigits(e.cpf || '') === d.cpf) ||
-        x.dependentes.find((e) => nomeComparavel(e.nome) === nomeComparavel(d.nome));
-      if (!dep) {
-        dep = { id: uid('dep'), codigoVida: uid('vida'), parentesco: '', anexos: [] };
-        x.dependentes.push(dep);
-      }
-      preencher(dep, d);
-    });
-    x.historico = x.historico || [];
-    x.historico.push({ data: nowISO(), texto: `Dados importados da planilha (${f.dependentes.length} dependente(s)).` });
-  }
-  __importVidas = null;
-  await persist();
-  ACTIVE_PERSON_TAB = 'pessoas';
-  ACTIVE_PESSOAS_SUB = 'vidas';
-  renderClientModal();
-  toast(`✓ Importado: ${novos} titular(es) novo(s), ${atualizados} atualizado(s).`);
-}
-
 // ─── Conteúdo das abas na jornada de 5 etapas ─────────────────────────────
 function montarConteudoAba(c, aba, conteudo) {
   if (aba === 'nova') {
@@ -9001,8 +8733,6 @@ function navSubPessoas(c) {
     .join('')}</div>`;
 }
 function renderSubAssinaturas(c) {
-  const gerandoPme = pmePrecisaGerarSozinha(c);
-  if (gerandoPme) setTimeout(() => gerarPmeAutomatica(c), 0);
   const vidas = titularesDoMesmoCard(c).flatMap((x) => vidasDoTitular(x));
   const fichas = vidas.filter((v) => fichaDaVida(v)).length;
   const pme = fichaPmeDoCard(c);
@@ -9011,7 +8741,6 @@ function renderSubAssinaturas(c) {
       <button type="button" class="doc-action-card" onclick="openFichasInclusaoModal()"><span class="doc-icon">${ICONS.clipboard}</span><span class="doc-text">Fichas de inclusão (uma por vida)<small>${fichas ? `✓ ${fichas} de ${vidas.length} gerada(s) — clique pra gerar de novo` : `${vidas.length} vida(s) · cada uma assina ao terminar o questionário`}</small></span></button>
       <button type="button" class="doc-action-card" onclick="openFichaUnimedModal()"><span class="doc-icon">${ICONS.clipboard}</span><span class="doc-text">Proposta PME III (último passo)<small>${pme ? '✓ Gerada — clique pra revisar' : 'Gerada com as vidas de cada plano, depois das fichas'}</small></span></button>
     </div>
-    ${gerandoPme ? '<div class="pendencia-banner" style="background:var(--navy-tint);color:var(--navy);border-color:transparent;margin-bottom:14px;">Todas as vidas assinaram: gerando a Proposta PME III…</div>' : ''}
     ${renderAbaAssinatura(c)}`;
 }
 function renderConferenciaNova(c) {
@@ -9129,9 +8858,6 @@ function renderClientModal() {
   } else if (ABA === 'pessoas') {
     const todosTitulares = getTitularesDaEmpresa(c.empresaId);
     tabContent = `
-      <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
-        <label class="btn-ghost" style="padding:7px 12px;font-size:12px;cursor:pointer;">${ICONS.upload} Importar vidas (planilha no modelo do layout)<input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importarPlanilhaVidas(event)"></label>
-      </div>
       <div class="people-company-list">
       ${todosTitulares
         .map((x, idx) => {
@@ -9183,13 +8909,15 @@ function renderClientModal() {
             <div class="fg"><label>Estado civil</label>
               <select onchange="updateTitularCampo('${x.id}','estadoCivil',this.value)">
                 <option value="">Selecione</option>
-                ${ESTADO_CIVIL_UNIMED.map(([cod, nome]) => `<option value="${cod}" ${xt.estadoCivil === cod ? 'selected' : ''}>${nome}</option>`).join('')}
+                <option value="1" ${xt.estadoCivil === '1' ? 'selected' : ''}>Solteiro(a)</option>
+                <option value="2" ${xt.estadoCivil === '2' ? 'selected' : ''}>Casado(a)</option>
+                <option value="3" ${xt.estadoCivil === '3' ? 'selected' : ''}>Divorciado(a)</option>
+                <option value="4" ${xt.estadoCivil === '4' ? 'selected' : ''}>Viúvo(a)</option>
+                <option value="5" ${xt.estadoCivil === '5' ? 'selected' : ''}>União estável</option>
               </select>
             </div>
           </div>
           <div class="fg" style="margin-top:12px;"><label>Nome da mãe</label><input value="${xt.nomeMae || ''}" onchange="updateTitularCampo('${x.id}','nomeMae',this.value)"/></div>
-          <div class="fg" style="margin-top:12px;max-width:340px;"><label>Repic?</label>${selectRepic(`setRepic('${x.id}','titular',this.value)`, xt.repic)}</div>
-          ${blocoResidencia(x)}
           ${xWppLink ? `<a class="wpp-btn" style="margin-top:14px;" href="${xWppLink}" target="_blank">${ICONS.wpp} Chamar titular no WhatsApp</a>` : ''}
 
           <div class="dependents-group">
@@ -9210,7 +8938,7 @@ function renderClientModal() {
                 </div>
                 <div class="field-grid" style="margin-top:10px;">
                   <div class="fg"><label>Data de nascimento</label><input type="date" value="${d.dataNascimento || ''}" onchange="updateDependenteTitular('${x.id}',${i},'dataNascimento',this.value)"/></div>
-                  <div class="fg"><label>Grau de parentesco</label><select onchange="updateDependenteTitular('${x.id}',${i},'parentesco',this.value)"><option value="">Escolha…</option>${PARENTESCOS.concat(d.parentesco && !PARENTESCOS.includes(d.parentesco) ? [d.parentesco] : []).map((pp) => `<option value="${pp}" ${d.parentesco === pp ? 'selected' : ''}>${pp}</option>`).join('')}</select></div>
+                  <div class="fg"><label>Parentesco</label><input value="${d.parentesco || ''}" placeholder="Cônjuge, filho(a)..." onchange="updateDependenteTitular('${x.id}',${i},'parentesco',this.value)"/></div>
                 </div>
                 <div class="field-grid" style="margin-top:10px;">
                   <div class="fg"><label>Sexo</label>
@@ -9222,7 +8950,6 @@ function renderClientModal() {
                   </div>
                   <div class="fg"><label>Nome da mãe</label><input value="${d.nomeMae || ''}" onchange="updateDependenteTitular('${x.id}',${i},'nomeMae',this.value)"/></div>
                 </div>
-                <div class="fg" style="margin-top:10px;max-width:340px;"><label>Repic?</label>${selectRepic(`setRepic('${x.id}',${i},this.value)`, d.repic)}</div>
               </div>
             `
                 )
@@ -11194,149 +10921,6 @@ function atualizarVigenciaFicha(dataISO) {
     info.textContent = `Entrega entre os dias ${fv.faixa.replace('-', ' e ')} → marca essa faixa na ficha.`;
 }
 
-// gera a Proposta PME III com os dados dados e grava no card (usado pelo
-// formulário e pela geração automática)
-async function gerarPmeComDados(c, base, r) {
-    const PDFLib = await carregarPdfLib();
-  const tpl = await carregarModeloPdf('proposta-pme-iii-cdl.pdf');
-  const bytes = await preencherPropostaPMEIII(PDFLib, tpl, base);
-  const blob = new Blob([bytes], { type: 'application/pdf' });
-  let url;
-  try {
-    const slug = (base.empresa || 'empresa')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)/g, '');
-    url = await uploadArquivoPortal(
-      blob,
-      `fichas/${slug}-${uid('ficha')}.pdf`,
-      'application/pdf'
-    );
-  } catch (e) {
-    url = await new Promise((res) => {
-      const fr = new FileReader();
-      fr.onload = () => res(fr.result);
-      fr.readAsDataURL(blob);
-    });
-  }
-    // ficha fica no titular aberto (é a que vai pra assinatura); os dados vão
-  // pra todos os titulares do card, cada um com o próprio plano (layout)
-  r.card.forEach((x) => {
-    x.propostaAdesao = {
-      ...base,
-      produto: PRODUTO_LAYOUT_POR_PLANO[chavePlanoPorNome(x.planoEscolhido)] || 'essencial',
-    };
-  });
-  // uma proposta só por card: tira a versão antiga de qualquer titular
-  r.card.forEach((x) => {
-    x.titular.anexos = (x.titular.anexos || []).filter((a) => a.nome !== 'Ficha de Adesao Unimed.pdf');
-    if (x !== c && x.assinaturaFicha) delete x.assinaturaFicha;
-  });
-  c.titular.anexos.push({
-    id: uid('anx'),
-    nome: 'Ficha de Adesao Unimed.pdf',
-    dataUrl: url,
-    criadoEm: nowISO(),
-  });
-  // nova ficha = assinaturas antigas não valem mais
-  if (c.assinaturaFicha) delete c.assinaturaFicha;
-  c.historico.push({
-    data: nowISO(),
-    texto: `Ficha Unimed (modelo oficial PME III) gerada — ${r.vidas} vida(s), ${formatBRL(r.total)}/mês.`,
-  });
-  return url;
-}
-
-// mesmos padrões do formulário da Proposta PME III, sem precisar abrir a tela
-function dadosPadraoPme(c) {
-  const t = c.titular;
-  const pa = c.propostaAdesao || {};
-  const emp = getEmpresaDoCliente(c) || {};
-  const rep = emp.representante || {};
-  const r = resumoDoCardParaFicha(c);
-  const vig = vigenciaDoCard(c) ? fmtDate(vigenciaDoCard(c)) : pa.dataVigencia || '';
-  const hoje = new Date().toLocaleDateString('pt-BR');
-  const socios = (pa.socios && pa.socios.length ? pa.socios : [{ nome: rep.nome || t.nome || '', tel: rep.telefone || t.celular || '', cpf: rep.cpf || t.cpf || '' }])
-    .filter((x) => x.nome)
-    .map((x) => ({ nome: x.nome, tel: x.tel ? maskPhone(x.tel) : '', cpf: x.cpf ? maskCpf(x.cpf) : '' }));
-  const cep = onlyDigits(pa.cep || emp.cep || '');
-  return {
-    base: {
-      dataEntrega: todayISO(),
-      faixaEntrega: faixaPelaVigencia(vig) || faixaEVigenciaPorData(todayISO()).faixa,
-      dataVigencia: vig,
-      codCorretora: pa.codCorretora || '9410',
-      nomeCorretora: pa.nomeCorretora || 'UCRN',
-      codVendedor: pa.codVendedor || '9410',
-      nomeVendedor: pa.nomeVendedor || 'UCRN',
-      empresa: pa.empresa || emp.razaoSocial || t.razaoSocial || '',
-      cnpj: pa.cnpj || maskCnpj(emp.cnpj || t.cnpj || ''),
-      cep: cep.length === 8 ? cep.replace(/(\d{5})(\d{3})/, '$1-$2') : cep,
-      endereco: pa.endereco || emp.endereco || '',
-      numero: pa.numero || emp.numero || '',
-      complemento: pa.complemento || emp.complemento || '',
-      bairro: pa.bairro || emp.bairro || '',
-      cidade: pa.cidade || emp.cidade || 'Mossoró',
-      uf: (pa.uf || emp.estado || 'RN').toUpperCase(),
-      email: pa.email || emp.email || t.email || '',
-      declaracaoRN432: pa.declaracaoRN432 !== false,
-      socios,
-      qtdeVidas: String(r.vidas),
-      valorTotal: formatBRL(r.total),
-      planos: r.planos,
-      referencia: false,
-      combo: !!pa.combo,
-      comboTipo: pa.comboTipo === 'livre' ? 'livre' : 'compulsoria',
-      aeromedica: pa.aeromedica !== false,
-      local: pa.local || 'Mossoró',
-      dataAssinatura: hoje,
-    },
-    r,
-  };
-}
-
-// Pessoas › Assinaturas: com todas as fichas das vidas assinadas, a Proposta
-// PME III é gerada sozinha e já vai pra assinatura (representante + Nossa Broker)
-const __pmeAutoEmAndamento = {};
-function pmePrecisaGerarSozinha(c) {
-  const vidas = titularesDoMesmoCard(c).flatMap((x) => vidasDoTitular(x));
-  if (!vidas.length) return false;
-  const todasAssinadas = vidas.every((v) => {
-    const ai = v.pessoa.assinaturaInclusao || {};
-    return ai.vida?.completed && ai.intermediario?.completed;
-  });
-  if (!todasAssinadas) return false;
-  if (resumoDoCardParaFicha(c).linhas.some((l) => !l.chave)) return false;
-  const pme = fichaPmeDoCard(c);
-  if (!pme) return true;
-  const enviada = Object.values(pme.assinaturaFicha || {}).some((s) => s?.documentId);
-  const naProposta = Number((pme.propostaAdesao || {}).qtdeVidas || 0);
-  // desatualizada e ainda não enviada pra assinatura: refaz sozinha
-  return !enviada && naProposta !== resumoDoCardParaFicha(c).vidas;
-}
-async function gerarPmeAutomatica(c) {
-  const chave = c.empresaId + ':' + (c.numeroLead || c.id);
-  if (__pmeAutoEmAndamento[chave]) return;
-  __pmeAutoEmAndamento[chave] = true;
-  try {
-    const alvo = fichaPmeDoCard(c) || c;
-    const { base, r } = dadosPadraoPme(alvo);
-    await gerarPmeComDados(alvo, base, r);
-    alvo.historico.push({ data: nowISO(), texto: 'Proposta PME III gerada automaticamente: todas as vidas assinaram as fichas.' });
-    await persist();
-    try {
-      await enviarDocParaAssinatura('pme', alvo.id, '');
-    } catch (e) {}
-    toast('✓ Todas as vidas assinaram: Proposta PME III gerada e enviada pra assinatura.');
-  } catch (e) {
-    console.warn('PME automática', e);
-    toast('Não consegui gerar a Proposta PME III sozinha: ' + (e.message || 'tente pelo botão.'));
-  } finally {
-    __pmeAutoEmAndamento[chave] = false;
-    if (ACTIVE_PERSON_TAB === 'pessoas' && document.getElementById('modalOverlay')?.classList.contains('active')) renderClientModal();
-  }
-}
-
 async function gerarFichaUnimed() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   if (!c) return;
@@ -11394,7 +10978,51 @@ async function gerarFichaUnimed() {
     btn.textContent = 'Gerando ficha...';
   }
   try {
-    const url = await gerarPmeComDados(c, base, r);
+    const PDFLib = await carregarPdfLib();
+    const tpl = await carregarModeloPdf('proposta-pme-iii-cdl.pdf');
+    const bytes = await preencherPropostaPMEIII(PDFLib, tpl, base);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    let url;
+    try {
+      const slug = (base.empresa || 'empresa')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '');
+      url = await uploadArquivoPortal(
+        blob,
+        `fichas/${slug}-${uid('ficha')}.pdf`,
+        'application/pdf'
+      );
+    } catch (e) {
+      url = await new Promise((res) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result);
+        fr.readAsDataURL(blob);
+      });
+    }
+    // ficha fica no titular aberto (é a que vai pra assinatura); os dados vão
+    // pra todos os titulares do card, cada um com o próprio plano (layout)
+    r.card.forEach((x) => {
+      x.propostaAdesao = {
+        ...base,
+        produto: PRODUTO_LAYOUT_POR_PLANO[chavePlanoPorNome(x.planoEscolhido)] || 'essencial',
+      };
+    });
+    c.titular.anexos = (c.titular.anexos || []).filter(
+      (a) => a.nome !== 'Ficha de Adesao Unimed.pdf'
+    );
+    c.titular.anexos.push({
+      id: uid('anx'),
+      nome: 'Ficha de Adesao Unimed.pdf',
+      dataUrl: url,
+      criadoEm: nowISO(),
+    });
+    // nova ficha = assinaturas antigas não valem mais
+    if (c.assinaturaFicha) delete c.assinaturaFicha;
+    c.historico.push({
+      data: nowISO(),
+      texto: `Ficha Unimed (modelo oficial PME III) gerada — ${r.vidas} vida(s), ${formatBRL(r.total)}/mês.`,
+    });
     await persist();
     ACTIVE_PERSON_TAB = __abaRetornoDoc || 'conferencia';
     __abaRetornoDoc = null;
@@ -11722,11 +11350,6 @@ function pendenciasDaEtapa(c, etapa) {
           falta.push(`${quem}: nome, CPF e data de nascimento`);
         if (v.key === 'titular' && !x.planoEscolhido) falta.push(`${quem}: plano escolhido`);
         if (v.key !== 'titular' && !v.pessoa.parentesco) falta.push(`${quem}: grau de parentesco`);
-        if (v.pessoa.repic !== true && v.pessoa.repic !== false) falta.push(`${quem}: definir se é repic`);
-        if (v.key === 'titular') {
-          const r = v.pessoa.residencia || {};
-          if (!r.cep || !r.endereco || !r.cidade) falta.push(`${quem}: endereço residencial`);
-        }
         if (!docsPessoaCompletos(v.pessoa, v.key !== 'titular')) falta.push(`${quem}: documentos conferidos`);
         const sit = situacaoPessoaFicha(v.pessoa);
         if (sit) falta.push(`${quem}: questionário (${sit})`);
