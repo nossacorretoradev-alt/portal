@@ -272,6 +272,12 @@ function listPessoasPublico(c) {
   return VIDA_CODIGO ? todas.filter((p) => p.pessoa.codigoVida === VIDA_CODIGO) : todas;
 }
 
+// link de uma vida: ela é dependente menor de 18 anos? (aí quem responde e
+// assina é o titular). O servidor já manda isso em "menor".
+function vidaDoLinkEhMenor() {
+  return !!(VIDA_CODIGO && CLIENT && CLIENT.menor);
+}
+
 async function boot() {
   const app = document.getElementById('app');
   if (!CLIENT_NUMERO) {
@@ -399,11 +405,17 @@ function frameShell(inner, opts) {
 
 function renderIntro(app) {
   const t = CLIENT.titular;
+  // link de uma vida só: cumprimenta a própria pessoa (menor de idade: quem
+  // responde é o titular, então cumprimenta o titular e diz por quem responde)
+  const vida = VIDA_CODIGO ? (listPessoasPublico(CLIENT)[0] || {}).pessoa : null;
+  const menor = vidaDoLinkEhMenor();
+  const quem = vida && !menor ? vida.nome || t.nome : t.nome;
+  const porQuem = vida && menor && vida.nome ? `<p class="step-sub" style="margin-top:-4px;">Você vai responder por <b>${escHtml(vida.nome)}</b>.</p>` : '';
   app.innerHTML = frameShell(
     `
     <div style="text-align:center;">
       <div class="intro-icon">${ICONS.heart}</div>
-      <h2 class="step-title">Olá${t.nome ? ', ' + t.nome.split(' ')[0] : ''}!</h2>
+      <h2 class="step-title">Olá${quem ? ', ' + escHtml(quem.split(' ')[0]) : ''}!</h2>${porQuem}
       <p class="step-sub">Pra concluir a adesão do plano de saúde da <b>${t.razaoSocial || 'sua empresa'}</b>, precisamos completar mais algumas informações.</p>
       <ul class="checklist">
         <li>${ICONS.check}<span>Leva cerca de 5 a 8 minutos, dependendo de quantas pessoas estão no plano.</span></li>
@@ -951,7 +963,7 @@ async function preencherFichaInclusao(PDFLib, templateBytes, d) {
   centro(p7, mesExtenso, 308, 521, 114);
   centro(p7, ano, 410.5, 521, 62);
 
-  return await pdf.save();
+  return await pdf.save({ objectsPerTick: Infinity }); // sem pausas: em aba de fundo o Chrome atrasa as pausas e a geração travava
 }
 
 const REGISTRO_ANS_POR_PLANO = {
@@ -1064,7 +1076,7 @@ function showProntoParaAssinar() {
   telaAssinatura(`
     <div class="success-icon">${ICONS.check}</div>
     <h2 class="step-title">Falta só assinar</h2>
-    <p class="step-sub">${CLIENT.menor ? `Como <b>${escHtml(((listPessoasPublico(CLIENT)[0] || {}).pessoa || {}).nome || 'o dependente')}</b> é menor de idade, quem assina é o responsável, <b>${escHtml(CLIENT.responsavelNome || '')}</b>.` : 'Suas respostas já foram recebidas.'} Agora vamos gerar a ficha de inclusão da Unimed (Declaração de Saúde e Aditivo de Carência) para assinar pelo celular.</p>
+    <p class="step-sub">${vidaDoLinkEhMenor() ? `Como <b>${escHtml(((listPessoasPublico(CLIENT)[0] || {}).pessoa || {}).nome || 'o dependente')}</b> é menor de idade, quem assina é o responsável, <b>${escHtml(CLIENT.responsavelNome || '')}</b>.` : 'Suas respostas já foram recebidas.'} Agora vamos gerar a ficha de inclusão da Unimed (Declaração de Saúde e Aditivo de Carência) para assinar pelo celular.</p>
     <button class="btn btn-primary" style="width:100%;margin-top:10px;" onclick="iniciarAssinatura()">Gerar e assinar meus documentos</button>
     <button class="btn btn-ghost" style="width:100%;margin-top:8px;" onclick="renderStep()">Revisar minhas respostas</button>`);
 }
