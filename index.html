@@ -2341,6 +2341,8 @@ let __salvamentosPendentes = 0;
 let __ultimoSalvamentoFalhou = false;
 function persist() {
   __salvamentosPendentes++;
+  // algo mudou: a lista/quadro atrás do card é redesenhada quando o card fechar
+  if (document.getElementById('modalOverlay')?.classList.contains('active')) __atualizacaoPendenteNaTela = true;
   const tarefa = __filaPersist.then(persistAgora).finally(() => __salvamentosPendentes--);
   __filaPersist = tarefa.catch(() => {});
   return tarefa;
@@ -3976,7 +3978,7 @@ function openPipelineLeadModal(id, isNew) {
         .join('') || '<div style="font-size:12px;color:var(--text-faint)">Nenhum comentário.</div>'
     }</div>
     <div style="display:flex;gap:8px;margin-top:10px"><input id="pl_comentario" class="search-input" style="flex:1" placeholder="Adicionar comentário..."><button class="btn-ghost" onclick="addPipelineComentario('${l.id}')">Adicionar</button></div>
-    <div class="btn-row">${isAdmin() ? `<button class="btn-danger" onclick="excluirPipelineLead('${l.id}')">${ICONS.trash} Excluir</button>` : ''}<button class="btn-primary" onclick="savePipelineLead('${l.id}')">${ICONS.check} Salvar</button>${l.celular ? `<a class="wpp-btn" target="_blank" href="https://api.whatsapp.com/send?phone=55${onlyDigits(l.celular)}">${ICONS.wpp} WhatsApp</a>` : ''}</div>
+    <div class="btn-row">${isAdmin() && !l.__rascunho ? `<button class="btn-danger" onclick="excluirPipelineLead('${l.id}')">${ICONS.trash} Excluir</button>` : ''}<button class="btn-primary" onclick="savePipelineLead('${l.id}')">${ICONS.check} Salvar</button>${l.celular ? `<a class="wpp-btn" target="_blank" href="https://api.whatsapp.com/send?phone=55${onlyDigits(l.celular)}">${ICONS.wpp} WhatsApp</a>` : ''}</div>
   </div></div>`);
 }
 // Checa se um CNPJ já é associado da CDL (cdl_base ou affiliates) — mesma
@@ -4189,7 +4191,9 @@ function abrirJanelaConferenciaAssociado(id, info) {
       ? 'Aguardando a empresa assinar'
       : comCdl
         ? `Aguardando ${escHist(sig[1].nome || 'a CDL')} assinar (e-mail enviado pela Autentique) · ${decorridos} de ${prazoDias} dia(s)${longo ? '' : cat ? '' : ' (8 dias na categoria de R$ 145)'}${atrasado ? ' · prazo passou' : ''}`
-        : 'Contrato antigo, sem a CDL como assinante: confirme a aprovação manualmente';
+        : !(cdlPorId('cdl_mossoro') || {}).assinanteEmail
+          ? 'A CDL Mossoró ainda não tem quem assina cadastrado (menu CDLs → assina os contratos). Por isso o contrato saiu só com a empresa: confirme a aprovação manualmente'
+          : 'Este contrato saiu sem a CDL como assinante (gerado antes do cadastro de quem assina): confirme a aprovação manualmente';
     corpo = `<div style="display:grid;gap:10px;">
         ${passo(empresaOk ? 'ok' : 'espera', empresaOk ? `Empresa assinou o contrato${quandoEmpresa ? ` · ${fmtDateTime(quandoEmpresa)}` : ''}${contrato?.quem ? ` · ${escHist(contrato.quem)}` : ''}` : 'Empresa ainda não assinou')}
         <div style="${atrasado ? 'color:var(--danger);' : ''}">${passo(empresaOk ? 'espera' : '', txtCdl)}</div>
@@ -6575,7 +6579,9 @@ async function excluirClientePorId(id) {
   if (!c) return false;
   if (
     !(await showConfirmDialog(
-      `Excluir "${c.titular?.razaoSocial || c.titular?.nome}" definitivamente? Essa ação não pode ser desfeita.`
+      titularesDoMesmoCard(c).length > 1
+        ? `Excluir o titular "${c.titular?.nome || 'sem nome'}" e os ${(c.dependentes || []).length} dependente(s) dele do card de ${c.titular?.razaoSocial || 'empresa'}? Os outros titulares continuam. Essa ação não pode ser desfeita.`
+        : `Excluir o card "${c.titular?.razaoSocial || c.titular?.nome}" (titular ${c.titular?.nome || 'sem nome'}) definitivamente? Essa ação não pode ser desfeita.`
     ))
   )
     return false;
@@ -6750,7 +6756,7 @@ function documentoExigeAssinatura(nome) {
 }
 
 function docsEmpresaCompletos(emp) {
-  const slots = emp.temPlanoAtivo ? [...DOC_SLOTS_EMPRESA, SLOT_CARTA_PERMANENCIA] : DOC_SLOTS_EMPRESA;
+  const slots = slotsDocsEmpresa(emp);
   return slots.every((slot) => emp.documentos && emp.documentos[slot.key] && emp.documentos[slot.key].confirmado);
 }
 
@@ -6840,8 +6846,51 @@ async function toggleDocSlotConfirmado(alvoTipo, depIndex, slotKey) {
     data: nowISO(),
     texto: `"${doc.nome}" marcado como ${doc.confirmado ? 'confirmado' : 'pendente'}.`,
   });
-  await persist();
+  // mostra na hora e salva em seguida (salvar leva alguns segundos)
   renderClientModal();
+  await persist();
+}
+
+// documentos recebidos e ainda sem OK — da empresa ou de todas as pessoas do card
+function docsRecebidosSemOk(c, modo) {
+  const lista = [];
+  if (modo === 'empresa') {
+    const emp = getEmpresaDoCliente(c);
+    Object.values(emp.documentos || {}).forEach((d) => d && !d.confirmado && lista.push(d));
+  } else {
+    titularesDoMesmoCard(c).forEach((x) =>
+      vidasDoTitular(x).forEach((v) =>
+        Object.values(v.pessoa.documentos || {}).forEach((d) => d && !d.confirmado && lista.push(d))
+      )
+    );
+  }
+  return lista;
+}
+async function aprovarTodosDocsRecebidos(clientId, modo) {
+  const c = DB.clients.find((x) => x.id === clientId);
+  if (!c) return;
+  const lista = docsRecebidosSemOk(c, modo);
+  if (!lista.length) return;
+  if (
+    !(await showConfirmDialog(`Dar OK nos ${lista.length} documento(s) recebido(s)? Confira antes se estão legíveis e corretos.`, {
+      confirmLabel: 'Dar OK em todos',
+    }))
+  )
+    return;
+  lista.forEach((d) => (d.confirmado = true));
+  c.historico.push({
+    data: nowISO(),
+    texto: `${lista.length} documento(s) ${modo === 'empresa' ? 'da empresa' : 'das pessoas'} conferido(s) de uma vez por ${CURRENT_USER?.nome || 'equipe'}.`,
+  });
+  renderClientModal();
+  await persist();
+  toast(`✓ ${lista.length} documento(s) com OK.`);
+}
+function botaoAprovarTodosDocs(c, modo) {
+  const n = docsRecebidosSemOk(c, modo).length;
+  return n
+    ? `<button class="btn-primary" style="padding:6px 12px;font-size:11.5px;margin-left:10px;" onclick="aprovarTodosDocsRecebidos('${c.id}','${modo}')">${ICONS.check} Dar OK nos ${n} recebido(s)</button>`
+    : '';
 }
 async function removeDocSlot(alvoTipo, depIndex, slotKey) {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
@@ -7379,7 +7428,7 @@ async function preencherFichaInclusao(PDFLib, templateBytes, d) {
   centro(p7, mesExtenso, 308, 521, 114);
   centro(p7, ano, 410.5, 521, 62);
 
-  return await pdf.save();
+  return await pdf.save({ objectsPerTick: Infinity }); // sem pausas: em aba de fundo o Chrome atrasa as pausas e a geração travava
 }
 
 const REGISTRO_ANS_POR_PLANO = {
@@ -7725,6 +7774,9 @@ function signatarioDoc(tipo, x, quem, key) {
   if (tipo === 'pme' && quem === 'cliente') {
     const pa = x.propostaAdesao || {};
     const s0 = (pa.socios || [])[0] || {};
+    // sócio informado: usa só os dados dele (não completa com CPF/celular do titular)
+    if (s0.nome && nomeComparavel(s0.nome) !== nomeComparavel(x.titular.nome))
+      return { nome: s0.nome, email: pa.email || x.titular.email, celular: s0.tel || '', cpf: s0.cpf || '' };
     return {
       nome: s0.nome || x.titular.nome,
       email: pa.email || x.titular.email,
@@ -7742,7 +7794,7 @@ function signatarioDoc(tipo, x, quem, key) {
 }
 function documentosDoCard(c) {
   const docs = [
-    { tipo: 'pme', clientId: c.id, key: '', falta: 'Gere a Ficha Unimed na aba Conferência.' },
+    { tipo: 'pme', clientId: c.id, key: '', falta: 'Ainda não gerada: a Proposta PME III sai sozinha quando todas as vidas assinarem as fichas de inclusão.' },
   ];
   titularesDoMesmoCard(c).forEach((x) =>
     vidasDoTitular(x).forEach((v) =>
@@ -7750,7 +7802,7 @@ function documentosDoCard(c) {
         tipo: 'inclusao',
         clientId: x.id,
         key: v.key,
-        falta: 'Gere as fichas de inclusão na aba Conferência.',
+        falta: 'Ficha ainda não gerada: ela sai quando a pessoa responde o questionário pelo link dela (aba Questionário).',
       })
     )
   );
@@ -8288,7 +8340,9 @@ function documentRequestItems(c) {
 }
 function documentRequestItemsEmpresa(c) {
   const emp = getEmpresaDoCliente(c);
-  return DOC_SLOTS_EMPRESA.map((s) => ({
+  // plano ativo: pede a carta de permanência · funcionários: GFIP e FGTS
+  const slots = slotsDocsEmpresa(emp);
+  return slots.map((s) => ({
     key: `empresa-${s.key}`,
     group: 'Documentos da empresa',
     targetType: 'empresa',
@@ -8364,6 +8418,7 @@ async function criarLinkDocs(tipo, clientId, opts) {
     const link = DOCUMENT_UPLOAD_BASE_URL + '?token=' + encodeURIComponent(result.token);
     ctx.dono.documentUploadRequests.push({
       id: result.id,
+      itensChave: chaveItensLinkDocs(ctx.itens()),
       link,
       expiresAt: result.expiresAt,
       status: 'open',
@@ -8399,8 +8454,14 @@ async function obterLinkDocs(tipo, clientId) {
   const sol = solicitacaoDocumentoAtual(ctx.dono);
   const valido =
     sol && sol.status === 'open' && (!sol.expiresAt || new Date(sol.expiresAt) > new Date());
-  if (valido) return sol.link;
+  // a lista de documentos mudou (ex.: entrou dependente ou marcaram plano
+  // ativo): gera um link novo, senão a pessoa não vê o documento novo
+  const mesmaLista = !sol || sol.itensChave === chaveItensLinkDocs(ctx.itens());
+  if (valido && mesmaLista) return sol.link;
   return await criarLinkDocs(tipo, clientId, { silencioso: true });
+}
+function chaveItensLinkDocs(itens) {
+  return (itens || []).map((i) => i.key + ':' + (i.targetCode || '')).sort().join('|');
 }
 
 async function copiarLinkDocs(tipo, clientId) {
@@ -8491,7 +8552,10 @@ async function importarDocsRecebidos(tipo, clientId, silencioso) {
   const pedidos = (ctx?.dono.documentUploadRequests || []).filter(
     (r) => r.id && r.status !== 'cancelled'
   );
-  if (!pedidos.length) return 0;
+  if (!pedidos.length) {
+    if (!silencioso) toast('Nenhum link de documentos enviado ainda — use "Copiar link" ou "Enviar link".');
+    return 0;
+  }
   let novos = 0;
   for (const sol of pedidos) {
     const res = await documentUploadApi({ action: 'status', requestId: sol.id });
@@ -8551,11 +8615,11 @@ async function importarDocsRecebidos(tipo, clientId, silencioso) {
   return novos;
 }
 
-// abre a aba Documentos → traz o que chegou (no máximo 1x por minuto por card)
+// abre a aba de documentos → traz o que chegou (no máximo 1x a cada 20s por card)
 const __ultimaSincDocs = {};
 function sincronizarDocsDoCardEmSegundoPlano(c) {
   const chave = c.empresaId || c.id;
-  if (Date.now() - (__ultimaSincDocs[chave] || 0) < 60000) return;
+  if (Date.now() - (__ultimaSincDocs[chave] || 0) < 20000) return;
   __ultimaSincDocs[chave] = Date.now();
   (async () => {
     let novos = 0;
@@ -8567,8 +8631,9 @@ function sincronizarDocsDoCardEmSegundoPlano(c) {
       console.warn('Sincronização de documentos falhou', e);
     }
     if (novos) {
+      // redesenha nas abas que mostram documentos (Cadastro = empresa, Pessoas = vidas)
       if (
-        ACTIVE_PERSON_TAB === 'documentacao' &&
+        ['nova', 'pessoas', 'documentacao'].includes(ACTIVE_PERSON_TAB) &&
         document.getElementById('modalOverlay')?.classList.contains('active')
       )
         renderClientModal();
@@ -8663,14 +8728,17 @@ function renderDocumentosCard(c, modo) {
   const todosTitularesDoc = titularesDoMesmoCard(c);
   if (modo === 'empresa') {
     const ok = docsEmpresaCompletos(emp);
+    const blocoFuncionarios = emp.temFuncionarios === true
+      ? `<div class="anexo-person-block"><div class="anexo-person-head"><span><b>Funcionários da empresa</b> — comprovação do vínculo (CLT)</span></div>${SLOTS_FUNCIONARIOS.map((slot) => renderDocSlotRow(slot, emp, 'empresa', undefined, c.id)).join('')}</div>`
+      : '';
     const blocoCarta = emp.temPlanoAtivo
       ? `<div class="anexo-person-block"><div class="anexo-person-head"><span><b>Plano ativo anterior</b></span></div>${renderDocSlotRow(SLOT_CARTA_PERMANENCIA, emp, 'empresa', undefined, c.id)}</div>`
       : '';
     return `
       <div class="pendencia-banner" style="${ok ? 'background:var(--success-light);color:var(--success);border-color:transparent;' : ''}margin-bottom:16px;">
-        ${ok ? '✓ Documentos da empresa completos e conferidos.' : '⚠️ Faltam documentos da empresa conferidos — o Cadastro só conclui com eles.'}
+        ${ok ? '✓ Documentos da empresa completos e conferidos.' : '⚠️ Faltam documentos da empresa conferidos — o Cadastro só conclui com eles.'}${botaoAprovarTodosDocs(c, 'empresa')}
       </div>
-      ${blocoLinkDocs('empresa', c.id, `Empresa — ${escHist(emp.razaoSocial || 'sem nome')}`, `CNPJ, contrato social, comprovante de endereço e ficha associativa · enviado ao sócio`)}
+      ${blocoLinkDocs('empresa', c.id, `Empresa — ${escHist(emp.razaoSocial || 'sem nome')}`, `${slotsDocsEmpresa(emp).map((x) => x.label.replace(/ atualizado$| do plano atual$/, '')).join(', ')} · enviado ao sócio`)}
       
       <div class="anexo-person-block" id="docs_empresa" style="border-color:var(--navy);">
         <div class="anexo-person-head">
@@ -8686,13 +8754,14 @@ function renderDocumentosCard(c, modo) {
         <div class="attachment-list">${(c.anexosLead || []).map((a, i) => `<span class="attachment-chip">${ICONS.file}${a.nome}<a href="${a.dataUrl}" target="_blank" style="color:inherit;display:flex;">${ICONS.upload}</a><button onclick="removeAnexoLeadImplantacao(${i})">${ICONS.close}</button></span>`).join('') || '<span style="font-size:12px;color:var(--text-faint);">Nenhum anexo original do lead.</span>'}</div>
       </div>
 
+            ${blocoFuncionarios}
             ${blocoCarta}
 `;
   }
   const okPessoas = todosTitularesDoc.every((x) => vidasDoTitular(x).every((v) => docsPessoaCompletos(v.pessoa, v.key !== 'titular')));
   return `
       <div class="pendencia-banner" style="${okPessoas ? 'background:var(--success-light);color:var(--success);border-color:transparent;' : ''}margin-bottom:16px;">
-        ${okPessoas ? '✓ Documentos de todas as pessoas conferidos.' : '⚠️ Revise e aprove os documentos de cada pessoa — os enviados pelo cliente chegam "a conferir".'}
+        ${okPessoas ? '✓ Documentos de todas as pessoas conferidos.' : '⚠️ Revise e aprove os documentos de cada pessoa — os enviados pelo cliente chegam "a conferir".'}${botaoAprovarTodosDocs(c, 'pessoas')}
       </div>
       ${todosTitularesDoc
         .map((x) =>
@@ -8901,12 +8970,16 @@ function alertaVigencia(c) {
   const iso = vigenciaDoCard(c);
   if (!iso || ['enviado', 'ativo'].includes(c.etapaAdesao)) return '';
   const prazo = prazoEntregaVigencia(iso);
-  const dias = Math.ceil((prazo - new Date()) / 86400000);
+  // dias de calendário (hoje 07 e prazo 09 = faltam 2 dias), sem contar horas
+  const h = new Date();
+  const dias = Math.round(
+    (Date.UTC(prazo.getFullYear(), prazo.getMonth(), prazo.getDate()) - Date.UTC(h.getFullYear(), h.getMonth(), h.getDate())) / 86400000
+  );
   const quando = prazo.toLocaleDateString('pt-BR');
   if (dias < 0)
     return `<div class="pendencia-banner" style="margin-bottom:14px;">⚠️ Prazo da vigência ${fmtDate(iso)} perdido: a documentação precisava ser entregue até ${quando}. Escolha a próxima vigência no Cadastro.</div>`;
   if (dias <= 3)
-    return `<div class="pendencia-banner" style="margin-bottom:14px;">⏳ Vigência ${fmtDate(iso)}: documentação até ${quando} — falta${dias === 1 ? '' : 'm'} ${dias} dia${dias === 1 ? '' : 's'}.</div>`;
+    return `<div class="pendencia-banner" style="margin-bottom:14px;">⏳ Vigência ${fmtDate(iso)}: documentação até ${quando} — ${dias === 0 ? 'o prazo é hoje' : `falta${dias === 1 ? '' : 'm'} ${dias} dia${dias === 1 ? '' : 's'}`}.</div>`;
   return `<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;">Vigência ${fmtDate(iso)} · documentação até ${quando} (${dias} dias).</div>`;
 }
 
@@ -8919,6 +8992,36 @@ async function setPlanoAtivoEmpresa(campo, valor) {
   if (campo === 'tem') renderClientModal();
 }
 const SLOT_CARTA_PERMANENCIA = { key: 'carta_permanencia', label: 'Carta de permanência do plano atual' };
+// vidas que são funcionários da empresa (CLT): a Unimed pede a comprovação do vínculo
+const SLOTS_FUNCIONARIOS = [
+  { key: 'gfip', label: 'GFIP' },
+  { key: 'guia_fgts', label: 'Guia de Recolhimento do FGTS' },
+  { key: 'comprovante_guia_fgts', label: 'Comprovante de pagamento da guia do FGTS' },
+];
+// lista completa de documentos que a empresa precisa entregar
+function slotsDocsEmpresa(emp) {
+  return [
+    ...DOC_SLOTS_EMPRESA,
+    ...(emp && emp.temPlanoAtivo ? [SLOT_CARTA_PERMANENCIA] : []),
+    ...(emp && emp.temFuncionarios === true ? SLOTS_FUNCIONARIOS : []),
+  ];
+}
+async function setFuncionariosEmpresa(valor) {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const emp = getEmpresaDoCliente(c);
+  emp.temFuncionarios = valor === 'sim' ? true : valor === 'nao' ? false : undefined;
+  c.historico.push({
+    data: nowISO(),
+    texto:
+      emp.temFuncionarios === true
+        ? 'Informado: há funcionários da empresa entre as vidas (pede GFIP, guia do FGTS e comprovante de pagamento).'
+        : emp.temFuncionarios === false
+          ? 'Informado: nenhuma vida é funcionário da empresa.'
+          : 'Informação sobre funcionários da empresa apagada.',
+  });
+  renderClientModal();
+  await persist();
+}
 
 function secoesCadastroVenda(c) {
   const venda = vendaDoCard(c);
@@ -8929,6 +9032,10 @@ function secoesCadastroVenda(c) {
     if (!venda.cdlId) return true;
     return !(u.cdlIds || []).length || (u.cdlIds || []).includes(venda.cdlId) || u.id === vendedorAtual;
   });
+  // o vendedor atual sempre aparece (mesmo sem código de vendedor), senão a
+  // tela mostrava "Sem vendedor" num card que tem vendedor
+  const atualUser = (DB.users || []).find((u) => u.id === vendedorAtual);
+  if (atualUser && !elegiveis.some((u) => u.id === atualUser.id)) elegiveis.push(atualUser);
   const nomeVend = (DB.users || []).find((u) => u.id === vendedorAtual)?.nome || '';
   const vig = vigenciaDoCard(c);
   const opcoes = proximasVigencias();
@@ -8968,6 +9075,11 @@ function secoesCadastroVenda(c) {
           .join('')}</select></div>
       <div class="fg"><label>Plano de saúde ativo hoje?</label>
         <select onchange="setPlanoAtivoEmpresa('tem', this.value === 'sim')"><option value="nao" ${emp.temPlanoAtivo ? '' : 'selected'}>Não</option><option value="sim" ${emp.temPlanoAtivo ? 'selected' : ''}>Sim, a empresa tem plano ativo</option></select></div>
+    </div>
+    <div class="field-grid" style="margin-top:12px;">
+      <div class="fg"><label>Haverá titulares ou dependentes que são funcionários da empresa?</label>
+        <select onchange="setFuncionariosEmpresa(this.value)"><option value="" ${emp.temFuncionarios === undefined ? 'selected' : ''}>Escolha…</option><option value="nao" ${emp.temFuncionarios === false ? 'selected' : ''}>Não</option><option value="sim" ${emp.temFuncionarios === true ? 'selected' : ''}>Sim, há funcionários (CLT)</option></select></div>
+      <div style="font-size:11px;color:var(--text-muted);align-self:end;padding-bottom:10px;">${emp.temFuncionarios === true ? 'GFIP, guia do FGTS e o comprovante de pagamento da guia entram nos documentos da empresa, logo abaixo.' : 'Se sim, a empresa também entrega GFIP, guia do FGTS e comprovante de pagamento.'}</div>
     </div>
     ${
       emp.temPlanoAtivo
@@ -9071,7 +9183,8 @@ function cpfDaPlanilha(v) {
 }
 function dataDaPlanilha(v) {
   if (!v) return '';
-  if (v instanceof Date && !isNaN(v)) return isoData(v);
+  // arredonda pro dia mais próximo: planilhas gravadas com hora quebrada (ex.: 23:59:59) não perdem um dia
+  if (v instanceof Date && !isNaN(v)) return isoData(new Date(v.getFullYear(), v.getMonth(), v.getDate() + (v.getHours() >= 12 ? 1 : 0)));
   if (typeof v === 'number') return isoData(new Date(Math.round((v - 25569) * 86400000) + 43200000));
   const m = String(v).trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (m) return `${m[3]}-${m[2]}-${m[1]}`;
@@ -9175,6 +9288,11 @@ async function importarPlanilhaVidas(event) {
   }
 }
 
+function titularEhProvisorio(x) {
+  const t = x.titular || {};
+  const temDocs = Object.keys(t.documentos || {}).length > 0;
+  return !onlyDigits(t.cpf || '') && !t.dataNascimento && !(x.dependentes || []).length && !temDocs && !t.dsRespostas && !t.assinaturaInclusao;
+}
 async function confirmarImportacaoVidas() {
   const imp = __importVidas;
   if (!imp) return;
@@ -9186,9 +9304,20 @@ async function confirmarImportacaoVidas() {
     Object.entries(dados).forEach(([k, v]) => {
       if (v !== '' && v != null) alvo[k] = v;
     });
+  // titular "provisório" do card (o contato do lead, criado na conversão, sem
+  // CPF/nascimento/dependentes/documentos): o 1º titular novo da planilha toma
+  // o lugar dele, senão ele sobra e trava a etapa Pessoas
+  const provisorios = titularesDoMesmoCard(c).filter((x) => titularEhProvisorio(x));
   for (const f of imp.familias) {
     let x = f.existente;
-    if (!x) {
+    if (!x && provisorios.length) {
+      x = provisorios.shift();
+      const contato = x.titular.nome || '';
+      x.titular = { codigoVida: x.titular.codigoVida || uid('vida'), razaoSocial: emp.razaoSocial, cnpj: emp.cnpj, anexos: x.titular.anexos || [] };
+      x.historico = x.historico || [];
+      if (contato) x.historico.push({ data: nowISO(), texto: `Titular provisório (${contato}, contato do lead) substituído pelos dados da planilha.` });
+      atualizados++;
+    } else if (!x) {
       x = {
         id: uid('cli'),
         status: 'ativo',
@@ -9405,7 +9534,7 @@ async function montarManifestoPacote(c) {
   }
 
   // documentos da empresa
-  const slotsEmp = emp.temPlanoAtivo ? [...DOC_SLOTS_EMPRESA, SLOT_CARTA_PERMANENCIA] : DOC_SLOTS_EMPRESA;
+  const slotsEmp = slotsDocsEmpresa(emp);
   const empresa = limpa(await Promise.all(slotsEmp.map((s) => (emp.documentos?.[s.key] ? arq(s.label, emp.documentos[s.key].dataUrl, 'empresa') : null))));
 
   // cada vida
@@ -9519,6 +9648,14 @@ function montarEmailImplantacao(c) {
   const linhas = Object.entries(porPlano)
     .map(([plano, v]) => `<tr><td style="padding:4px 12px 4px 0;">${escHist(plano)}</td><td style="padding:4px 12px 4px 0;">${v.vidas} vida(s)</td><td style="padding:4px 0;">${formatBRL(v.valor)}</td></tr>`)
     .join('');
+  // anexos: ficha de adesão, resumo e orçamento (gerais) + ficha associativa da CDL (documento da empresa)
+  const extensao = (u) => (/\.(pdf|jpe?g|png|webp)(\?|$)/i.exec(String(u || '')) || [, 'pdf'])[1].toLowerCase();
+  const nomeArquivo = (nome, url) => `${nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9 ()-]+/g, '').trim()}.${extensao(url)}`;
+  const anexos = [
+    ...(m.gerais || []).filter((a) => /ficha de associado|or[cç]amento|ficha de ades|resumo/i.test(a.nome)),
+    ...(m.documentosEmpresa || []).filter((a) => /ficha associativa|ficha de associado/i.test(a.nome)).map((a) => ({ ...a, nome: 'Ficha associativa da CDL' })),
+  ].map((a) => ({ nome: a.nome, arquivo: nomeArquivo(a.nome, a.url), url: a.url }));
+  const listaAnexos = anexos.map((a) => a.nome).join(' · ');
   const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1B2733;">
     <p>Olá,</p>
     <p>Segue a documentação para implantação da empresa <b>${escHist(e.razaoSocial || '')}</b> (CNPJ ${escHist(e.cnpj || '')}), vigência <b>${escHist(e.vigencia || '')}</b>.</p>
@@ -9526,12 +9663,9 @@ function montarEmailImplantacao(c) {
     <p style="margin-top:4px;"><b>Total: ${r.vidas} vida(s) · ${formatBRL(r.total)}/mês</b></p>
     <p>Todos os documentos (empresa, fichas de inclusão assinadas de cada vida, documentos pessoais e layout) estão na página de conferência:</p>
     <p><a href="${link}" style="background:#00042D;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;display:inline-block;">Abrir página de conferência</a></p>
-    <p style="font-size:12px;color:#64748B;">Anexados a este e-mail: ficha de associado da CDL, orçamento, ficha de adesão e resumo das pessoas. Link válido até ${p ? fmtDate(p.expiraEm.slice(0, 10)) : ''}.</p>
+    <p style="font-size:12px;color:#64748B;">${anexos.length ? `Anexados a este e-mail: ${escHist(listaAnexos)}. ` : ''}Link válido até ${p ? fmtDate(p.expiraEm.slice(0, 10)) : ''}.</p>
     <p>Atenciosamente,<br>Nossa Corretora</p></div>`;
   const texto = `Implantação ${e.razaoSocial || ''} (CNPJ ${e.cnpj || ''}), vigência ${e.vigencia || ''}. ${r.vidas} vida(s), ${formatBRL(r.total)}/mês. Página de conferência: ${link}`;
-  const anexos = (m.gerais || [])
-    .filter((a) => /ficha de associado|or[cç]amento|ficha de ades|resumo/i.test(a.nome))
-    .map((a) => ({ nome: a.nome, arquivo: `${a.nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9 ()-]+/g, '').trim()}.pdf`, url: a.url }));
   return { assunto, html, texto, anexos };
 }
 function abrirEnvioUnimed() {
@@ -9621,7 +9755,7 @@ function renderImplantacaoNova(c) {
     </div>
     <div class="modal-section-title">Ativação</div>
     <div class="dep-card" style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-      <div style="font-size:12.5px;">Quando a Unimed ativar o contrato, informe a data. A partir dela vale a recorrência do FCDL.</div>
+      <div style="font-size:12.5px;">Quando a Unimed ativar o contrato, informe a data.${vendaDoCard(c).matriz === 'FCDL' ? ' A partir dela vale a recorrência do FCDL.' : ''}</div>
       <div class="fg" style="margin:0;"><input type="date" value="${dataAtivacaoDoCard(c)}" onchange="setDataAtivacao(this.value)"></div>
     </div>
     <div class="modal-section-title">Envio para a Unimed</div>
@@ -10430,8 +10564,12 @@ function renderClientModal() {
 
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:-6px 0 12px;">
           <div style="display:flex;align-items:center;gap:8px;font-size:12px;flex-wrap:wrap;">
-            <span style="color:var(--text-muted);font-weight:600;">Vendedor responsável:</span>
-            ${selectVendedorResponsavel(vendedorResponsavelDoCard(c), `setVendedorImplantacao('${c.id}', this.value)`)}
+            ${
+              ACTIVE_PERSON_TAB === 'nova'
+                ? '' // no Cadastro o vendedor é escolhido na seção Venda (um campo só)
+                : `<span style="color:var(--text-muted);font-weight:600;">Vendedor responsável:</span>
+            ${selectVendedorResponsavel(vendedorResponsavelDoCard(c), `setVendedorImplantacao('${c.id}', this.value)`)}`
+            }
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
             ${
@@ -11308,6 +11446,10 @@ const NOME_PLANO_LAYOUT = {
   greenEnf: 'GREEN FLEX II EMP C -E',
   greenApt: 'GREEN FLEX II EMP C -A',
 };
+// dia (data local) -> número de série do Excel, sem hora nem fuso
+function serialExcelDoDia(d) {
+  return Math.round((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(1899, 11, 30)) / 86400000);
+}
 function dataParaLayout(v) {
   // aceita 2026-09-01, 01/09/2026 ou Date; devolve Date (célula de data dd/mm/aaaa)
   if (!v) return '';
@@ -11404,11 +11546,16 @@ function montarLayoutUnimedWb(c) {
   });
 
   const ws = XLSX.utils.aoa_to_sheet(rows, { cellDates: true, dateNF: 'dd/mm/yyyy' });
-  // garante o formato dd/mm/aaaa nas colunas de data (D e X)
+  // datas viram número de dia inteiro do Excel (dd/mm/aaaa). Gravar o Date
+  // direto fazia a planilha sair com UM DIA A MENOS no fuso de Brasília
+  // (a biblioteca grava 29322,9997 em vez de 29323).
   Object.keys(ws).forEach((ref) => {
     if (ref[0] === '!') return;
     const cel = ws[ref];
-    if (cel && (cel.t === 'd' || cel.v instanceof Date)) cel.z = 'dd/mm/yyyy';
+    if (cel && (cel.t === 'd' || cel.v instanceof Date)) {
+      const d = cel.v instanceof Date ? cel.v : new Date(cel.v);
+      ws[ref] = { t: 'n', v: serialExcelDoDia(d), z: 'dd/mm/yyyy' };
+    }
   });
   ws['!cols'] = header.map(() => ({ wch: 18 }));
   const wb = XLSX.utils.book_new();
@@ -12033,7 +12180,7 @@ async function preencherPropostaPMEIII(PDFLib, templateBytes, d) {
     txt(p2, mes, xm, 505.3, 10);
     txt(p2, ano, xa, 505.3, 30);
   });
-  return await pdf.save();
+  return await pdf.save({ objectsPerTick: Infinity }); // sem pausas: em aba de fundo o Chrome atrasa as pausas e a geração travava
 }
 
 // plano (nome salvo no titular) → chave do plano e código de produto do layout
@@ -12100,7 +12247,9 @@ function openFichaUnimedModal() {
   const hojeISO = todayISO();
   const fv = faixaEVigenciaPorData(pa.dataEntrega || hojeISO);
   const rep = emp?.representante || {};
-  const socios = pa.socios && pa.socios.length ? pa.socios : [{ nome: rep.nome || t.nome || '', tel: rep.telefone || t.celular || '', cpf: rep.cpf || t.cpf || '' }];
+  const socios = pa.socios && pa.socios.length
+    ? pa.socios
+    : [rep.nome ? { nome: rep.nome, tel: rep.telefone || '', cpf: rep.cpf || '' } : { nome: t.nome || '', tel: t.celular || '', cpf: t.cpf || '' }];
   const v = (k, padrao) => escHist(pa[k] != null && pa[k] !== '' ? pa[k] : padrao || '');
   const semPlano = r.linhas.filter((l) => !l.chave);
 
@@ -12266,7 +12415,12 @@ function dadosPadraoPme(c) {
   const r = resumoDoCardParaFicha(c);
   const vig = vigenciaDoCard(c) ? fmtDate(vigenciaDoCard(c)) : pa.dataVigencia || '';
   const hoje = new Date().toLocaleDateString('pt-BR');
-  const socios = (pa.socios && pa.socios.length ? pa.socios : [{ nome: rep.nome || t.nome || '', tel: rep.telefone || t.celular || '', cpf: rep.cpf || t.cpf || '' }])
+  // contratante: o representante da empresa OU o titular — nunca mistura os
+  // dois (antes saía o nome do contato do lead com o CPF do titular)
+  const socioPadrao = rep.nome
+    ? { nome: rep.nome, tel: rep.telefone || '', cpf: rep.cpf || '' }
+    : { nome: t.nome || '', tel: t.celular || '', cpf: t.cpf || '' };
+  const socios = (pa.socios && pa.socios.length ? pa.socios : [socioPadrao])
     .filter((x) => x.nome)
     .map((x) => ({ nome: x.nome, tel: x.tel ? maskPhone(x.tel) : '', cpf: x.cpf ? maskCpf(x.cpf) : '' }));
   const cep = onlyDigits(pa.cep || emp.cep || '');
@@ -12334,10 +12488,20 @@ async function gerarPmeAutomatica(c) {
     await gerarPmeComDados(alvo, base, r);
     alvo.historico.push({ data: nowISO(), texto: 'Proposta PME III gerada automaticamente: todas as vidas assinaram as fichas.' });
     await persist();
-    try {
-      await enviarDocParaAssinatura('pme', alvo.id, '');
-    } catch (e) {}
-    toast('✓ Todas as vidas assinaram: Proposta PME III gerada e enviada pra assinatura.');
+    let enviada = false;
+    for (let tentativa = 0; tentativa < 2 && !enviada; tentativa++) {
+      try {
+        await enviarDocParaAssinatura('pme', alvo.id, '');
+        enviada = Object.values(alvo.assinaturaFicha || {}).some((x) => x?.documentId);
+      } catch (e) {
+        console.warn('PME automática: envio pra assinatura', e);
+      }
+    }
+    toast(
+      enviada
+        ? '✓ Todas as vidas assinaram: Proposta PME III gerada e enviada pra assinatura.'
+        : 'Proposta PME III gerada, mas não consegui enviar pra assinatura. Use o botão "Enviar para assinatura" na Proposta.'
+    );
   } catch (e) {
     console.warn('PME automática', e);
     toast('Não consegui gerar a Proposta PME III sozinha: ' + (e.message || 'tente pelo botão.'));
@@ -12721,6 +12885,7 @@ function pendenciasDaEtapa(c, etapa) {
     if (!vigenciaDoCard(c)) falta.push('Data de vigência');
     else if (prazoEntregaVigencia(vigenciaDoCard(c)) < new Date()) falta.push('Data de vigência com prazo de entrega vencido: escolha a próxima');
     if (emp.temPlanoAtivo && !emp.numeroCartaoPlanoAnterior) falta.push('Número do cartão do plano atual');
+    if (emp.temFuncionarios === undefined) falta.push('Informar se há titulares ou dependentes que são funcionários da empresa');
     if (!card.some((x) => x.associadoValidado)) falta.push('Associação à CDL validada');
     if (!docsEmpresaCompletos(emp)) falta.push('Documentos da empresa anexados e conferidos');
   }
@@ -12803,7 +12968,7 @@ async function concluirEtapaImplantacao() {
   c.historico.push({ data: nowISO(), texto: `Etapa "${atual.label}" concluída (100%). Avançou para "${proxima.label}".` });
   await persist();
   renderClientModal();
-  toast(`✓ ${atual.label} concluída. Próxima etapa: ${proxima.label}.`);
+  toast(`✓ Etapa ${atual.label} concluída. Próxima etapa: ${proxima.label}.`);
 }
 
 async function setEtapaAdesao(stageId) {
@@ -13195,7 +13360,7 @@ function openSendAdminEmailModal() {
 
   if (!checklistOk) {
     const faltando = [];
-    DOC_SLOTS_EMPRESA.forEach((slot) => {
+    slotsDocsEmpresa(emp).forEach((slot) => {
       if (!(emp.documentos && emp.documentos[slot.key] && emp.documentos[slot.key].confirmado))
         faltando.push(`Empresa: ${slot.label}`);
     });
@@ -13236,7 +13401,7 @@ function openSendAdminEmailModal() {
     : '  Nenhum dependente informado.';
 
   const listaAnexos = [];
-  DOC_SLOTS_EMPRESA.forEach((slot) => {
+  slotsDocsEmpresa(emp).forEach((slot) => {
     const d = emp.documentos && emp.documentos[slot.key];
     if (d) listaAnexos.push(`  - ${d.nome}`);
   });
