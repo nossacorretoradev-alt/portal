@@ -2815,6 +2815,9 @@ function checkSession() {
 }
 
 function enterApp(loginAgoraMesmo) {
+  try {
+    iniciarSunchat();
+  } catch (e) {}
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   renderSidebarBrand();
@@ -3120,6 +3123,228 @@ async function saveCdl(id) {
   toast('✓ CDL salva.');
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// SUNCHAT — o Pipeline comercial do portal espelhado no pipeline da SunChat
+// (portal → SunChat). Cada lead vira um negócio na etapa ligada à coluna;
+// comentários viram anotações; dá pra abrir a conversa com o contato.
+// ═══════════════════════════════════════════════════════════════════════
+const SUNCHAT_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/sunchat`;
+let __sunchatConfigCarregada = null;
+let __sunchatRodando = false;
+let __sunchatTimer = null;
+function cfgSunchat() {
+  DB.config = DB.config || {};
+  DB.config.sunchat = DB.config.sunchat || { ativo: false, canalId: '', pipelineId: '', etapas: {} };
+  return DB.config.sunchat;
+}
+function sunchatPronto() {
+  const c = cfgSunchat();
+  return !!(c.ativo && c.pipelineId && c.etapas && c.etapas.novo);
+}
+async function chamarSunchat(acao, dados) {
+  const res = await fetch(SUNCHAT_FUNCTION_URL, {
+    method: 'POST',
+    headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ acao, ...(dados || {}) }),
+  });
+  const r = await res.json().catch(() => ({}));
+  if (res.status === 501 || r.error === 'nao-configurado') throw new Error('A chave da SunChat ainda não foi cadastrada no Supabase.');
+  if (!res.ok) throw new Error(r.error || 'A SunChat não respondeu.');
+  return r;
+}
+function valorMensalLead(l) {
+  const v = Number(l.valor);
+  if (v) return v;
+  const p = PLAN_VALUES_PORTAL[chavePlanoPorNome(l.planoInteresse)];
+  return p ? p.valor * (Number(l.qtdVidas) || 1) : 0;
+}
+function emailVendedorLead(l) {
+  const id = l.vendedorId || (l.membrosIds || [])[0];
+  return ((DB.users || []).find((u) => u.id === id) || {}).email || '';
+}
+function estadoLeadSunchat(l) {
+  return JSON.stringify([l.etapa, l.empresa, l.nome, onlyDigits(l.celular || ''), l.email, valorMensalLead(l), emailVendedorLead(l)]);
+}
+function descricaoLeadSunchat(l) {
+  return [
+    l.empresa && `Empresa: ${l.empresa}`,
+    l.cnpj && `CNPJ: ${maskCnpj(l.cnpj)}`,
+    l.nome && `Contato: ${l.nome}`,
+    l.qtdVidas && `Vidas: ${l.qtdVidas}`,
+    l.planoInteresse && `Plano: ${l.planoInteresse}`,
+    `Origem: ${l.origemSite ? 'simulador' : 'portal'}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+async function sincronizarSunchat(max = 8) {
+  if (!sunchatPronto() || __sunchatRodando || isVendedor() || !CURRENT_USER) return;
+  __sunchatRodando = true;
+  const cfg = cfgSunchat();
+  let mudou = false;
+  try {
+    const agora = Date.now();
+    const pendentes = (DB.pipeline || [])
+      .filter((l) => {
+        const s = l.sunchat || {};
+        if (s.erro && s.em && agora - new Date(s.em) < 10 * 60 * 1000) return false; // erro: tenta de novo em 10 min
+        return !s.negocioId || s.estado !== estadoLeadSunchat(l) || (l.comentarios || []).length > (s.comentarios || 0);
+      })
+      .slice(0, max);
+    for (const l of pendentes) {
+      const antes = l.sunchat || {};
+      try {
+        const r = await chamarSunchat('sync-lead', {
+          lead: { nome: l.nome, empresa: l.empresa, telefone: l.celular, email: l.email, titulo: l.empresa || l.nome, descricao: descricaoLeadSunchat(l), valorMensal: valorMensalLead(l) },
+          pipelineId: cfg.pipelineId,
+          etapaId: cfg.etapas[l.etapa] || cfg.etapas.novo,
+          canalId: cfg.canalId,
+          responsavelEmail: emailVendedorLead(l),
+          ids: { contatoId: antes.contatoId, negocioId: antes.negocioId },
+          moverEtapa: !!antes.negocioId && antes.etapa !== l.etapa,
+        });
+        const coms = l.comentarios || [];
+        if (!antes.negocioId && coms.length) {
+          // primeira vez: o histórico vai numa anotação só
+          const hist = coms.slice(-10).map((c) => `${fmtDateTime(c.data)} · ${c.usuario || 'Portal'}: ${c.texto}`).join('\n');
+          await chamarSunchat('anotacao', { negocioId: r.negocioId, texto: `Histórico do portal:\n${hist}` });
+        } else {
+          for (const c of coms.slice(antes.comentarios || 0)) await chamarSunchat('anotacao', { negocioId: r.negocioId, texto: `${c.usuario || 'Portal'}: ${c.texto}` });
+        }
+        l.sunchat = { ...antes, contatoId: r.contatoId || antes.contatoId, negocioId: r.negocioId, etapa: l.etapa, estado: estadoLeadSunchat(l), comentarios: coms.length, em: nowISO(), erro: null };
+      } catch (e) {
+        l.sunchat = { ...antes, erro: e.message, em: nowISO() };
+      }
+      mudou = true;
+    }
+    if (mudou) {
+      cfg.ultimaSincronizacao = nowISO();
+      await persist();
+    }
+  } finally {
+    __sunchatRodando = false;
+  }
+}
+function iniciarSunchat() {
+  if (__sunchatTimer) clearInterval(__sunchatTimer);
+  __sunchatTimer = setInterval(() => sincronizarSunchat().catch(() => {}), 20000);
+  setTimeout(() => sincronizarSunchat().catch(() => {}), 4000);
+}
+// avisos imediatos (fora do ciclo): lead excluído e venda que virou implantação
+function avisarSunchatLeadSaiu(l, motivo) {
+  const cfg = cfgSunchat();
+  const s = l && l.sunchat;
+  if (!sunchatPronto() || !s || !s.negocioId) return;
+  if (motivo === 'ganho' && cfg.etapas.ganho)
+    chamarSunchat('mover', { pipelineId: cfg.pipelineId, negocioId: s.negocioId, etapaId: cfg.etapas.ganho }).catch(() => {});
+  if (motivo === 'excluido') chamarSunchat('remover', { pipelineId: cfg.pipelineId, negocioId: s.negocioId }).catch(() => {});
+}
+async function abrirConversaSunchat(leadId) {
+  const l = (DB.pipeline || []).find((x) => x.id === leadId);
+  const cfg = cfgSunchat();
+  if (!l) return;
+  if (!l.sunchat?.contatoId) {
+    toast('Este lead ainda não tem contato na SunChat (precisa de celular e de uma sincronização).');
+    return;
+  }
+  if (!cfg.canalId) {
+    toast('Escolha o canal do WhatsApp em Integrações.');
+    return;
+  }
+  try {
+    const r = await chamarSunchat('abrir-atendimento', { canalId: cfg.canalId, contatoId: l.sunchat.contatoId, responsavelEmail: CURRENT_USER?.email || emailVendedorLead(l) });
+    l.sunchat.atendimentoId = r.atendimentoId;
+    l.comentarios = l.comentarios || [];
+    l.comentarios.push({ data: nowISO(), usuario: CURRENT_USER?.nome || '', texto: `Conversa aberta na SunChat${r.numero ? ` (atendimento nº ${r.numero})` : ''}.` });
+    await persist();
+    openPipelineLeadModal(leadId);
+    toast('✓ Conversa aberta na SunChat.');
+  } catch (e) {
+    toast(e.message);
+  }
+}
+function blocoSunchatLead(l) {
+  if (!sunchatPronto()) return '';
+  const s = l.sunchat || {};
+  const status = s.erro
+    ? `<span style="color:var(--danger);">Erro na última sincronização: ${escHist(s.erro).slice(0, 140)}</span>`
+    : s.negocioId
+      ? `<span style="color:var(--success);">✓ Espelhado na SunChat</span> · ${s.em ? fmtDateTime(s.em) : ''}`
+      : 'Ainda não enviado à SunChat (sincroniza em instantes)';
+  return `<div class="dep-card" style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+    <div style="font-size:12px;"><b>SunChat</b><div style="color:var(--text-muted);margin-top:2px;">${status}</div></div>
+    <div style="display:flex;gap:7px;">${s.contatoId ? `<button class="btn-primary" style="padding:7px 12px;font-size:12px;" onclick="abrirConversaSunchat('${l.id}')">${ICONS.wpp} Abrir conversa na SunChat</button>` : ''}</div>
+  </div>`;
+}
+
+// ─── Tela de configuração (administrador) ─────────────────────────────────
+function viewIntegracoes() {
+  const cfg = cfgSunchat();
+  const d = __sunchatConfigCarregada;
+  const pl = d && d.pipelines.find((p) => p.id === cfg.pipelineId);
+  const opEtapas = (sel) => `<option value="">${'—'}</option>${(pl ? pl.etapas : []).map((e) => `<option value="${e.id}" ${sel === e.id ? 'selected' : ''}>${escHist(e.nome)}</option>`).join('')}`;
+  const erros = (DB.pipeline || []).filter((l) => l.sunchat && l.sunchat.erro).length;
+  const espelhados = (DB.pipeline || []).filter((l) => l.sunchat && l.sunchat.negocioId).length;
+  return `<div class="view-wrap">
+    <div class="page-head"><div class="page-title">Integrações</div></div>
+    <div class="dep-card" style="max-width:820px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><div><b>SunChat — Pipeline comercial</b><div style="font-size:12px;color:var(--text-muted);margin-top:3px;">Tudo o que acontece no Pipeline do portal é espelhado no pipeline da SunChat (portal → SunChat).</div></div>
+      <button class="btn-ghost" onclick="carregarConfigSunchat()">↻ Carregar dados da SunChat</button></div>
+      ${
+        !d
+          ? `<div style="font-size:12.5px;margin-top:14px;color:var(--text-muted);">${cfg.pipelineId ? 'Configuração salva. Clique em "Carregar dados da SunChat" pra alterar.' : 'Cadastre a chave da SunChat no Supabase e clique em "Carregar dados da SunChat".'}</div>`
+          : `<div class="field-grid" style="margin-top:16px;">
+        <div class="fg"><label>Canal do WhatsApp</label><select onchange="salvarCfgSunchat('canalId', this.value)"><option value="">Escolha…</option>${d.canais.map((c) => `<option value="${c.id}" ${cfg.canalId === c.id ? 'selected' : ''}>${escHist(c.nome)}${c.tipo ? ` (${escHist(c.tipo)})` : ''}</option>`).join('')}</select></div>
+        <div class="fg"><label>Pipeline da SunChat</label><select onchange="salvarCfgSunchat('pipelineId', this.value)"><option value="">Escolha…</option>${d.pipelines.map((p) => `<option value="${p.id}" ${cfg.pipelineId === p.id ? 'selected' : ''}>${escHist(p.nome)}</option>`).join('')}</select></div>
+      </div>
+      ${
+        pl
+          ? `<div class="modal-section-title" style="margin-top:16px;">Coluna do portal → etapa da SunChat</div>
+        ${PIPELINE_STAGES.map((st) => `<div class="field-grid" style="margin-top:8px;align-items:center;"><div style="font-size:12.5px;"><b>${escHist(st.label)}</b></div><select onchange="salvarCfgSunchat('etapa:${st.id}', this.value)">${opEtapas(cfg.etapas[st.id])}</select></div>`).join('')}
+        <div class="field-grid" style="margin-top:8px;align-items:center;"><div style="font-size:12.5px;"><b>Virou implantação (ganho)</b></div><select onchange="salvarCfgSunchat('etapa:ganho', this.value)">${opEtapas(cfg.etapas.ganho)}</select></div>`
+          : ''
+      }`
+      }
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px;padding-top:14px;border-top:1px solid var(--border);">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;"><input type="checkbox" ${cfg.ativo ? 'checked' : ''} onchange="salvarCfgSunchat('ativo', this.checked)"> Sincronização ativa</label>
+        <div style="font-size:12px;color:var(--text-muted);">${espelhados} lead(s) espelhado(s)${erros ? ` · <span style="color:var(--danger);">${erros} com erro</span>` : ''}${cfg.ultimaSincronizacao ? ` · última em ${fmtDateTime(cfg.ultimaSincronizacao)}` : ''}</div>
+        <button class="btn-primary" ${sunchatPronto() ? '' : 'disabled'} onclick="sincronizarAgoraSunchat()">Sincronizar agora</button>
+      </div>
+    </div>
+  </div>`;
+}
+async function carregarConfigSunchat() {
+  toast('Buscando canais e pipelines na SunChat…');
+  try {
+    __sunchatConfigCarregada = await chamarSunchat('config');
+    switchView('integracoes');
+    toast(`✓ ${__sunchatConfigCarregada.canais.length} canal(is) e ${__sunchatConfigCarregada.pipelines.length} pipeline(s) carregados.`);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+async function salvarCfgSunchat(campo, valor) {
+  const cfg = cfgSunchat();
+  if (campo.startsWith('etapa:')) cfg.etapas[campo.slice(6)] = valor;
+  else if (campo === 'pipelineId') {
+    if (cfg.pipelineId !== valor) cfg.etapas = {};
+    cfg.pipelineId = valor;
+  } else cfg[campo] = valor;
+  if (campo === 'ativo' && valor && !sunchatPronto()) {
+    cfg.ativo = false;
+    toast('Escolha o pipeline e ligue pelo menos a coluna "Novo Lead" antes de ativar.');
+  }
+  await persist();
+  switchView('integracoes');
+}
+async function sincronizarAgoraSunchat() {
+  toast('Sincronizando com a SunChat…');
+  (DB.pipeline || []).forEach((l) => l.sunchat && l.sunchat.erro && (l.sunchat.em = null));
+  await sincronizarSunchat(50);
+  switchView('integracoes');
+  toast('✓ Sincronização concluída.');
+}
+
 function getNavItems() {
   if (isVendedor()) {
     return [
@@ -3134,8 +3359,8 @@ function getNavItems() {
         icon: ICONS.kanban,
       },
       {
-        id: 'crm',
-        label: 'Implantação',
+        id: 'minhasvendas',
+        label: 'Minhas vendas',
         icon: ICONS.clipboard,
       },
       {
@@ -3199,6 +3424,12 @@ function getNavItems() {
     });
   if (isAdmin())
     items.push({
+      id: 'repasses',
+      label: 'Repasse',
+      icon: ICONS.money,
+    });
+  if (isAdmin())
+    items.push({
       id: 'comissoes',
       label: 'Comissões',
       icon: ICONS.money,
@@ -3208,6 +3439,12 @@ function getNavItems() {
       id: 'gestao',
       label: 'Gestão',
       icon: ICONS.building,
+    });
+  if (isAdmin())
+    items.push({
+      id: 'integracoes',
+      label: 'Integrações',
+      icon: ICONS.admin,
     });
   if (isAdmin())
     items.push({
@@ -3269,7 +3506,10 @@ function switchView(id) {
   else if (id === 'gestao') views.innerHTML = viewGestao();
   else if (id === 'usuarios') views.innerHTML = viewUsuarios();
   else if (id === 'cdls') views.innerHTML = viewCdls();
-  else if (id === 'minhacomissao') views.innerHTML = viewMinhaComissao();
+  else if (id === 'integracoes') views.innerHTML = isAdmin() ? viewIntegracoes() : '';
+  else if (id === 'repasses') views.innerHTML = isAdmin() ? viewRepasses() : '';
+  else if (id === 'minhasvendas') views.innerHTML = viewMinhasVendas();
+  else if (id === 'minhacomissao') views.innerHTML = viewMinhaComissao().replace('<div class="view-wrap">', '<div class="view-wrap">' + secaoRepassesDoVendedor());
   else if (id === 'orcamento') {
     views.innerHTML = viewOrcamento();
     initOrcamentoForm();
@@ -3700,6 +3940,7 @@ function openPipelineLeadModal(id, isNew) {
       <summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--navy);">Membros do lead (${(l.membrosIds || (l.vendedorId ? [l.vendedorId] : [])).length}) — clique pra ver ou alterar</summary>
       <div style="max-height:150px;overflow:auto;margin-top:8px;" onchange="atualizarMembrosPipelineLead('${l.id}')">${membrosCheckboxes(l.membrosIds || (l.vendedorId ? [l.vendedorId] : []))}</div>
     </details>
+    ${blocoSunchatLead(l)}
     <div class="modal-section-title" style="margin-top:20px">Comentários</div>
     <div class="history-list" style="max-height:180px">${
       (l.comentarios || [])
@@ -3712,7 +3953,7 @@ function openPipelineLeadModal(id, isNew) {
         .join('') || '<div style="font-size:12px;color:var(--text-faint)">Nenhum comentário.</div>'
     }</div>
     <div style="display:flex;gap:8px;margin-top:10px"><input id="pl_comentario" class="search-input" style="flex:1" placeholder="Adicionar comentário..."><button class="btn-ghost" onclick="addPipelineComentario('${l.id}')">Adicionar</button></div>
-    <div class="btn-row"><button class="btn-danger" onclick="excluirPipelineLead('${l.id}')">${ICONS.trash} Excluir</button><button class="btn-primary" onclick="savePipelineLead('${l.id}')">${ICONS.check} Salvar</button>${l.celular ? `<a class="wpp-btn" target="_blank" href="https://api.whatsapp.com/send?phone=55${onlyDigits(l.celular)}">${ICONS.wpp} WhatsApp</a>` : ''}</div>
+    <div class="btn-row">${isAdmin() ? `<button class="btn-danger" onclick="excluirPipelineLead('${l.id}')">${ICONS.trash} Excluir</button>` : ''}<button class="btn-primary" onclick="savePipelineLead('${l.id}')">${ICONS.check} Salvar</button>${l.celular ? `<a class="wpp-btn" target="_blank" href="https://api.whatsapp.com/send?phone=55${onlyDigits(l.celular)}">${ICONS.wpp} WhatsApp</a>` : ''}</div>
   </div></div>`);
 }
 // Checa se um CNPJ já é associado da CDL (cdl_base ou affiliates) — mesma
@@ -4180,6 +4421,7 @@ async function excluirPipelineLead(id) {
     DB.leadsExcluidos = DB.leadsExcluidos || [];
     if (!DB.leadsExcluidos.includes(lead.leadOrigemId)) DB.leadsExcluidos.push(lead.leadOrigemId);
   }
+  avisarSunchatLeadSaiu(lead, 'excluido');
   DB.pipeline = DB.pipeline.filter((x) => x.id !== id);
   await persist();
   closeModal();
@@ -4607,6 +4849,7 @@ async function converterPipelineParaImplantacao(l) {
     ];
   }
   DB.clients.push(...criados);
+  avisarSunchatLeadSaiu(l, 'ganho');
   DB.pipeline = DB.pipeline.filter((x) => x.id !== l.id);
   await persist();
   closeModal();
@@ -8667,6 +8910,7 @@ function secoesCadastroVenda(c) {
   if (vig && !opcoes.includes(vig)) opcoes.unshift(vig);
   const emp = getEmpresaDoCliente(c) || {};
   return `
+    ${isAdmin() && c.solicitacaoExclusao ? `<div class="pendencia-banner" style="margin-bottom:14px;">🗑 ${escHist(c.solicitacaoExclusao.por)} pediu para excluir este card: "${escHist(c.solicitacaoExclusao.motivo)}". <button class="btn-danger" style="padding:4px 10px;font-size:11px;margin-left:6px;" onclick="deleteClient()">Excluir</button> <button class="btn-ghost" style="padding:4px 10px;font-size:11px;" onclick="recusarExclusaoCard()">Recusar</button></div>` : ''}
     ${alertaVigencia(c)}
     <div class="modal-section-title">Venda</div>
     <div class="field-grid">
@@ -9350,6 +9594,11 @@ function renderImplantacaoNova(c) {
              </div>`
       }
     </div>
+    <div class="modal-section-title">Ativação</div>
+    <div class="dep-card" style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="font-size:12.5px;">Quando a Unimed ativar o contrato, informe a data. A partir dela vale a recorrência do FCDL.</div>
+      <div class="fg" style="margin:0;"><input type="date" value="${dataAtivacaoDoCard(c)}" onchange="setDataAtivacao(this.value)"></div>
+    </div>
     <div class="modal-section-title">Envio para a Unimed</div>
     <div class="dep-card">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12.5px;">Status do envio: ${statusEmailImplantacao(c)}</div>
@@ -9368,6 +9617,344 @@ function renderImplantacaoNova(c) {
 function statusEmailImplantacao(c) {
   const x = titularesDoMesmoCard(c).find((t) => t.emailAdministradoraEnviadoEm);
   return x ? `<span class="status-pill ativo">✓ Enviado em ${fmtDateTime(x.emailAdministradoraEnviadoEm)}</span>` : '<span class="status-pill inativo">Ainda não enviado</span>';
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ATIVAÇÃO — o atendente informa a data em que a Unimed ativou o contrato.
+// ═══════════════════════════════════════════════════════════════════════
+function dataAtivacaoDoCard(c) {
+  const x = titularesDoMesmoCard(c).find((t) => t.dataAtivacao);
+  return (x && x.dataAtivacao) || '';
+}
+async function setDataAtivacao(iso) {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  if (!c) return;
+  titularesDoMesmoCard(c).forEach((x) => (x.dataAtivacao = iso || ''));
+  if (iso) c.historico.push({ data: nowISO(), texto: `Data de ativação informada: ${fmtDate(iso)}.` });
+  await persist();
+  renderClientModal();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// REPASSE — a base é o valor que a Unimed pagou (extrato). O sistema divide
+// pela matriz da venda:
+//  • CDL Mossoró: vendedor X% (cadastro, padrão 35) · corretora 100 − X
+//  • FCDL adesão: FCDL 10 · CDL local 40 · corretora 30 · vendedor 20
+//  • FCDL recorrência: FCDL 10 · CDL local 50 · corretora 40
+// Vidas repic ou com 65 anos ou mais não geram comissão (a Unimed não paga);
+// o sistema usa isso pra calcular quanto deveria vir e avisar divergência.
+// ═══════════════════════════════════════════════════════════════════════
+const REGRA_FCDL = {
+  adesao: { fcdl: 10, cdl: 40, corretora: 30, vendedor: 20 },
+  recorrencia: { fcdl: 10, cdl: 50, corretora: 40 },
+};
+function cardsParaRepasse() {
+  const vistos = {};
+  const lista = [];
+  DB.clients.forEach((c) => {
+    if (!['enviado', 'ativo'].includes(c.etapaAdesao)) return;
+    const chave = `${c.empresaId}:${c.numeroLead || c.id}`;
+    if (vistos[chave]) return;
+    vistos[chave] = true;
+    const emp = getEmpresaDoCliente(c) || {};
+    lista.push({ chave, c, nome: emp.razaoSocial || c.titular.razaoSocial || c.titular.nome || 'Empresa', venda: vendaDoCard(c), vendedorId: vendedorResponsavelDoCard(c) });
+  });
+  return lista.sort((a, b) => a.nome.localeCompare(b.nome));
+}
+function vidaGeraComissao(p) {
+  if (p.repic === true) return false;
+  const idade = idadeEmAnos(p.dataNascimento);
+  return idade === null || idade < 65;
+}
+function mensalidadeElegivel(c) {
+  let total = 0;
+  titularesDoMesmoCard(c).forEach((x) => {
+    const valor = PLAN_VALUES_PORTAL[chavePlanoPorNome(x.planoEscolhido)]?.valor || 0;
+    vidasDoTitular(x).forEach((v) => {
+      if (vidaGeraComissao(v.pessoa)) total += valor;
+    });
+  });
+  return total;
+}
+function valorEsperadoRepasse(card, tipo) {
+  const base = mensalidadeElegivel(card.c);
+  if (card.venda.matriz === 'FCDL') return tipo === 'recorrencia' ? base * 0.03 : base;
+  return base * 0.3; // CDL Mossoró: 30% do valor do contrato
+}
+function dividirRepasse(card, tipo, valor) {
+  const v = Number(valor) || 0;
+  const vend = (DB.users || []).find((u) => u.id === card.vendedorId);
+  const cdl = cdlPorId(card.venda.cdlId);
+  let partes;
+  if (card.venda.matriz === 'FCDL') {
+    const r = REGRA_FCDL[tipo] || REGRA_FCDL.adesao;
+    partes = [
+      { tipo: 'fcdl', id: 'fcdl', nome: 'FCDL', percentual: r.fcdl },
+      { tipo: 'cdl', id: cdl?.id || '', nome: cdl?.nome || 'CDL (não definida)', percentual: r.cdl },
+      { tipo: 'corretora', id: 'corretora', nome: 'Nossa Corretora', percentual: r.corretora },
+    ];
+    if (r.vendedor) partes.push({ tipo: 'vendedor', id: vend?.id || '', nome: vend?.nome || 'Vendedor (não definido)', percentual: r.vendedor });
+  } else {
+    const pv = Math.min(100, Math.max(0, Number(vend?.percentualCdlMossoro ?? 35)));
+    partes = [
+      { tipo: 'vendedor', id: vend?.id || '', nome: vend?.nome || 'Vendedor (não definido)', percentual: pv },
+      { tipo: 'corretora', id: 'corretora', nome: 'Nossa Corretora', percentual: 100 - pv },
+    ];
+  }
+  partes.forEach((p) => (p.valor = Math.round(v * p.percentual) / 100));
+  const soma = partes.reduce((n, p) => n + p.valor, 0);
+  const corr = partes.find((p) => p.tipo === 'corretora');
+  if (corr) corr.valor = Math.round((corr.valor + (v - soma)) * 100) / 100; // centavos de arredondamento
+  return partes.map((p) => ({ ...p, pago: false, pagoEm: null }));
+}
+
+let __repasseForm = { chave: '', tipo: 'adesao', valor: '', data: todayISO() };
+function openLancarRecebimento() {
+  __repasseForm = { chave: '', tipo: 'adesao', valor: '', data: todayISO() };
+  desenharLancarRecebimento();
+}
+function desenharLancarRecebimento() {
+  const cards = cardsParaRepasse();
+  const f = __repasseForm;
+  const card = cards.find((x) => x.chave === f.chave);
+  const fcdl = card && card.venda.matriz === 'FCDL';
+  if (card && !fcdl && f.tipo === 'recorrencia') f.tipo = 'adesao';
+  const valor = Number(String(f.valor).replace(/\./g, '').replace(',', '.')) || 0;
+  const partes = card && valor ? dividirRepasse(card, f.tipo, valor) : [];
+  const esperado = card ? valorEsperadoRepasse(card, f.tipo) : 0;
+  const diverge = card && valor && esperado && Math.abs(valor - esperado) / esperado > 0.01;
+  openModalHTML(`<div class="modal modal-wide"><div class="modal-head"><div class="mh-info"><div class="mh-name">Lançar recebimento da Unimed</div><div class="mh-sub">O valor que veio no extrato; o sistema divide pela matriz da venda</div></div><button class="modal-close" onclick="closeModal()">${ICONS.close}</button></div><div class="modal-body">
+    <div class="fg"><label>Empresa</label><select onchange="__repasseForm.chave=this.value; desenharLancarRecebimento()"><option value="">Escolha a empresa…</option>${cards
+      .map((x) => `<option value="${x.chave}" ${x.chave === f.chave ? 'selected' : ''}>${escHist(x.nome)} · ${x.venda.matriz === 'FCDL' ? `FCDL · ${escHist(cdlPorId(x.venda.cdlId)?.nome || '?')}` : x.venda.matriz === 'CDL' ? 'CDL Mossoró' : 'matriz não definida'}</option>`)
+      .join('')}</select></div>
+    <div class="field-grid" style="margin-top:12px;">
+      <div class="fg"><label>Tipo</label><select onchange="__repasseForm.tipo=this.value; desenharLancarRecebimento()"><option value="adesao" ${f.tipo === 'adesao' ? 'selected' : ''}>Adesão</option>${fcdl ? `<option value="recorrencia" ${f.tipo === 'recorrencia' ? 'selected' : ''}>Recorrência (3%)</option>` : ''}</select></div>
+      <div class="fg"><label>Valor recebido (R$)</label><input value="${escHist(f.valor)}" placeholder="1.500,00" onchange="__repasseForm.valor=this.value; desenharLancarRecebimento()"></div>
+    </div>
+    <div class="fg" style="margin-top:12px;max-width:240px;"><label>Data do recebimento</label><input type="date" value="${f.data}" onchange="__repasseForm.data=this.value"></div>
+    ${
+      card && !card.venda.matriz
+        ? '<div class="pendencia-banner" style="margin-top:14px;">⚠️ Esta empresa não tem matriz da venda definida (aba Cadastro). Defina antes de lançar.</div>'
+        : ''
+    }
+    ${
+      partes.length
+        ? `<div class="modal-section-title" style="margin-top:16px;">Divisão</div><div class="dep-card">${partes
+            .map((p) => `<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--border);"><span>${escHist(p.nome)} <span style="color:var(--text-muted);">· ${p.percentual}%</span></span><b>${formatBRL(p.valor)}</b></div>`)
+            .join('')}</div>
+      <div style="font-size:12px;margin-top:8px;color:${diverge ? 'var(--warning)' : 'var(--text-muted)'};">${diverge ? '⚠️ ' : ''}Esperado pelo sistema: ${formatBRL(esperado)} (sem vidas repic e com 65+)${diverge ? ' — confira o extrato.' : '.'}</div>`
+        : ''
+    }
+  </div><div class="modal-foot"><button class="btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn-primary" ${partes.length && card.venda.matriz ? '' : 'disabled'} onclick="salvarRecebimento()">${ICONS.check} Lançar</button></div></div>`);
+}
+async function salvarRecebimento() {
+  const card = cardsParaRepasse().find((x) => x.chave === __repasseForm.chave);
+  const valor = Number(String(__repasseForm.valor).replace(/\./g, '').replace(',', '.')) || 0;
+  if (!card || !valor) return;
+  DB.repasses = DB.repasses || [];
+  const rep = {
+    id: uid('rep'),
+    cardChave: card.chave,
+    empresaId: card.c.empresaId,
+    empresaNome: card.nome,
+    clientId: card.c.id,
+    matriz: card.venda.matriz,
+    cdlId: card.venda.cdlId || '',
+    vendedorId: card.vendedorId || '',
+    tipo: __repasseForm.tipo,
+    valor,
+    esperado: Math.round(valorEsperadoRepasse(card, __repasseForm.tipo) * 100) / 100,
+    dataRecebimento: __repasseForm.data,
+    competencia: (__repasseForm.data || todayISO()).slice(0, 7),
+    divisao: dividirRepasse(card, __repasseForm.tipo, valor),
+    criadoEm: nowISO(),
+    criadoPor: CURRENT_USER?.nome || '',
+  };
+  DB.repasses.push(rep);
+  card.c.historico.push({ data: nowISO(), texto: `Recebimento da Unimed lançado: ${rep.tipo === 'recorrencia' ? 'recorrência' : 'adesão'} ${formatBRL(valor)}.` });
+  await persist();
+  closeModal();
+  switchView('repasses');
+  toast('✓ Recebimento lançado e dividido.');
+}
+
+let __repasseAba = 'recebimentos';
+let __repasseMes = '';
+let __repasseSituacao = 'pendente';
+function itensRepasse(filtroTipo) {
+  const out = [];
+  (DB.repasses || []).forEach((r) => {
+    if (__repasseMes && r.competencia !== __repasseMes) return;
+    r.divisao.forEach((p, idx) => {
+      if (filtroTipo && p.tipo !== filtroTipo) return;
+      if (__repasseSituacao === 'pendente' && p.pago) return;
+      if (__repasseSituacao === 'pago' && !p.pago) return;
+      out.push({ r, p, idx });
+    });
+  });
+  return out;
+}
+function viewRepasses() {
+  const meses = [...new Set((DB.repasses || []).map((r) => r.competencia))].sort().reverse();
+  const aba = (id, rot) => `<button class="${__repasseAba === id ? 'btn-primary' : 'btn-ghost'}" style="padding:7px 12px;font-size:12px;" onclick="__repasseAba='${id}'; switchView('repasses')">${rot}</button>`;
+  let corpo = '';
+  if (__repasseAba === 'recebimentos') {
+    const lista = (DB.repasses || []).filter((r) => !__repasseMes || r.competencia === __repasseMes).slice().reverse();
+    corpo = lista.length
+      ? lista
+          .map((r) => {
+            const diverge = r.esperado && Math.abs(r.valor - r.esperado) / r.esperado > 0.01;
+            return `<div class="dep-card" style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div><b>${escHist(r.empresaNome)}</b><div style="font-size:11.5px;color:var(--text-muted);">${r.tipo === 'recorrencia' ? 'Recorrência' : 'Adesão'} · ${r.matriz === 'FCDL' ? `FCDL · ${escHist(cdlPorId(r.cdlId)?.nome || '')}` : 'CDL Mossoró'} · recebido em ${fmtDate(r.dataRecebimento)}${diverge ? ` · <span style="color:var(--warning);">esperado ${formatBRL(r.esperado)}</span>` : ''}</div></div><b style="font-size:15px;">${formatBRL(r.valor)}</b></div>
+            <div style="margin-top:8px;">${r.divisao.map((p) => `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>${escHist(p.nome)} · ${p.percentual}%</span><span>${formatBRL(p.valor)} ${p.pago ? '<span class="status-pill ativo">pago</span>' : '<span class="status-pill inativo">a pagar</span>'}</span></div>`).join('')}</div></div>`;
+          })
+          .join('')
+      : '<div class="dep-card" style="font-size:12.5px;color:var(--text-muted);">Nenhum recebimento lançado.</div>';
+  } else {
+    const tipo = { cdls: 'cdl', vendedores: 'vendedor', fcdl: 'fcdl', corretora: 'corretora' }[__repasseAba];
+    const grupos = {};
+    itensRepasse(tipo).forEach((it) => {
+      const k = it.p.id || it.p.nome;
+      grupos[k] = grupos[k] || { nome: it.p.nome, id: it.p.id, itens: [], total: 0 };
+      grupos[k].itens.push(it);
+      grupos[k].total += it.p.valor;
+    });
+    const gs = Object.values(grupos);
+    corpo = gs.length
+      ? gs
+          .map((g) => `<div class="dep-card" style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><b>${escHist(g.nome)}</b><div style="display:flex;gap:8px;align-items:center;"><b style="font-size:15px;">${formatBRL(g.total)}</b>
+              <button class="btn-ghost" style="padding:6px 10px;font-size:11.5px;" onclick="gerarReciboRepasse('${tipo}','${escHist(g.id || g.nome)}')">${ICONS.file} Recibo</button>
+              ${__repasseSituacao !== 'pago' ? `<button class="btn-primary" style="padding:6px 10px;font-size:11.5px;" onclick="marcarPagoGrupo('${tipo}','${escHist(g.id || g.nome)}')">Marcar como pago</button>` : ''}</div></div>
+            ${g.itens.map((it) => `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-top:1px solid var(--border);"><span>${escHist(it.r.empresaNome)} · ${it.r.tipo === 'recorrencia' ? 'recorrência' : 'adesão'} · ${it.r.competencia}</span><span>${formatBRL(it.p.valor)}${it.p.pago ? ` · pago ${fmtDate((it.p.pagoEm || '').slice(0, 10))}` : ''}</span></div>`).join('')}</div>`)
+          .join('')
+      : '<div class="dep-card" style="font-size:12.5px;color:var(--text-muted);">Nada aqui com esses filtros.</div>';
+  }
+  return `<div class="view-wrap">
+    <div class="page-head"><div class="page-title">Repasse</div><button class="btn-primary" onclick="openLancarRecebimento()">${ICONS.plus} Lançar recebimento</button></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">${aba('recebimentos', 'Recebimentos')}${aba('cdls', 'A pagar por CDL')}${aba('vendedores', 'A pagar por vendedor')}${aba('fcdl', 'FCDL')}${aba('corretora', 'Nossa Corretora')}</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+      <select onchange="__repasseMes=this.value; switchView('repasses')"><option value="">Todos os meses</option>${meses.map((m) => `<option value="${m}" ${m === __repasseMes ? 'selected' : ''}>${m.slice(5)}/${m.slice(0, 4)}</option>`).join('')}</select>
+      ${__repasseAba !== 'recebimentos' ? `<select onchange="__repasseSituacao=this.value; switchView('repasses')"><option value="pendente" ${__repasseSituacao === 'pendente' ? 'selected' : ''}>A pagar</option><option value="pago" ${__repasseSituacao === 'pago' ? 'selected' : ''}>Pagos</option><option value="todos" ${__repasseSituacao === 'todos' ? 'selected' : ''}>Todos</option></select>` : ''}
+    </div>
+    ${corpo}
+  </div>`;
+}
+async function marcarPagoGrupo(tipo, id) {
+  const itens = itensRepasse(tipo).filter((it) => (it.p.id || it.p.nome) === id && !it.p.pago);
+  if (!itens.length) return;
+  if (!(await showConfirmDialog(`Marcar ${itens.length} repasse(s) como pago(s)?`, { confirmLabel: 'Marcar como pago' }))) return;
+  const agora = nowISO();
+  itens.forEach((it) => {
+    it.p.pago = true;
+    it.p.pagoEm = agora;
+    it.p.pagoPor = CURRENT_USER?.nome || '';
+  });
+  await persist();
+  switchView('repasses');
+  toast('✓ Marcado como pago.');
+}
+function gerarReciboRepasse(tipo, id) {
+  const itens = itensRepasse(tipo).filter((it) => (it.p.id || it.p.nome) === id);
+  if (!itens.length) return;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const nome = itens[0].p.nome;
+  const total = itens.reduce((n, it) => n + it.p.valor, 0);
+  const pg = tipo === 'cdl' ? cdlPorId(id)?.pagamento || {} : tipo === 'vendedor' ? (DB.users || []).find((u) => u.id === id) || {} : {};
+  let y = 20;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(15);
+  doc.text('Recibo de repasse de comissão', 14, y);
+  y += 9;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10.5);
+  doc.text(`Beneficiário: ${nome}`, 14, y);
+  y += 6;
+  doc.text(`Período: ${__repasseMes ? `${__repasseMes.slice(5)}/${__repasseMes.slice(0, 4)}` : 'todos os meses'} · emitido em ${new Date().toLocaleDateString('pt-BR')}`, 14, y);
+  y += 6;
+  const dadosPg = [pg.banco && `Banco ${pg.banco}`, pg.agencia && `ag. ${pg.agencia}`, pg.conta && `conta ${pg.conta}`, (pg.pixChave || pg.pixChave === 0) && `PIX ${pg.pixChave}`].filter(Boolean).join(' · ');
+  if (dadosPg) {
+    doc.text(`Pagamento: ${dadosPg}`, 14, y);
+    y += 6;
+  }
+  y += 4;
+  doc.setFont('helvetica', 'bold');
+  doc.text('Empresa', 14, y);
+  doc.text('Tipo', 110, y);
+  doc.text('Competência', 140, y);
+  doc.text('Valor', 196, y, { align: 'right' });
+  y += 2;
+  doc.line(14, y, 196, y);
+  y += 6;
+  doc.setFont('helvetica', 'normal');
+  itens.forEach((it) => {
+    if (y > 275) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.text(doc.splitTextToSize(it.r.empresaNome, 92)[0], 14, y);
+    doc.text(it.r.tipo === 'recorrencia' ? 'Recorrência' : 'Adesão', 110, y);
+    doc.text(`${it.r.competencia.slice(5)}/${it.r.competencia.slice(0, 4)}`, 140, y);
+    doc.text(formatBRL(it.p.valor), 196, y, { align: 'right' });
+    y += 6;
+  });
+  doc.line(14, y, 196, y);
+  y += 7;
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Total: ${formatBRL(total)}`, 196, y, { align: 'right' });
+  y += 24;
+  doc.setFont('helvetica', 'normal');
+  doc.line(14, y, 100, y);
+  doc.text('Nossa Corretora', 14, y + 5);
+  doc.save(`recibo-repasse-${nome.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-')}.pdf`);
+}
+// vendedor: os repasses dele (só leitura)
+function secaoRepassesDoVendedor() {
+  const meus = [];
+  (DB.repasses || []).forEach((r) => r.divisao.forEach((p) => p.tipo === 'vendedor' && p.id === CURRENT_USER?.id && meus.push({ r, p })));
+  if (!meus.length) return '';
+  const aPagar = meus.filter((m) => !m.p.pago).reduce((n, m) => n + m.p.valor, 0);
+  return `<div class="dep-card" style="margin-bottom:16px;"><b>Repasses</b> <span style="font-size:12px;color:var(--text-muted);">· a receber ${formatBRL(aPagar)}</span>
+    ${meus.slice().reverse().map((m) => `<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-top:1px solid var(--border);"><span>${escHist(m.r.empresaNome)} · ${m.r.tipo === 'recorrencia' ? 'recorrência' : 'adesão'} · ${m.r.competencia.slice(5)}/${m.r.competencia.slice(0, 4)}</span><span>${formatBRL(m.p.valor)} ${m.p.pago ? '<span class="status-pill ativo">pago</span>' : '<span class="status-pill inativo">a receber</span>'}</span></div>`).join('')}</div>`;
+}
+// vendedor: situação das vendas dele depois que viram implantação (só leitura)
+function viewMinhasVendas() {
+  const minhas = [];
+  const vistos = {};
+  DB.clients.forEach((c) => {
+    if (vendedorResponsavelDoCard(c) !== CURRENT_USER?.id) return;
+    const k = `${c.empresaId}:${c.numeroLead || c.id}`;
+    if (vistos[k]) return;
+    vistos[k] = true;
+    minhas.push(c);
+  });
+  return `<div class="view-wrap"><div class="page-head"><div class="page-title">Minhas vendas</div></div>
+    ${minhas.length ? minhas.map((c) => {
+      const emp = getEmpresaDoCliente(c) || {};
+      const at = dataAtivacaoDoCard(c);
+      return `<div class="dep-card" style="margin-bottom:10px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div><b>${escHist(emp.razaoSocial || c.titular.nome || '')}</b><div style="font-size:11.5px;color:var(--text-muted);">${titularesDoMesmoCard(c).reduce((n, x) => n + 1 + (x.dependentes || []).length, 0)} vida(s)</div></div><span class="status-pill ${c.etapaAdesao === 'ativo' ? 'ativo' : 'inativo'}">${c.etapaAdesao === 'ativo' ? `Ativado${at ? ` em ${fmtDate(at)}` : ''}` : `Em implantação · ${stageLabel(c.etapaAdesao)}`}</span></div>`;
+    }).join('') : '<div class="dep-card" style="font-size:12.5px;color:var(--text-muted);">Nenhuma venda em implantação ainda.</div>'}
+  </div>`;
+}
+
+// ─── Excluir card: só o administrador; o atendente solicita ───────────────
+async function solicitarExclusaoCard() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  if (!c) return;
+  const motivo = prompt('Por que este card deve ser excluído? (ex.: duplicado, venda desistida)');
+  if (!motivo || !motivo.trim()) return;
+  titularesDoMesmoCard(c).forEach((x) => (x.solicitacaoExclusao = { por: CURRENT_USER?.nome || '', motivo: motivo.trim(), em: nowISO() }));
+  c.historico.push({ data: nowISO(), texto: `Exclusão solicitada: ${motivo.trim()}` });
+  await persist();
+  renderClientModal();
+  toast('✓ Exclusão solicitada. O administrador vai avaliar.');
+}
+async function recusarExclusaoCard() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  if (!c) return;
+  titularesDoMesmoCard(c).forEach((x) => delete x.solicitacaoExclusao);
+  c.historico.push({ data: nowISO(), texto: 'Solicitação de exclusão recusada.' });
+  await persist();
+  renderClientModal();
 }
 
 // ─── Conteúdo das abas na jornada de 5 etapas ─────────────────────────────
@@ -9860,7 +10447,7 @@ function renderClientModal() {
 
       </div>
       <div class="implantacao-footer">
-        <button class="btn-danger footer-danger" onclick="deleteClient()">${ICONS.trash} Excluir</button>
+        ${isAdmin() ? `<button class="btn-danger footer-danger" onclick="deleteClient()">${ICONS.trash} Excluir</button>` : c.solicitacaoExclusao ? `<span style="font-size:11.5px;color:var(--text-muted);">Exclusão solicitada</span>` : `<button class="btn-ghost footer-danger" onclick="solicitarExclusaoCard()">${ICONS.trash} Solicitar exclusão</button>`}
         <button class="btn-ghost" onclick="abrirTarefaImplantacao()">${ICONS.plus} Adicionar tarefa</button>
         <button class="btn-ghost" onclick="salvarClienteManual()">${ICONS.check} Salvar</button>
         <button class="btn-primary" onclick="concluirEtapaImplantacao()" ${c.etapaAdesao === 'ativo' ? 'disabled' : ''}>${ICONS.check} Concluir etapa</button>
@@ -12147,6 +12734,7 @@ function pendenciasDaEtapa(c, etapa) {
   }
   if (etapa === 'enviado') {
     if (!card.some((x) => x.emailAdministradoraEnviadoEm)) falta.push('E-mail da implantação enviado para a Unimed');
+    if (!dataAtivacaoDoCard(c)) falta.push('Data de ativação informada pela Unimed');
   }
   return falta;
 }
