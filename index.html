@@ -1697,8 +1697,25 @@ async function uploadArquivoPortal(blob, caminho, contentType) {
   }
   return `${SUPABASE_URL}/storage/v1${signData.signedURL}`;
 }
+// Vendedor parceiro nunca lê nem grava o banco inteiro: usa a função
+// portal-vendedor, que entrega e aceita só os dados dele.
+let __PAPEL_SERVIDOR = '';
+const PORTAL_VENDEDOR_URL = `${SUPABASE_URL}/functions/v1/portal-vendedor`;
+async function chamarPortalVendedor(acao, db) {
+  const res = await fetchComRetry(PORTAL_VENDEDOR_URL, {
+    method: 'POST',
+    headers: supabaseHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ acao, db }),
+  });
+  if (!res.ok) throw new Error('Supabase vendedor failed: ' + res.status);
+  return res.json();
+}
 window.storage = {
   async get(key) {
+    if (__PAPEL_SERVIDOR === 'vendedor') {
+      const v = await chamarPortalVendedor('get');
+      return { key, value: JSON.stringify(v) };
+    }
     const url = `${SUPABASE_URL}/rest/v1/rpc/secure_portal_get`;
     const res = await fetchComRetry(url, {
       method: 'POST',
@@ -1718,6 +1735,10 @@ window.storage = {
     };
   },
   async set(key, value) {
+    if (__PAPEL_SERVIDOR === 'vendedor') {
+      await chamarPortalVendedor('salvar', JSON.parse(value));
+      return { key, value };
+    }
     const url = `${SUPABASE_URL}/rest/v1/rpc/secure_portal_set`;
     const res = await fetchComRetry(url, {
       method: 'POST',
@@ -2387,7 +2408,7 @@ async function loadDB() {
     // em persist() pra saber se alguém mais mudou o banco nesse meio-tempo.
     __ultimaAssinaturaDB = r.value;
   } catch (e) {
-    if (e.message !== 'not found') throw e;
+    if (e.message !== 'not found' || __PAPEL_SERVIDOR === 'vendedor') throw e;
     DB = seedDB();
     try {
       await persist();
@@ -2726,6 +2747,7 @@ async function doLogin() {
     const profiles = profileRes.ok ? await profileRes.json() : [];
     const profile = profiles[0];
     if (!profile || !profile.ativo) throw new Error('Usuário sem acesso ativo ao portal.');
+    __PAPEL_SERVIDOR = profile.papel || '';
     btn.innerHTML =
       '<span style="display:inline-flex;align-items:center;gap:8px;"><span style="width:14px;height:14px;border:2px solid rgba(255,255,255,0.35);border-top-color:#fff;border-radius:50%;animation:spin 0.7s linear infinite;"></span>Carregando seus dados...</span>';
     await loadDB();
@@ -2768,6 +2790,7 @@ async function doLogin() {
 }
 
 async function logout(opts) {
+  __PAPEL_SERVIDOR = '';
   // Registra o logout e salva ENQUANTO a sessão ainda vale. Antes isso rodava
   // depois de apagar a sessão — o Supabase recusava (erro 400) e o registro
   // se perdia. Limite de 4s pra nunca travar a saída.
@@ -4422,6 +4445,7 @@ async function excluirPipelineLead(id) {
     if (!DB.leadsExcluidos.includes(lead.leadOrigemId)) DB.leadsExcluidos.push(lead.leadOrigemId);
   }
   avisarSunchatLeadSaiu(lead, 'excluido');
+  DB.pipelineRemovidos = [...new Set([...(DB.pipelineRemovidos || []), lead.id])].slice(-2000);
   DB.pipeline = DB.pipeline.filter((x) => x.id !== id);
   await persist();
   closeModal();
@@ -4850,6 +4874,7 @@ async function converterPipelineParaImplantacao(l) {
   }
   DB.clients.push(...criados);
   avisarSunchatLeadSaiu(l, 'ganho');
+  DB.pipelineRemovidos = [...new Set([...(DB.pipelineRemovidos || []), l.id])].slice(-2000);
   DB.pipeline = DB.pipeline.filter((x) => x.id !== l.id);
   await persist();
   closeModal();
@@ -25164,6 +25189,7 @@ async function boot() {
       );
       const profile = (await profileRes.json())[0];
       if (!profile?.ativo) throw new Error('inactive');
+      __PAPEL_SERVIDOR = profile.papel || '';
       await loadDB();
       let u = DB.users.find(
         (x) => x.authId === authUser.id || x.email?.toLowerCase() === authUser.email?.toLowerCase()
