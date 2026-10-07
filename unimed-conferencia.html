@@ -120,7 +120,8 @@ async function iniciar() {
     PACOTE = data;
     render();
   } catch (e) {
-    document.getElementById('app').innerHTML = `<div class="erro">${esc(e.message)}</div>`;
+    const semConexao = e instanceof TypeError || /fetch/i.test(e.message || '');
+    document.getElementById('app').innerHTML = `<div class="erro">${esc(semConexao ? 'Não foi possível abrir a página agora. Verifique a internet e tente de novo em alguns minutos; se continuar, fale com a Nossa Corretora.' : e.message)}</div>`;
   }
 }
 iniciar();
