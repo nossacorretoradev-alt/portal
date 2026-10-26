@@ -2678,6 +2678,13 @@ function garantirCdls() {
       assinanteNome: '',
       assinanteEmail: '',
     });
+  // o responsável é quem assina: CDL antiga com responsável e sem assinante passa a ter
+  DB.cdls.forEach((d) => {
+    if (!d.assinanteEmail && d.email) {
+      d.assinanteEmail = String(d.email).toLowerCase();
+      d.assinanteNome = d.assinanteNome || d.responsavel || '';
+    }
+  });
   return DB.cdls;
 }
 function cdlPorId(id) {
@@ -2697,14 +2704,14 @@ function viewCdls() {
     <p style="font-size:12.5px;color:var(--text-muted);margin:-6px 0 16px;">Cada venda é ligada a uma CDL. É ela que diz a quem pagar a parte da CDL no repasse e quem assina os contratos de associação.</p>
     <div class="dep-card" style="padding:0;overflow-x:auto;">
       <table class="data-table" style="width:100%;border-collapse:collapse;font-size:12.5px;">
-        <thead><tr style="text-align:left;"><th style="padding:10px 12px;">CDL</th><th style="padding:10px 12px;">Matriz</th><th style="padding:10px 12px;">CNPJ</th><th style="padding:10px 12px;">Assina as associações</th><th style="padding:10px 12px;">Pagamento</th><th></th></tr></thead>
+        <thead><tr style="text-align:left;"><th style="padding:10px 12px;">CDL</th><th style="padding:10px 12px;">Matriz</th><th style="padding:10px 12px;">CNPJ</th><th style="padding:10px 12px;">Responsável (assina as associações)</th><th style="padding:10px 12px;">Pagamento</th><th></th></tr></thead>
         <tbody>${lista
           .map(
             (d) => `<tr style="border-top:1px solid var(--border);">
             <td style="padding:10px 12px;"><b>${escHist(d.nome)}</b><div style="color:var(--text-muted);font-size:11px;">${escHist(d.cidade || '')}</div></td>
             <td style="padding:10px 12px;">${d.matriz === 'FCDL' ? 'FCDL' : 'CDL Mossoró'}</td>
             <td style="padding:10px 12px;">${escHist(d.cnpj || '—')}</td>
-            <td style="padding:10px 12px;">${d.assinanteEmail ? `${escHist(d.assinanteNome || '')}<div style="color:var(--text-muted);font-size:11px;">${escHist(d.assinanteEmail)}</div>` : '<span style="color:var(--warning);">não cadastrado</span>'}</td>
+            <td style="padding:10px 12px;">${d.assinanteEmail ? `${escHist(d.assinanteNome || '')}<div style="color:var(--text-muted);font-size:11px;">${escHist(d.assinanteEmail)}</div>` : '<span style="color:var(--warning);">sem responsável</span>'}</td>
             <td style="padding:10px 12px;">${d.pagamento?.pixChave ? `PIX ${escHist(d.pagamento.pixChave)}` : d.pagamento?.conta ? `${escHist(d.pagamento.banco || '')} ag ${escHist(d.pagamento.agencia || '')} cc ${escHist(d.pagamento.conta)}` : '<span style="color:var(--text-faint);">—</span>'}</td>
             <td style="padding:10px 12px;text-align:right;"><button class="btn-ghost" style="padding:6px 10px;font-size:11.5px;" onclick="openCdlModal('${d.id}')">Editar</button></td>
           </tr>`
@@ -2727,18 +2734,13 @@ function openCdlModal(id) {
       <div class="fg"><label>Matriz</label><select id="cdl_matriz"><option value="CDL" ${d.matriz === 'CDL' ? 'selected' : ''}>CDL Mossoró</option><option value="FCDL" ${d.matriz !== 'CDL' ? 'selected' : ''}>FCDL</option></select></div>
       <div class="fg"><label>CNPJ</label><input id="cdl_cnpj" value="${v('cnpj')}" oninput="this.value=maskCnpj(this.value)"></div>
     </div>
-    <div class="modal-section-title" style="margin-top:18px;">Responsável e contato</div>
+    <div class="modal-section-title" style="margin-top:18px;">Responsável pela CDL</div>
+    <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 10px;">É quem assina os contratos de associação: recebe por e-mail (Autentique) o contrato de cada empresa nova, depois que a empresa assina. A assinatura dela é a aprovação da associação. Esse e-mail também recebe o recibo do repasse.</p>
     <div class="field-grid">
-      <div class="fg"><label>Responsável</label><input id="cdl_responsavel" value="${v('responsavel')}"></div>
-      <div class="fg"><label>E-mail (recebe o recibo do repasse)</label><input id="cdl_email" value="${v('email')}"></div>
+      <div class="fg"><label>Nome do responsável</label><input id="cdl_responsavel" value="${escHist(d.responsavel || d.assinanteNome || '')}"></div>
+      <div class="fg"><label>E-mail do responsável</label><input id="cdl_email" type="email" value="${escHist(d.email || d.assinanteEmail || '')}"></div>
     </div>
-    <div class="fg" style="margin-top:12px;"><label>Telefone</label><input id="cdl_telefone" value="${v('telefone')}" oninput="this.value=maskPhone(this.value)"></div>
-    <div class="modal-section-title" style="margin-top:18px;">Assina os contratos de associação</div>
-    <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 10px;">Recebe por e-mail (Autentique) o contrato de cada empresa nova, depois que a empresa assina. A assinatura dela é a aprovação da associação.</p>
-    <div class="field-grid">
-      <div class="fg"><label>Nome</label><input id="cdl_assNome" value="${v('assinanteNome')}"></div>
-      <div class="fg"><label>E-mail</label><input id="cdl_assEmail" value="${v('assinanteEmail')}"></div>
-    </div>
+    <div class="fg" style="margin-top:12px;max-width:320px;"><label>Telefone</label><input id="cdl_telefone" value="${v('telefone')}" oninput="this.value=maskPhone(this.value)"></div>
     <div class="modal-section-title" style="margin-top:18px;">Dados de pagamento</div>
     <div class="field-grid">
       <div class="fg"><label>Banco</label><input id="cdl_banco" value="${escHist(pg.banco || '')}"></div>
@@ -2756,8 +2758,8 @@ async function saveCdl(id) {
     toast('Informe o nome da CDL.');
     return;
   }
-  if (g('cdl_assEmail') && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(g('cdl_assEmail'))) {
-    toast('O e-mail de quem assina as associações não parece válido.');
+  if (!g('cdl_responsavel') || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(g('cdl_email'))) {
+    toast('Informe o nome e um e-mail válido do responsável pela CDL: é ele quem assina os contratos de associação.');
     return;
   }
   const dados = {
@@ -2768,8 +2770,9 @@ async function saveCdl(id) {
     responsavel: g('cdl_responsavel'),
     email: g('cdl_email'),
     telefone: g('cdl_telefone'),
-    assinanteNome: g('cdl_assNome'),
-    assinanteEmail: g('cdl_assEmail').toLowerCase(),
+    // o responsável é quem assina os contratos de associação
+    assinanteNome: g('cdl_responsavel'),
+    assinanteEmail: g('cdl_email').toLowerCase(),
     pagamento: { banco: g('cdl_banco'), agencia: g('cdl_agencia'), conta: g('cdl_conta'), pixChave: g('cdl_pix') },
   };
   const lista = garantirCdls();
@@ -3833,7 +3836,7 @@ function abrirJanelaConferenciaAssociado(id, info) {
       : comCdl
         ? `Aguardando ${escHist(sig[1].nome || 'a CDL')} assinar (e-mail enviado pela Autentique) · ${decorridos} de ${prazoDias} dia(s)${longo ? '' : cat ? '' : ' (8 dias na categoria de R$ 145)'}${atrasado ? ' · prazo passou' : ''}`
         : !(cdlPorId('cdl_mossoro') || {}).assinanteEmail
-          ? 'A CDL Mossoró ainda não tem quem assina cadastrado (menu CDLs → assina os contratos). Por isso o contrato saiu só com a empresa: confirme a aprovação manualmente'
+          ? 'A CDL Mossoró ainda não tem responsável cadastrado (menu CDLs → Editar → Responsável pela CDL). Por isso o contrato saiu só com a empresa: confirme a aprovação manualmente'
           : 'Este contrato saiu sem a CDL como assinante (gerado antes do cadastro de quem assina): confirme a aprovação manualmente';
     corpo = `<div style="display:grid;gap:10px;">
         ${passo(empresaOk ? 'ok' : 'espera', empresaOk ? `Empresa assinou o contrato${quandoEmpresa ? ` · ${fmtDateTime(quandoEmpresa)}` : ''}${contrato?.quem ? ` · ${escHist(contrato.quem)}` : ''}` : 'Empresa ainda não assinou')}
@@ -7415,6 +7418,10 @@ function signatarioDoc(tipo, x, quem, key) {
   if (tipo === 'pme' && quem === 'cliente') {
     const pa = x.propostaAdesao || {};
     const s0 = (pa.socios || [])[0] || {};
+    // representante legal do Cadastro: é ele quem assina como contratante
+    const rep = (getEmpresaDoCliente(x) || {}).representante || {};
+    if (rep.nome && onlyDigits(rep.cpf || '').length === 11 && (!s0.nome || nomeComparavel(s0.nome) === nomeComparavel(rep.nome)))
+      return { nome: rep.nome, email: rep.email || pa.email || x.titular.email, celular: rep.telefone || s0.tel || '', cpf: rep.cpf };
     // sócio informado: usa só os dados dele (não completa com CPF/celular do titular)
     if (s0.nome && nomeComparavel(s0.nome) !== nomeComparavel(x.titular.nome))
       return { nome: s0.nome, email: pa.email || x.titular.email, celular: s0.tel || '', cpf: s0.cpf || '' };
@@ -8647,6 +8654,35 @@ function slotsDocsEmpresa(emp) {
     ...(emp && emp.temFuncionarios === true ? SLOTS_FUNCIONARIOS : []),
   ];
 }
+// Representante legal da empresa: é o contratante que assina a Proposta PME III
+function secaoRepresentanteLegal(emp) {
+  const r = (emp && emp.representante) || {};
+  const cpf = onlyDigits(r.cpf || '');
+  const cpfRuim = cpf && !isValidCPF(cpf);
+  return `<div class="modal-section-title" style="margin-top:18px;">Representante legal da empresa</div>
+    <p style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 10px;">É quem assina a Proposta PME III como contratante (sócio ou administrador). Nome e CPF são obrigatórios.</p>
+    <div class="field-grid">
+      <div class="fg"><label>Nome completo</label><input value="${escHist(r.nome || '')}" onchange="setRepresentante('nome', this.value)"></div>
+      <div class="fg"><label>CPF</label><input value="${escHist(cpf ? maskCpf(cpf) : '')}" oninput="this.value=maskCpf(this.value)" onchange="setRepresentante('cpf', this.value)" ${cpfRuim ? 'style="border-color:var(--danger);"' : ''}>${cpfRuim ? '<div style="font-size:11px;color:var(--danger);margin-top:4px;">CPF inválido</div>' : ''}</div>
+    </div>
+    <div class="field-grid" style="margin-top:12px;">
+      <div class="fg"><label>Celular</label><input value="${escHist(r.telefone ? maskPhone(r.telefone) : '')}" oninput="this.value=maskPhone(this.value)" onchange="setRepresentante('telefone', this.value)"></div>
+      <div class="fg"><label>E-mail</label><input type="email" value="${escHist(r.email || '')}" onchange="setRepresentante('email', this.value)"></div>
+    </div>`;
+}
+async function setRepresentante(campo, valor) {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const emp = getEmpresaDoCliente(c);
+  emp.representante = emp.representante || {};
+  const v = String(valor || '').trim();
+  emp.representante[campo] = campo === 'cpf' || campo === 'telefone' ? onlyDigits(v) : campo === 'nome' ? v.toUpperCase() : v.toLowerCase();
+  // a proposta ainda não assinada passa a usar o representante novo
+  titularesDoMesmoCard(c).forEach((x) => {
+    if (x.propostaAdesao && x.propostaAdesao.socios && !Object.values(x.assinaturaFicha || {}).some((a) => a && a.documentId)) delete x.propostaAdesao.socios;
+  });
+  if (campo === 'cpf') renderClientModal();
+  await persist();
+}
 async function setFuncionariosEmpresa(valor) {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   const emp = getEmpresaDoCliente(c);
@@ -8728,6 +8764,7 @@ function secoesCadastroVenda(c) {
       <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">A carta de permanência é anexada nos documentos da empresa, logo abaixo.</div>`
         : ''
     }
+    ${secaoRepresentanteLegal(emp)}
     <div class="modal-section-title" style="margin-top:18px;">Dados da empresa</div>`;
 }
 
@@ -12527,6 +12564,8 @@ function pendenciasDaEtapa(c, etapa) {
     else if (prazoEntregaVigencia(vigenciaDoCard(c)) < new Date()) falta.push('Data de vigência com prazo de entrega vencido: escolha a próxima');
     if (emp.temPlanoAtivo && !emp.numeroCartaoPlanoAnterior) falta.push('Número do cartão do plano atual');
     if (emp.temFuncionarios === undefined) falta.push('Informar se há titulares ou dependentes que são funcionários da empresa');
+    const rep = emp.representante || {};
+    if (!rep.nome || !isValidCPF(onlyDigits(rep.cpf || ''))) falta.push('Representante legal da empresa (nome e CPF válido)');
     if (!card.some((x) => x.associadoValidado)) falta.push('Associação à CDL validada');
     if (!docsEmpresaCompletos(emp)) falta.push('Documentos da empresa anexados e conferidos');
   }
