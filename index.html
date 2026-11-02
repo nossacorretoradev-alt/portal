@@ -2900,6 +2900,113 @@ function avisarSunchatLeadSaiu(l, motivo) {
     chamarSunchat('mover', { pipelineId: cfg.pipelineId, negocioId: s.negocioId, etapaId: cfg.etapas.ganho }).catch(() => {});
   if (motivo === 'excluido') chamarSunchat('remover', { pipelineId: cfg.pipelineId, negocioId: s.negocioId }).catch(() => {});
 }
+// ─── WhatsApp pela SunChat com templates aprovados ──────────────────────
+// Cada tipo de mensagem do portal tem um template (aprovado no WhatsApp
+// Business, cadastrado na SunChat). Com a SunChat configurada, as mensagens
+// saem pelo número da empresa; sem ela, abre o WhatsApp do computador.
+const TEMPLATES_WHATSAPP = [
+  { id: 'boas_vindas', nome: 'Boas-vindas ao lead', vars: ['nome', 'empresa'], padrao: 'Olá {{nome}}! Aqui é da Nossa Corretora, parceira da CDL Mossoró com a Unimed. Recebemos seu interesse no plano de saúde para a {{empresa}}. Podemos conversar?' },
+  { id: 'orcamento', nome: 'Envio do orçamento', vars: ['nome', 'link'], padrao: 'Olá {{nome}}! Segue o orçamento do seu plano (CDL Mossoró × Unimed): {{link}}' },
+  { id: 'documentos_empresa', nome: 'Link de documentos da empresa', vars: ['empresa', 'link'], padrao: 'Olá! Segue o link para enviar os documentos da empresa {{empresa}} (adesão CDL Mossoró × Unimed): {{link}}' },
+  { id: 'documentos_pessoas', nome: 'Link de documentos do titular e dependentes', vars: ['nome', 'link'], padrao: 'Olá {{nome}}! Segue o link para enviar os seus documentos e os dos seus dependentes (adesão CDL Mossoró × Unimed): {{link}}' },
+  { id: 'questionario', nome: 'Questionário de saúde (a própria pessoa)', vars: ['nome', 'link'], padrao: 'Olá {{nome}}! Segue o link para responder o seu questionário de saúde da adesão Unimed (CDL Mossoró): {{link}}' },
+  { id: 'questionario_dependente', nome: 'Questionário de saúde (titular responde pelo dependente)', vars: ['nome', 'dependente', 'link'], padrao: 'Olá {{nome}}! Segue o link para {{dependente}} responder o questionário de saúde (é individual, um por pessoa): {{link}}' },
+];
+function cfgTemplateWhatsapp(id) {
+  const cfg = cfgSunchat();
+  cfg.templates = cfg.templates || {};
+  const base = TEMPLATES_WHATSAPP.find((t) => t.id === id) || { padrao: '' };
+  const t = cfg.templates[id] || {};
+  return { nomeTemplate: t.nomeTemplate || '', texto: t.texto || base.padrao };
+}
+function montarTextoTemplate(id, vars) {
+  return cfgTemplateWhatsapp(id).texto.replace(/\{\{(\w+)\}\}/g, (m, k) => (vars && vars[k] != null ? String(vars[k]) : ''));
+}
+function sunchatEnviaTemplates() {
+  const cfg = cfgSunchat();
+  return !!(cfg.canalId && cfg.enviarPorSunchat);
+}
+// janela: aberta antes (pelo clique) pra o navegador não bloquear o WhatsApp
+async function enviarWhatsappTemplate(tipo, celular, vars, janela) {
+  const numero = onlyDigits(celular || '');
+  const texto = montarTextoTemplate(tipo, vars);
+  if (!numero) {
+    if (janela) janela.close();
+    toast('Sem celular cadastrado para enviar pelo WhatsApp.');
+    return false;
+  }
+  const t = cfgTemplateWhatsapp(tipo);
+  if (sunchatEnviaTemplates() && t.nomeTemplate) {
+    if (janela) janela.close();
+    try {
+      await chamarSunchat('enviar-template', {
+        canalId: cfgSunchat().canalId,
+        telefone: numero,
+        templateName: t.nomeTemplate,
+        texto,
+        responsavelEmail: CURRENT_USER?.email || '',
+      });
+      toast('✓ Mensagem enviada pelo WhatsApp da empresa (SunChat).');
+      return true;
+    } catch (e) {
+      toast('A SunChat não enviou: ' + e.message + ' Abrindo o WhatsApp do computador.');
+    }
+  }
+  const url = `https://api.whatsapp.com/send?phone=55${numero}&text=${encodeURIComponent(texto)}`;
+  if (janela && !janela.closed) janela.location.href = url;
+  else window.open(url, '_blank');
+  return true;
+}
+async function salvarTemplateWhatsapp(id, campo, valor) {
+  const cfg = cfgSunchat();
+  cfg.templates = cfg.templates || {};
+  cfg.templates[id] = { ...cfgTemplateWhatsapp(id), [campo]: String(valor || '').trim() };
+  await persist();
+  toast('✓ Template salvo.');
+}
+async function restaurarTemplateWhatsapp(id) {
+  const cfg = cfgSunchat();
+  cfg.templates = cfg.templates || {};
+  cfg.templates[id] = { ...cfgTemplateWhatsapp(id), texto: (TEMPLATES_WHATSAPP.find((t) => t.id === id) || {}).padrao || '' };
+  await persist();
+  switchView('integracoes');
+}
+async function enviarBoasVindasLead(leadId) {
+  const l = (DB.pipeline || []).find((x) => x.id === leadId);
+  if (!l) return;
+  const janela = sunchatEnviaTemplates() && cfgTemplateWhatsapp('boas_vindas').nomeTemplate ? null : window.open('about:blank', '_blank');
+  const ok = await enviarWhatsappTemplate('boas_vindas', l.celular, { nome: (l.nome || '').split(' ')[0], empresa: l.empresa || 'sua empresa' }, janela);
+  if (ok) {
+    l.comentarios = l.comentarios || [];
+    l.comentarios.push({ data: nowISO(), usuario: CURRENT_USER?.nome || '', texto: 'Mensagem de boas-vindas enviada pelo WhatsApp.' });
+    await persist();
+  }
+}
+// abre a janela do WhatsApp na hora do clique só quando não vai pela SunChat
+function janelaWhatsappSeNecessaria(tipo) {
+  return sunchatEnviaTemplates() && cfgTemplateWhatsapp(tipo).nomeTemplate ? null : window.open('about:blank', '_blank');
+}
+function blocoTemplatesWhatsapp() {
+  const cfg = cfgSunchat();
+  return `<div class="dep-card" style="max-width:820px;margin-top:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"><div><b>WhatsApp — templates de mensagem</b><div style="font-size:12px;color:var(--text-muted);margin-top:3px;">Com a SunChat ligada, os botões "Enviar link" e "Enviar orçamento" mandam a mensagem pelo número da empresa usando o template aprovado. Sem template, abre o WhatsApp do computador com o mesmo texto.</div></div></div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:14px;"><input type="checkbox" ${cfg.enviarPorSunchat ? 'checked' : ''} ${cfg.canalId ? '' : 'disabled'} onchange="cfgSunchat().enviarPorSunchat=this.checked; persist().then(()=>switchView('integracoes'))"> Enviar pela SunChat (número da empresa)${cfg.canalId ? '' : ' — escolha o canal do WhatsApp acima primeiro'}</label>
+    <p style="font-size:11.5px;color:var(--text-muted);margin:10px 0 4px;">O <b>nome do template</b> tem que ser igual ao aprovado na SunChat/Meta, e o texto igual ao do template. Variáveis: ${'{{nome}}'}, ${'{{empresa}}'}, ${'{{link}}'}, ${'{{dependente}}'}.</p>
+    ${TEMPLATES_WHATSAPP.map((t) => {
+      const v = cfgTemplateWhatsapp(t.id);
+      return `<div style="border-top:1px solid var(--border);padding:12px 0;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><b style="font-size:12.5px;">${escHist(t.nome)}</b><span style="font-size:11px;color:${v.nomeTemplate ? 'var(--success)' : 'var(--text-faint)'};">${v.nomeTemplate ? '✓ com template' : 'sem template (abre o WhatsApp do computador)'}</span></div>
+        <div class="field-grid" style="margin-top:8px;">
+          <div class="fg"><label>Nome do template na SunChat</label><input value="${escHist(v.nomeTemplate)}" placeholder="ex.: link_documentos" onchange="salvarTemplateWhatsapp('${t.id}','nomeTemplate',this.value)"></div>
+          <div class="fg"><label>Variáveis</label><div style="font-size:12px;color:var(--text-muted);padding-top:8px;">${t.vars.map((x) => '{{' + x + '}}').join(' · ')}</div></div>
+        </div>
+        <div class="fg" style="margin-top:8px;"><label>Texto</label><textarea rows="2" style="width:100%;" onchange="salvarTemplateWhatsapp('${t.id}','texto',this.value)">${escHist(v.texto)}</textarea></div>
+        <button class="btn-ghost" style="padding:4px 10px;font-size:11px;margin-top:6px;" onclick="restaurarTemplateWhatsapp('${t.id}')">Voltar ao texto padrão</button>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
 async function abrirConversaSunchat(leadId) {
   const l = (DB.pipeline || []).find((x) => x.id === leadId);
   const cfg = cfgSunchat();
@@ -2972,6 +3079,7 @@ function viewIntegracoes() {
         <button class="btn-primary" ${sunchatPronto() ? '' : 'disabled'} onclick="sincronizarAgoraSunchat()">Sincronizar agora</button>
       </div>
     </div>
+    ${blocoTemplatesWhatsapp()}
   </div>`;
 }
 async function carregarConfigSunchat() {
@@ -3497,7 +3605,7 @@ function viewPipeline() {
         ${l.planoInteresse ? `<div class="kc-plan-tag">${l.planoInteresse}</div>` : ''}
         ${localizarCardsDaEmpresa(l.cnpj, { pipelineId: l.id }).length ? `<div style="margin-top:8px;font-size:11px;font-weight:700;color:var(--warning);">⚠️ Empresa já tem outro card</div>` : ''}
         <div style="display:flex;gap:7px;margin-top:10px;" onclick="event.stopPropagation()">
-          ${l.celular ? `<a class="wpp-btn" target="_blank" href="https://api.whatsapp.com/send?phone=55${onlyDigits(l.celular)}">${ICONS.wpp} WhatsApp</a>` : ''}
+          ${l.celular ? `<button class="wpp-btn" onclick="enviarBoasVindasLead('${l.id}')">${ICONS.wpp} WhatsApp</button>` : ''}
           <button class="btn-ghost" style="padding:7px 10px;font-size:11px;" onclick="openPipelineLeadModal('${l.id}')">Comentários</button>
         </div>
       </div>`
@@ -3553,7 +3661,7 @@ function openPipelineLeadModal(id, isNew) {
             .join('')}
         </datalist>
       </div>
-      <div class="fg"><label>CNPJ</label><input id="pl_cnpj" value="${maskCnpj(l.cnpj || '')}" oninput="this.value=maskCnpj(this.value)"></div>
+      <div class="fg"><label>CNPJ</label><input id="pl_cnpj" value="${maskCnpj(l.cnpj || '')}" oninput="this.value=maskCnpj(this.value)" onchange="preencherLeadPelaReceita()"></div>
     </div>
     <div class="field-grid" style="margin-top:12px"><div class="fg"><label>Contato</label><input id="pl_nome" value="${l.nome || ''}"></div><div class="fg"><label>WhatsApp</label><input id="pl_celular" value="${maskPhone(l.celular || '')}"></div></div>
     <div class="field-grid" style="margin-top:12px"><div class="fg"><label>E-mail</label><input id="pl_email" value="${l.email || ''}"></div><div class="fg"><label>Plano / interesse</label><input id="pl_plano" value="${l.planoInteresse || ''}"></div></div>
@@ -3877,6 +3985,9 @@ async function confirmarEmpresaValidada(id, precisaRegistrarNaBase) {
   l.associadoValidado = true;
   l.associadoValidadoEm = nowISO();
   l.associadoValidadoPor = CURRENT_USER?.nome || '';
+  // já estava na base de associados? (não precisa de ficha associativa)
+  // precisaRegistrarNaBase = empresa nova, que acabou de se associar
+  l.associadoNaBase = !precisaRegistrarNaBase;
   await persist();
   closeModal();
   openPipelineLeadModal(id);
@@ -4401,6 +4512,8 @@ async function converterPipelineParaImplantacao(l) {
   }
   const emp = getOrCreateEmpresaByCnpj(l.cnpj || '', l.empresa || '');
   completarEmpresa(emp, l);
+  if (typeof l.associadoNaBase === 'boolean') emp.associadoNaBase = l.associadoNaBase;
+  else if (emp.associadoNaBase === undefined) verificarBaseCdlDaEmpresa(emp).catch(() => {});
   let numeroLead;
   if (cardExistente) {
     numeroLead = cardExistente.numeroLead;
@@ -6111,11 +6224,16 @@ function perguntarEnvioOrcamento(pdfInfo, pdfUrl, celular, nomeContato) {
       <button class="btn-ghost" style="justify-content:center;padding:12px;" onclick="baixarOrcamentoPendente()">${ICONS.file} Baixar PDF</button>
       ${
         linkWpp
-          ? `<a class="wpp-btn" style="justify-content:center;padding:12px;" target="_blank" href="${linkWpp}" onclick="setTimeout(closeModal,300)">${ICONS.wpp} Enviar para o cliente pelo WhatsApp</a>`
+          ? `<button class="wpp-btn" style="justify-content:center;padding:12px;" onclick='enviarOrcamentoWhatsapp(${JSON.stringify(numero)}, ${JSON.stringify(primeiroNome)}, ${JSON.stringify(pdfUrl)})'>${ICONS.wpp} Enviar para o cliente pelo WhatsApp</button>`
           : `<div style="font-size:11.5px;color:var(--text-muted);text-align:center;">${!numero ? 'Sem celular do cliente — não dá pra enviar pelo WhatsApp.' : 'Não foi possível salvar o PDF online agora — use "Baixar PDF" e anexe no WhatsApp manualmente.'}</div>`
       }
     </div>
   </div></div>`);
+}
+async function enviarOrcamentoWhatsapp(numero, nome, link) {
+  const janela = janelaWhatsappSeNecessaria('orcamento');
+  await enviarWhatsappTemplate('orcamento', numero, { nome, link }, janela);
+  closeModal();
 }
 function baixarOrcamentoPendente() {
   if (ORC_PDF_PENDENTE) ORC_PDF_PENDENTE.doc.save(ORC_PDF_PENDENTE.filename);
@@ -6568,7 +6686,7 @@ function renderDocSlotRow(slot, alvo, alvoTipo, depIndex, clientId) {
   return `
     <div class="doc-slot-row">
       <span class="doc-slot-icon ${doc.confirmado ? 'ok' : 'pendente'}">${doc.confirmado ? ICONS.check : ICONS.file}</span>
-      <a href="${doc.dataUrl}" download="${doc.nome}" class="doc-slot-label" style="color:var(--navy);text-decoration:underline;">${doc.nome}</a>
+      <a href="${doc.dataUrl}" target="_blank" rel="noopener" class="doc-slot-label" style="color:var(--navy);text-decoration:underline;">${doc.nome}</a>
       <span class="status-pill ${doc.confirmado ? 'ativo' : 'inativo'}">${doc.confirmado ? '✓ Confirmado' : 'Aguardando OK'}</span>
       ${
         /\.pdf$/i.test(doc.nome || '') && documentoExigeAssinatura(doc.nome)
@@ -8129,8 +8247,9 @@ async function copiarLinkDocs(tipo, clientId) {
 }
 
 async function enviarLinkDocsWhatsapp(tipo, clientId) {
+  const tipoTpl = tipo === 'empresa' ? 'documentos_empresa' : 'documentos_pessoas';
   // abre a janela já (antes de esperar o link), senão o navegador bloqueia
-  const janela = window.open('about:blank', '_blank');
+  const janela = janelaWhatsappSeNecessaria(tipoTpl);
   try {
     const link = await obterLinkDocs(tipo, clientId);
     const ctx = contextoLinkDocs(tipo, clientId);
@@ -8146,13 +8265,7 @@ async function enviarLinkDocsWhatsapp(tipo, clientId) {
       renderClientModal();
       return;
     }
-    const msg =
-      tipo === 'empresa'
-        ? `Olá! Segue o link para enviar os documentos da empresa ${ctx.nome} (adesão CDL Mossoró × Unimed): ${link}`
-        : `Olá ${(ctx.nome || '').split(' ')[0]}! Segue o link para enviar os seus documentos e os dos seus dependentes (adesão CDL Mossoró × Unimed): ${link}`;
-    const url = `https://api.whatsapp.com/send?phone=55${numero}&text=${encodeURIComponent(msg)}`;
-    if (janela) janela.location.href = url;
-    else window.open(url, '_blank');
+    await enviarWhatsappTemplate(tipoTpl, numero, { empresa: ctx.nome, nome: (ctx.nome || '').split(' ')[0], link }, janela);
     renderClientModal();
   } catch (e) {
     if (janela) janela.close();
@@ -8392,7 +8505,8 @@ function renderDocumentosCard(c, modo) {
         <div class="anexo-person-head">
           <span><b>Documentos da empresa</b> — ${emp.razaoSocial || t.razaoSocial || 'sem nome'} ${docsEmpresaCompletos(emp) ? `<span class="status-pill ativo" style="margin-left:6px;">✓ Completo</span>` : ''}</span>
         </div>
-        ${DOC_SLOTS_EMPRESA.map((slot) => renderDocSlotRow(slot, emp, 'empresa', undefined, c.id)).join('')}
+        ${situacaoAssociacaoEmpresa(emp)}
+        ${slotsBaseEmpresa(emp).map((slot) => renderDocSlotRow(slot, emp, 'empresa', undefined, c.id)).join('')}
         <p style="font-size:11px;color:var(--text-muted);margin-top:10px;">Esses documentos valem pra empresa inteira — servem pra todos os ${todosTitularesDoc.length} titular(es) acima.</p>
       </div>
 
@@ -8479,7 +8593,7 @@ function renderDocumentosCard(c, modo) {
               .map(
                 (a, i) => `
             <span class="attachment-chip">${ICONS.file}${a.nome}
-              <a href="${a.dataUrl}" download="${a.nome}" style="color:inherit;display:flex;">${ICONS.upload}</a>
+              <a href="${a.dataUrl}" target="_blank" rel="noopener" style="color:inherit;display:flex;">${ICONS.upload}</a>
               ${
                 /\.pdf$/i.test(a.nome || '') && documentoExigeAssinatura(a.nome)
                   ? a.assinaturaDigital?.completed
@@ -8647,12 +8761,205 @@ const SLOTS_FUNCIONARIOS = [
   { key: 'comprovante_guia_fgts', label: 'Comprovante de pagamento da guia do FGTS' },
 ];
 // lista completa de documentos que a empresa precisa entregar
+// documentos básicos da empresa. Empresa que JÁ ESTAVA na base de associados
+// da CDL não entrega a ficha associativa (ela já é associada).
+function slotsBaseEmpresa(emp) {
+  return emp && emp.associadoNaBase === true ? DOC_SLOTS_EMPRESA.filter((s) => s.key !== 'ficha_associativa') : DOC_SLOTS_EMPRESA;
+}
 function slotsDocsEmpresa(emp) {
   return [
-    ...DOC_SLOTS_EMPRESA,
+    ...slotsBaseEmpresa(emp),
     ...(emp && emp.temPlanoAtivo ? [SLOT_CARTA_PERMANENCIA] : []),
     ...(emp && emp.temFuncionarios === true ? SLOTS_FUNCIONARIOS : []),
   ];
+}
+// Confere na base de associados (cdl_base / affiliates) se a empresa já é
+// associada à CDL. Usado ao criar o card e nos cards antigos, sem esperar.
+const __baseCdlConferida = {};
+// Dados públicos da Receita Federal pelo CNPJ (BrasilAPI, grátis, sem chave)
+const __cacheReceita = {};
+async function buscarCnpjReceita(cnpj) {
+  const d = onlyDigits(cnpj || '');
+  if (d.length !== 14) return null;
+  if (__cacheReceita[d] !== undefined) return __cacheReceita[d];
+  try {
+    const r = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${d}`);
+    __cacheReceita[d] = r.ok ? await r.json() : null;
+  } catch (e) {
+    __cacheReceita[d] = null;
+  }
+  return __cacheReceita[d];
+}
+// preenche a empresa com os dados da Receita. sobrescrever=false só completa o que está vazio
+function aplicarDadosReceita(emp, r, sobrescrever) {
+  if (!emp || !r) return false;
+  const logradouro = [r.descricao_tipo_de_logradouro, r.logradouro].filter(Boolean).join(' ').trim();
+  const campos = {
+    razaoSocial: r.razao_social,
+    nomeFantasia: r.nome_fantasia,
+    cep: onlyDigits(r.cep || ''),
+    endereco: logradouro,
+    numero: r.numero,
+    complemento: r.complemento,
+    bairro: r.bairro,
+    cidade: r.municipio,
+    estado: (r.uf || '').toUpperCase(),
+    email: (r.email || '').toLowerCase(),
+  };
+  let mudou = false;
+  Object.entries(campos).forEach(([k, v]) => {
+    v = String(v || '').trim();
+    if (v && (sobrescrever || !String(emp[k] || '').trim())) {
+      if (emp[k] !== v) mudou = true;
+      emp[k] = v;
+    }
+  });
+  emp.situacaoReceita = r.descricao_situacao_cadastral || emp.situacaoReceita || '';
+  emp.sociosReceita = (r.qsa || []).map((q) => ({ nome: q.nome_socio, qualificacao: q.qualificacao_socio })).filter((q) => q.nome);
+  // representante: se só tem um sócio e ainda não tem representante, sugere ele
+  if ((!emp.representante || !emp.representante.nome) && emp.sociosReceita.length === 1) {
+    emp.representante = { ...(emp.representante || {}), nome: emp.sociosReceita[0].nome.toUpperCase() };
+    mudou = true;
+  }
+  return mudou;
+}
+async function buscarReceitaDoCard(sobrescrever) {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const emp = getEmpresaDoCliente(c);
+  const cnpj = onlyDigits(document.getElementById('emp_cnpj')?.value || emp.cnpj || '');
+  if (cnpj.length !== 14) {
+    toast('Digite o CNPJ completo (14 números).');
+    return;
+  }
+  toast('Buscando o CNPJ na Receita Federal…');
+  const r = await buscarCnpjReceita(cnpj);
+  if (!r) {
+    toast('Não encontrei esse CNPJ na Receita agora. Confira o número ou preencha à mão.');
+    return;
+  }
+  aplicarDadosReceita(emp, r, !!sobrescrever);
+  getTitularesDaEmpresa(emp.id).forEach((x) => {
+    x.titular.razaoSocial = emp.razaoSocial;
+    x.titular.cnpj = emp.cnpj;
+  });
+  c.historico.push({ data: nowISO(), texto: `Dados da empresa preenchidos pela Receita Federal (situação: ${emp.situacaoReceita || '—'}).` });
+  renderClientModal();
+  await persist();
+  toast(/ATIVA/i.test(emp.situacaoReceita || '') ? '✓ Dados da Receita preenchidos.' : `⚠️ Situação na Receita: ${emp.situacaoReceita || 'não informada'}. Confira antes de seguir.`);
+}
+function avisoSituacaoReceita(emp) {
+  if (!emp || !emp.situacaoReceita) return '';
+  const ok = /ATIVA/i.test(emp.situacaoReceita);
+  const socios = (emp.sociosReceita || []).map((q) => escHist(q.nome) + (q.qualificacao ? ` <span style="color:var(--text-faint);">(${escHist(q.qualificacao)})</span>` : '')).join(' · ');
+  return `<div style="font-size:12px;margin:8px 0 0;color:${ok ? 'var(--text-muted)' : 'var(--danger)'};">${ok ? '✓' : '⚠️'} Receita Federal: <b>${escHist(emp.situacaoReceita)}</b>${emp.nomeFantasia ? ` · nome fantasia ${escHist(emp.nomeFantasia)}` : ''}${socios ? `<br>Sócios: ${socios}` : ''}</div>`;
+}
+
+// no lead: digitou o CNPJ e o nome da empresa está vazio -> busca na Receita
+async function preencherLeadPelaReceita() {
+  const i = document.getElementById('pl_cnpj');
+  const e = document.getElementById('pl_empresa');
+  if (!i || !e || e.value.trim()) return;
+  const r = await buscarCnpjReceita(i.value);
+  if (r && !e.value.trim()) {
+    e.value = (r.razao_social || '').toUpperCase();
+    toast(/ATIVA/i.test(r.descricao_situacao_cadastral || '') ? '✓ Empresa encontrada na Receita.' : `⚠️ Situação na Receita: ${r.descricao_situacao_cadastral || 'não informada'}`);
+  }
+}
+async function verificarBaseCdlDaEmpresa(emp) {
+  const cnpj = onlyDigits((emp && emp.cnpj) || '');
+  if (cnpj.length !== 14 || __baseCdlConferida[cnpj]) return;
+  __baseCdlConferida[cnpj] = true;
+  // empresa que entrou por contrato de associação novo: é associada nova
+  const veioDeContrato = (DB.pipeline || []).concat([]).some((l) => onlyDigits(l.cnpj || '') === cnpj && (l.contratoAssociacao || l.filiacao?.assinaturaDigital));
+  let naBase = false;
+  try {
+    const base = await sbSelect('cdl_base', `select=cnpj,status&cnpj=eq.${encodeURIComponent(cnpj)}&limit=1`);
+    naBase = base.length > 0 && (base[0].status || 'ativa') !== 'inativa';
+    if (!naBase) {
+      const novos = await sbSelect('affiliates', `select=cnpj&cnpj=eq.${encodeURIComponent(cnpj)}&limit=1`);
+      naBase = novos.length > 0;
+    }
+  } catch (e) {
+    // sem conexão: libera para tentar de novo e não deixa a tela presa em "Conferindo…"
+    delete __baseCdlConferida[cnpj];
+    if (emp.associadoNaBase === undefined) emp.associadoNaBase = null;
+    if (document.getElementById('modalOverlay')?.classList.contains('active')) renderClientModal();
+    return;
+  }
+  if (emp.associadoNaBase !== undefined) return;
+  emp.associadoNaBase = naBase && !veioDeContrato;
+  await persist();
+  if (document.getElementById('modalOverlay')?.classList.contains('active') && ['nova', 'documentacao', 'pessoas'].includes(ACTIVE_PERSON_TAB)) renderClientModal();
+}
+// Associação à CDL no Cadastro: confere sozinho na base; se não estiver,
+// mostra como resolver (contrato de associação ou confirmação da CDL)
+function associacaoCdlOk(c, emp) {
+  return titularesDoMesmoCard(c).some((x) => x.associadoValidado) || (emp && emp.associadoNaBase === true);
+}
+function secaoAssociacaoCdl(c, emp) {
+  if (!emp || !onlyDigits(emp.cnpj || '')) return '';
+  if (associacaoCdlOk(c, emp)) {
+    const comoFoi = emp.associadoNaBase === true ? 'está na base de associados da CDL' : 'associação validada';
+    return `<div class="dep-card" style="margin-bottom:14px;border-left:4px solid var(--success);font-size:12.5px;">✓ <b>Associada à CDL</b> · ${comoFoi}</div>`;
+  }
+  if (emp.associadoNaBase === undefined) {
+    verificarBaseCdlDaEmpresa(emp).catch(() => {});
+    return `<div class="dep-card" style="margin-bottom:14px;font-size:12.5px;color:var(--text-muted);">Conferindo na base de associados da CDL…</div>`;
+  }
+  return `<div class="dep-card" style="margin-bottom:14px;border-left:4px solid var(--warning);">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="font-size:12.5px;"><b>Não está na base de associados da CDL</b><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">Se for empresa nova, ela precisa do contrato de associação (Pipeline → Associar). Se a CDL já aprovou, confirme aqui.</div></div>
+      <div style="display:flex;gap:7px;flex-wrap:wrap;">
+        <button class="btn-ghost" style="padding:6px 10px;font-size:11.5px;" onclick="reconferirAssociacaoCdl()">↻ Conferir de novo</button>
+        <button class="btn-primary" style="padding:6px 10px;font-size:11.5px;" onclick="confirmarAssociacaoCdlNoCard()">${ICONS.check} Confirmar aprovação da CDL</button>
+      </div>
+    </div></div>`;
+}
+async function reconferirAssociacaoCdl() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const emp = getEmpresaDoCliente(c);
+  emp.associadoNaBase = undefined;
+  delete __baseCdlConferida[onlyDigits(emp.cnpj || '')];
+  await verificarBaseCdlDaEmpresa(emp).catch(() => {});
+  renderClientModal();
+  toast(emp.associadoNaBase ? '✓ Encontrada na base de associados da CDL.' : 'Não está na base de associados da CDL.');
+}
+async function confirmarAssociacaoCdlNoCard() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const emp = getEmpresaDoCliente(c);
+  if (!(await showConfirmDialog(`Confirmar que a CDL aprovou a associação de ${emp.razaoSocial || 'esta empresa'}? Ela entra na base de associados.`, { confirmLabel: 'Confirmar', danger: false }))) return;
+  const agora = nowISO();
+  titularesDoMesmoCard(c).forEach((x) => {
+    x.associadoValidado = true;
+    x.associadoValidadoEm = agora;
+  });
+  c.historico.push({ data: agora, texto: `Associação à CDL confirmada no Cadastro por ${CURRENT_USER?.nome || 'equipe'}.` });
+  try {
+    await sbUpsert('cdl_base', [{ cnpj: onlyDigits(emp.cnpj), empresa: emp.razaoSocial || '', razao_social: emp.razaoSocial || null, nome_fantasia: emp.nomeFantasia || null, cidade: emp.cidade || null, estado: emp.estado || null, status: 'ativa' }], 'cnpj');
+  } catch (e) {
+    console.warn('cdl_base', e);
+  }
+  renderClientModal();
+  await persist();
+  toast('✓ Associação à CDL confirmada.');
+}
+function situacaoAssociacaoEmpresa(emp) {
+  if (!emp) return '';
+  if (emp.associadoNaBase === undefined) {
+    verificarBaseCdlDaEmpresa(emp).catch(() => {});
+    return '';
+  }
+  return emp.associadoNaBase
+    ? `<div style="font-size:12px;color:var(--success);margin:4px 0 8px;">✓ Já é associada à CDL (está na base de associados): a ficha associativa não é necessária. <a href="#" style="color:var(--text-muted);margin-left:6px;" onclick="setAssociadoNaBase(false);return false;">não é bem assim</a></div>`
+    : `<div style="font-size:12px;color:var(--text-muted);margin:4px 0 8px;">Associada nova à CDL: precisa da ficha associativa. <a href="#" style="margin-left:6px;" onclick="setAssociadoNaBase(true);return false;">já estava na base</a></div>`;
+}
+async function setAssociadoNaBase(valor) {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const emp = getEmpresaDoCliente(c);
+  emp.associadoNaBase = !!valor;
+  c.historico.push({ data: nowISO(), texto: valor ? 'Marcado: empresa já estava na base de associados da CDL (sem ficha associativa).' : 'Marcado: associada nova à CDL (pede a ficha associativa).' });
+  renderClientModal();
+  await persist();
 }
 // Representante legal da empresa: é o contratante que assina a Proposta PME III
 function secaoRepresentanteLegal(emp) {
@@ -8721,6 +9028,7 @@ function secoesCadastroVenda(c) {
   return `
     ${isAdmin() && c.solicitacaoExclusao ? `<div class="pendencia-banner" style="margin-bottom:14px;">🗑 ${escHist(c.solicitacaoExclusao.por)} pediu para excluir este card: "${escHist(c.solicitacaoExclusao.motivo)}". <button class="btn-danger" style="padding:4px 10px;font-size:11px;margin-left:6px;" onclick="deleteClient()">Excluir</button> <button class="btn-ghost" style="padding:4px 10px;font-size:11px;" onclick="recusarExclusaoCard()">Recusar</button></div>` : ''}
     ${alertaVigencia(c)}
+    ${secaoAssociacaoCdl(c, emp)}
     <div class="modal-section-title">Venda</div>
     <div class="field-grid">
       <div class="fg"><label>Matriz da venda</label>
@@ -9346,6 +9654,47 @@ function montarEmailImplantacao(c) {
   const texto = `Implantação ${e.razaoSocial || ''} (CNPJ ${e.cnpj || ''}), vigência ${e.vigencia || ''}. ${r.vidas} vida(s), ${formatBRL(r.total)}/mês. Página de conferência: ${link}`;
   return { assunto, html, texto, anexos };
 }
+// O e-mail para a Unimed abre no programa de e-mail do computador de quem
+// está usando (Gmail, Outlook, Apple Mail...), já com destinatário, assunto e
+// texto. Os arquivos vão pelo link da página de conferência (não dá pra
+// anexar arquivo por esse caminho). Depois de enviar, a pessoa confirma aqui.
+function textoEmailImplantacao(c) {
+  const p = pacoteDoCard(c);
+  const m = (p && p.manifesto) || {};
+  const e = m.empresa || {};
+  const r = resumoDoCardParaFicha(c);
+  const porPlano = {};
+  r.linhas.forEach((l) => {
+    porPlano[l.plano] = porPlano[l.plano] || { vidas: 0, valor: 0 };
+    porPlano[l.plano].vidas += l.qtd;
+    porPlano[l.plano].valor += l.valor;
+  });
+  const linhas = Object.entries(porPlano).map(([pl, v]) => `- ${pl}: ${v.vidas} vida(s) · ${formatBRL(v.valor)}`).join('\n');
+  return [
+    'Olá,',
+    '',
+    `Segue a documentação para implantação da empresa ${e.razaoSocial || ''} (CNPJ ${e.cnpj || ''}), vigência ${e.vigencia || ''}.`,
+    '',
+    linhas,
+    `Total: ${r.vidas} vida(s) · ${formatBRL(r.total)}/mês`,
+    '',
+    'Todos os documentos (empresa, fichas de inclusão assinadas, Proposta PME III, documentos pessoais e layout) estão na página de conferência, com o botão "Baixar tudo":',
+    linkPacoteUnimed(c),
+    '',
+    `Link válido até ${p ? fmtDate(p.expiraEm.slice(0, 10)) : ''}.`,
+    '',
+    'Atenciosamente,',
+    CURRENT_USER?.nome || '',
+    'Nossa Corretora',
+  ].join('\n');
+}
+function mailtoImplantacao(c) {
+  const cfg = configEmailUnimed();
+  const em = montarEmailImplantacao(c);
+  const q = [`subject=${encodeURIComponent(em.assunto)}`, `body=${encodeURIComponent(textoEmailImplantacao(c))}`];
+  if (cfg.cc) q.unshift(`cc=${encodeURIComponent(cfg.cc)}`);
+  return `mailto:${encodeURIComponent(cfg.para || '').replace(/%40/g, '@')}?${q.join('&')}`;
+}
 function abrirEnvioUnimed() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   if (!linkPacoteUnimed(c)) {
@@ -9353,15 +9702,49 @@ function abrirEnvioUnimed() {
     return;
   }
   const cfg = configEmailUnimed();
-  if (!cfg.para) {
-    toast('Configure o e-mail da Unimed (campo "Para") antes de enviar.');
+  const em = montarEmailImplantacao(c);
+  openModalHTML(`<div class="modal modal-wide"><div class="modal-head"><div class="mh-info"><div class="mh-name">Enviar implantação para a Unimed</div><div class="mh-sub">Abre no e-mail que você usa neste computador</div></div><button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button></div><div class="modal-body">
+    <div class="field-grid">
+      <div class="fg"><label>Para (e-mail da Unimed)</label><input id="unimedPara" type="email" value="${escHist(cfg.para)}" onchange="salvarConfigEmailUnimed('para', this.value)"></div>
+      <div class="fg"><label>Cópia (opcional, separe com vírgula)</label><input value="${escHist(cfg.cc)}" onchange="salvarConfigEmailUnimed('cc', this.value)"></div>
+    </div>
+    <div style="font-size:12.5px;line-height:1.8;margin-top:10px;"><b>Assunto:</b> ${escHist(em.assunto)}</div>
+    <pre class="dep-card" style="margin-top:8px;white-space:pre-wrap;font-family:inherit;font-size:12.5px;">${escHist(textoEmailImplantacao(c))}</pre>
+    <p style="font-size:11.5px;color:var(--text-muted);margin-top:8px;">Os arquivos vão pelo link da página de conferência (a Unimed baixa tudo de uma vez). Depois de enviar o e-mail, clique em <b>"Já enviei"</b> para registrar no card.</p>
+  </div><div class="modal-foot">
+    <button class="btn-ghost" onclick="renderClientModal()">Cancelar</button>
+    <button class="btn-ghost" onclick="copiarEmailImplantacao()">Copiar texto</button>
+    <button class="btn-primary" onclick="abrirMailtoImplantacao()">${ICONS.mail} Abrir no meu e-mail</button>
+    <button class="btn-primary" style="background:var(--success);" onclick="confirmarEmailImplantacaoEnviado()">${ICONS.check} Já enviei</button>
+  </div></div>`);
+}
+function abrirMailtoImplantacao() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  if (!configEmailUnimed().para) {
+    toast('Preencha o e-mail da Unimed (campo "Para").');
+    document.getElementById('unimedPara')?.focus();
     return;
   }
-  const em = montarEmailImplantacao(c);
-  openModalHTML(`<div class="modal modal-wide"><div class="modal-head"><div class="mh-info"><div class="mh-name">Enviar implantação para a Unimed</div><div class="mh-sub">Sai da conta Google da corretora</div></div><button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button></div><div class="modal-body">
-    <div style="font-size:12.5px;line-height:1.8;"><b>Para:</b> ${escHist(cfg.para)}${cfg.cc ? `<br><b>Cópia:</b> ${escHist(cfg.cc)}` : ''}<br><b>Assunto:</b> ${escHist(em.assunto)}<br><b>Anexos:</b> ${em.anexos.map((a) => escHist(a.nome)).join(' · ') || 'nenhum'}</div>
-    <div class="dep-card" style="margin-top:12px;">${em.html}</div>
-  </div><div class="modal-foot"><button class="btn-ghost" onclick="renderClientModal()">Cancelar</button><button class="btn-primary" id="btnEnviarUnimed" onclick="enviarImplantacaoUnimed()">${ICONS.mail} Enviar agora</button></div></div>`);
+  window.location.href = mailtoImplantacao(c);
+}
+async function copiarEmailImplantacao() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  try {
+    await navigator.clipboard.writeText(textoEmailImplantacao(c));
+    toast('✓ Texto copiado. Cole no e-mail.');
+  } catch (e) {
+    toast('Não foi possível copiar.');
+  }
+}
+async function confirmarEmailImplantacaoEnviado() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const cfg = configEmailUnimed();
+  const agora = nowISO();
+  titularesDoMesmoCard(c).forEach((x) => (x.emailAdministradoraEnviadoEm = agora));
+  c.historico.push({ data: agora, texto: `E-mail da implantação enviado para a Unimed (${cfg.para || 'e-mail não informado'}) por ${CURRENT_USER?.nome || 'equipe'}, com o link da página de conferência.` });
+  renderClientModal();
+  await persist();
+  toast('✓ Envio registrado.');
 }
 async function enviarImplantacaoUnimed() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
@@ -9448,7 +9831,7 @@ function renderImplantacaoNova(c) {
           : `<div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">Para: ${escHist(configEmailUnimed().para || 'não configurado (peça ao administrador)')}</div>`
       }
       <button class="btn-primary" onclick="${link ? 'abrirEnvioUnimed()' : 'gerarPacoteUnimed()'}">${ICONS.mail} ${link ? 'Enviar implantação para a Unimed' : 'Monte o pacote antes de enviar'}</button>
-      <p style="font-size:11.5px;color:var(--text-muted);margin-top:10px;">O e-mail leva o link da página e, anexados, a ficha de associado da CDL, o orçamento, a ficha de adesão e o resumo das pessoas.</p>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-top:10px;">O e-mail abre no programa de e-mail deste computador (Gmail, Outlook…), já com o texto e o link da página de conferência, onde a Unimed baixa todos os arquivos.</p>
     </div>`;
 }
 function statusEmailImplantacao(c) {
@@ -9932,8 +10315,9 @@ function renderClientModal() {
     tabContent = `
       <div class="field-grid">
         <div class="fg"><label>Razão social / Empresa</label><input id="emp_razao" value="${emp.razaoSocial || ''}" onchange="updateEmpresa()"/></div>
-        <div class="fg"><label>CNPJ</label><input id="emp_cnpj" value="${emp.cnpj || ''}" oninput="this.value=maskCnpj(this.value)" onchange="updateEmpresa()"/></div>
+        <div class="fg"><label>CNPJ</label><div style="display:flex;gap:8px;"><input id="emp_cnpj" value="${emp.cnpj ? maskCnpj(emp.cnpj) : ''}" oninput="this.value=maskCnpj(this.value)" onchange="updateEmpresa()" style="flex:1;"/><button class="btn-ghost" type="button" style="padding:6px 10px;font-size:11.5px;white-space:nowrap;" onclick="buscarReceitaDoCard(true)">Buscar na Receita</button></div></div>
       </div>
+      ${avisoSituacaoReceita(emp)}
       <div class="field-grid" style="margin-top:12px;">
         <div class="fg"><label>CEP</label><input id="emp_cep" value="${emp.cep || ''}" oninput="this.value=maskCep(this.value)" onchange="updateEmpresa(); buscarCep('emp_cep',{rua:'emp_endereco',bairro:'emp_bairro',cidade:'emp_cidade',estado:'emp_estado'})"/></div>
         <div class="fg"><label>Endereço</label><input id="emp_endereco" value="${emp.endereco || ''}" onchange="updateEmpresa()"/></div>
@@ -10682,7 +11066,7 @@ function openVendedorDetalhe(vendedorId) {
         .reverse()
         .map(
           (p) =>
-            `<div class="history-item"><span class="hi-date">${fmtDate(p.data)}</span><span>${formatBRL(p.valor)} · ${p.observacao || 'Repasse'} ${p.comprovante ? `<a href="${p.comprovante.dataUrl}" download="${p.comprovante.nome}">Comprovante</a>` : ''}</span></div>`
+            `<div class="history-item"><span class="hi-date">${fmtDate(p.data)}</span><span>${formatBRL(p.valor)} · ${p.observacao || 'Repasse'} ${p.comprovante ? `<a href="${p.comprovante.dataUrl}" download="${p.comprovante.nome}" target="_blank" rel="noopener">Comprovante</a>` : ''}</span></div>`
         )
         .join('') || '<span style="font-size:12px;color:var(--text-faint)">Nenhum pagamento.</span>'
     }</div></div><div class="implantacao-footer"><button class="btn-ghost footer-danger" onclick="abrirLancamentoComissao('${v.id}')">${ICONS.plus} Lançamento</button><button class="btn-primary" onclick="abrirPagamentoCarteira('${v.id}')" ${car.disponivel <= 0 ? 'disabled' : ''}>Pagar vendedor</button></div></div>`
@@ -10848,7 +11232,7 @@ function viewMinhaComissao() {
       .reverse()
       .map(
         (p) =>
-          `<div class="history-item"><span class="hi-date">${fmtDate(p.data)}</span><span><b>${formatBRL(p.valor)}</b> · ${p.observacao || 'Repasse'} ${p.comprovante ? `· <a href="${p.comprovante.dataUrl}" download="${p.comprovante.nome}">Baixar comprovante</a>` : ''}</span></div>`
+          `<div class="history-item"><span class="hi-date">${fmtDate(p.data)}</span><span><b>${formatBRL(p.valor)}</b> · ${p.observacao || 'Repasse'} ${p.comprovante ? `· <a href="${p.comprovante.dataUrl}" download="${p.comprovante.nome}" target="_blank" rel="noopener">Baixar comprovante</a>` : ''}</span></div>`
       )
       .join('') ||
     '<span style="font-size:12px;color:var(--text-faint)">Nenhum pagamento registrado.</span>'
@@ -11370,7 +11754,7 @@ async function gerarLinkRiscoPessoa(key, clientId) {
 }
 async function enviarLinkRiscoWhatsapp(key, clientId) {
   // abre a janela já (antes de esperar o salvamento), senão o navegador bloqueia
-  const janela = window.open('about:blank', '_blank');
+  const janela = janelaWhatsappSeNecessaria('questionario');
   try {
     const r = await montarLinkRisco(key, clientId);
     if (!r) return janela && janela.close();
@@ -11382,14 +11766,13 @@ async function enviarLinkRiscoWhatsapp(key, clientId) {
       toast('Cadastre o celular da pessoa ou do titular (aba Pessoas) para enviar pelo WhatsApp.');
       return;
     }
-    const nomePessoa = (p.pessoa.nome || '').split(' ')[0];
-    const msg =
-      proprio || p.key === 'titular'
-        ? `Olá ${nomePessoa}! Segue o link para responder o seu questionário de saúde da adesão Unimed (CDL Mossoró): ${link}`
-        : `Olá ${(c.titular.nome || '').split(' ')[0]}! Segue o link para ${p.pessoa.nome || 'seu dependente'} responder o questionário de saúde (é individual, um por pessoa): ${link}`;
-    const url = `https://api.whatsapp.com/send?phone=55${numero}&text=${encodeURIComponent(msg)}`;
-    if (janela) janela.location.href = url;
-    else window.open(url, '_blank');
+    const pelaPropria = proprio || p.key === 'titular';
+    await enviarWhatsappTemplate(
+      pelaPropria ? 'questionario' : 'questionario_dependente',
+      numero,
+      { nome: ((pelaPropria ? p.pessoa.nome : c.titular.nome) || '').split(' ')[0], dependente: p.pessoa.nome || 'seu dependente', link },
+      janela
+    );
     renderClientModal();
   } catch (e) {
     if (janela) janela.close();
@@ -12566,7 +12949,7 @@ function pendenciasDaEtapa(c, etapa) {
     if (emp.temFuncionarios === undefined) falta.push('Informar se há titulares ou dependentes que são funcionários da empresa');
     const rep = emp.representante || {};
     if (!rep.nome || !isValidCPF(onlyDigits(rep.cpf || ''))) falta.push('Representante legal da empresa (nome e CPF válido)');
-    if (!card.some((x) => x.associadoValidado)) falta.push('Associação à CDL validada');
+    if (!associacaoCdlOk(c, emp)) falta.push('Associação à CDL validada (está no topo do Cadastro)');
     if (!docsEmpresaCompletos(emp)) falta.push('Documentos da empresa anexados e conferidos');
   }
   if (etapa === 'pessoas') {
@@ -12879,6 +13262,7 @@ async function updateEmpresa() {
   // não grava esse vínculo no cliente. Sem isso, um cliente novo cujo CNPJ já bate
   // com uma empresa existente ficava com empresaId vazio pra sempre.
   c.empresaId = emp.id;
+  const cnpjAntesDaEdicao = onlyDigits(emp.cnpj || '');
   const antes = JSON.stringify(emp);
   emp.razaoSocial = document.getElementById('emp_razao').value.trim();
   const cnpjNovo = onlyDigits(document.getElementById('emp_cnpj').value);
@@ -12914,6 +13298,19 @@ async function updateEmpresa() {
     });
   }
   await persist();
+  // CNPJ novo: completa pela Receita e confere de novo se é associada à CDL
+  if (cnpjNovo && cnpjNovo.length === 14 && cnpjNovo !== cnpjAntesDaEdicao) {
+    empresaFinal.associadoNaBase = undefined;
+    delete __baseCdlConferida[cnpjNovo];
+    buscarCnpjReceita(cnpjNovo).then(async (r) => {
+      if (r && aplicarDadosReceita(empresaFinal, r, false)) {
+        getTitularesDaEmpresa(empresaFinal.id).forEach((x) => (x.titular.razaoSocial = empresaFinal.razaoSocial));
+        await persist();
+      }
+      await verificarBaseCdlDaEmpresa(empresaFinal).catch(() => {});
+      if (document.getElementById('modalOverlay')?.classList.contains('active')) renderClientModal();
+    });
+  }
   // Não redesenha o modal ao sair de cada campo: evita o efeito de 'piscar' e perda de foco.
 }
 async function updatePlano() {
