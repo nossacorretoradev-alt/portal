@@ -1684,6 +1684,12 @@ function toast(msg) {
   window._toastTimer = setTimeout(() => t.classList.remove('show'), 2400);
 }
 
+// fecha o card e continua na mesma tela (Implantação, Clientes, Início…),
+// só redesenhando para mostrar o que mudou no card
+function fecharCardImplantacao() {
+  __atualizacaoPendenteNaTela = true;
+  closeModal();
+}
 function closeModal() {
   document.getElementById('modalOverlay').classList.remove('active');
   // novidades de outros usuários que chegaram com o card aberto aparecem agora
@@ -10616,7 +10622,7 @@ function renderClientModal() {
           <input type="checkbox" ${c.status === 'ativo' ? 'checked' : ''} onchange="toggleClientStatus()"/>
           <span class="toggle-slider"></span>
         </label>
-        <button class="modal-close" onclick="closeModal(); switchView('clientes');">${ICONS.close}</button>
+        <button class="modal-close" onclick="fecharCardImplantacao()">${ICONS.close}</button>
       </div>
       <div class="modal-body">
 
