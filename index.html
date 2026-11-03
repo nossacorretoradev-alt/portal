@@ -7282,8 +7282,11 @@ function assinanteDaVida(x, v) {
     menor,
     semNascimento: v.key !== 'titular' && idade === null,
     nome: quem.nome || '',
-    email: quem.email || (menor ? '' : '') || '',
-    celular: quem.celular || x.titular.celular || '',
+    email: quem.email || '',
+    // dependente maior de idade assina pelo próprio celular: nunca cai no do
+    // titular, senão o titular recebe o link e assina no lugar dele
+    celular: menor || v.key === 'titular' ? quem.celular || x.titular.celular || '' : quem.celular || '',
+    semContatoProprio: !menor && v.key !== 'titular' && !onlyDigits(quem.celular || ''),
     cpf: quem.cpf || '',
     rotulo: menor
       ? `Responsável (titular) por ${v.pessoa.nome || 'dependente'}`
@@ -7560,7 +7563,7 @@ function signatarioDoc(tipo, x, quem, key) {
   if (tipo === 'inclusao' && quem === 'vida') {
     const v = vidaPorChave(x, key);
     const s = assinanteDaVida(x, v);
-    return { nome: s.nome, email: s.email, celular: s.celular, cpf: s.cpf, rotulo: s.rotulo };
+    return { nome: s.nome, email: s.email, celular: s.celular, cpf: s.cpf, rotulo: s.rotulo, semContatoProprio: s.semContatoProprio };
   }
   // corretora / intermediário: sempre a Nossa Broker
   return { nome: CORRETORA_ASSINANTE.nome, email: '', celular: '', cpf: '' };
@@ -7611,14 +7614,17 @@ function renderAbaAssinatura(c) {
             const wpp = a.externo
               ? linkWhatsappNumero(
                   sig.celular,
-                  `Olá ${(sig.nome || '').split(' ')[0]}! Segue o link pra assinar a ${d.tipo === 'pme' ? 'proposta da empresa' : `ficha de inclusão de ${ref.v?.pessoa.nome || ''}`} (Unimed · CDL Mossoró): ${s.signUrl}`
+                  `Olá ${(sig.nome || '').split(' ')[0]}! Segue o link pra você assinar a ${d.tipo === 'pme' ? 'proposta da empresa' : `ficha de inclusão de ${ref.v?.pessoa.nome || ''}`} (Unimed · CDL Mossoró). Este link é pessoal: a assinatura tem que ser feita por ${sig.nome || 'você'}. ${s.signUrl}`
                 )
               : null;
             acoes = `${wpp ? `<a class="wpp-btn" style="padding:6px 10px;font-size:11.5px;" target="_blank" href="${wpp}">${ICONS.wpp} Enviar link</a>` : ''}
               <a class="btn-ghost" style="padding:6px 10px;font-size:11.5px;" target="_blank" href="${s.signUrl}">${a.externo ? 'Abrir link' : 'Assinar'}</a>`;
           }
+          const avisoContato = sig.semContatoProprio && !s?.completed
+            ? `<div style="color:var(--danger);font-size:11px;margin-top:2px;">⚠️ Sem celular próprio. Cadastre o celular de ${escHist((sig.nome || '').split(' ')[0])} na aba Pessoas: é ${(sig.nome || '').split(' ')[0] ? 'ela/ele' : 'a pessoa'} quem assina, não o titular.</div>`
+            : '';
           return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--border);">
-            <div style="font-size:12px;"><b>${escHist(sig.rotulo || a.rotulo)}</b><div style="color:var(--text-muted);">${escHist(sig.nome || 'sem nome cadastrado')}</div></div>
+            <div style="font-size:12px;"><b>${escHist(sig.rotulo || a.rotulo)}</b><div style="color:var(--text-muted);">${escHist(sig.nome || 'sem nome cadastrado')}</div>${avisoContato}</div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">${status}${acoes}</div>
           </div>`;
         })
@@ -10536,6 +10542,17 @@ function renderClientModal() {
                   </div>
                   <div class="fg"><label>Nome da mãe</label><input value="${d.nomeMae || ''}" onchange="updateDependenteTitular('${x.id}',${i},'nomeMae',this.value)"/></div>
                 </div>
+                ${
+                  (() => {
+                    const id = idadeEmAnos(d.dataNascimento);
+                    if (id !== null && id < 18) return '';
+                    const primeiro = (d.nome || 'o dependente').split(' ')[0];
+                    return `<div class="field-grid" style="margin-top:10px;">
+                  <div class="fg"><label>Celular de ${escHist(primeiro)} <span class="opt">(ele/ela assina a própria ficha)</span></label><input value="${d.celular ? maskPhone(d.celular) : ''}" oninput="this.value=maskPhone(this.value)" onchange="updateDependenteTitular('${x.id}',${i},'celular',onlyDigits(this.value))"/></div>
+                  <div class="fg"><label>E-mail de ${escHist(primeiro)} <span class="opt">(opcional)</span></label><input value="${d.email || ''}" onchange="updateDependenteTitular('${x.id}',${i},'email',this.value.trim())"/></div>
+                </div>`;
+                  })()
+                }
                 <div class="fg" style="margin-top:10px;max-width:340px;"><label>Repic?</label>${selectRepic(`setRepic('${x.id}',${i},this.value)`, d.repic)}</div>
               </div>
             `

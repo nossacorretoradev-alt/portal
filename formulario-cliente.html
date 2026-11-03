@@ -1076,11 +1076,40 @@ function showProntoParaAssinar() {
   telaAssinatura(`
     <div class="success-icon">${ICONS.check}</div>
     <h2 class="step-title">Falta só assinar</h2>
-    <p class="step-sub">${vidaDoLinkEhMenor() ? `Como <b>${escHtml(((listPessoasPublico(CLIENT)[0] || {}).pessoa || {}).nome || 'o dependente')}</b> é menor de idade, quem assina é o responsável, <b>${escHtml(CLIENT.responsavelNome || '')}</b>.` : 'Suas respostas já foram recebidas.'} Agora vamos gerar a ficha de inclusão da Unimed (Declaração de Saúde e Aditivo de Carência) para assinar pelo celular.</p>
+    <p class="step-sub">${vidaDoLinkEhMenor() ? `Como <b>${escHtml(((listPessoasPublico(CLIENT)[0] || {}).pessoa || {}).nome || 'o dependente')}</b> é menor de idade, quem assina é o responsável, <b>${escHtml(CLIENT.responsavelNome || '')}</b>.` : dependenteAdultoDoLink() ? `Respostas recebidas. A ficha é de <b>${escHtml(dependenteAdultoDoLink().pessoa.nome || 'o dependente')}</b> e é ${escHtml((dependenteAdultoDoLink().pessoa.nome || 'o dependente').split(' ')[0])} quem assina, no próprio celular.` : 'Suas respostas já foram recebidas.'} Agora vamos gerar a ficha de inclusão da Unimed (Declaração de Saúde e Aditivo de Carência) para assinar pelo celular.</p>
     <button class="btn btn-primary" style="width:100%;margin-top:10px;" onclick="iniciarAssinatura()">Gerar e assinar meus documentos</button>
     <button class="btn btn-ghost" style="width:100%;margin-top:8px;" onclick="renderStep()">Revisar minhas respostas</button>`);
 }
+// dependente maior de idade: a ficha é dele e só ele pode assinar
+// (o link do questionário costuma ir para o titular, que não pode assinar por ele)
+function dependenteAdultoDoLink() {
+  if (!VIDA_CODIGO || !CLIENT || CLIENT.menor) return null;
+  const p = listPessoasPublico(CLIENT)[0];
+  return p && p.key !== 'titular' ? p : null;
+}
+function copiarLinkAssinatura(url) {
+  const ok = () => {
+    const b = document.getElementById('btnCopiarAssin');
+    if (b) b.textContent = 'Link copiado ✓';
+  };
+  if (navigator.clipboard) navigator.clipboard.writeText(url).then(ok, () => prompt('Copie o link:', url));
+  else prompt('Copie o link:', url);
+}
 function showAssinarAgora(url) {
+  const dep = dependenteAdultoDoLink();
+  if (dep) {
+    const nome = dep.pessoa.nome || 'o dependente';
+    const primeiro = nome.split(' ')[0];
+    const msg = `Oi ${primeiro}! Sua ficha de inclusão do plano Unimed está pronta. A assinatura é sua, pelo seu celular: ${url}`;
+    telaAssinatura(`
+    <div class="success-icon">${ICONS.check}</div>
+    <h2 class="step-title">A ficha de ${escHtml(primeiro)} está pronta</h2>
+    <p class="step-sub"><b>${escHtml(nome)}</b> é maior de idade, então <b>quem assina é ${escHtml(primeiro)}</b>, no próprio celular. O titular não pode assinar por ${escHtml(primeiro)}: a assinatura fica registrada com o nome de quem assinou.</p>
+    <a class="btn btn-primary" style="display:block;width:100%;margin-top:10px;text-decoration:none;" href="https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">Enviar para ${escHtml(primeiro)} pelo WhatsApp</a>
+    <button class="btn btn-ghost" id="btnCopiarAssin" style="width:100%;margin-top:8px;" onclick="copiarLinkAssinatura('${escHtml(url)}')">Copiar link de assinatura</button>
+    <a class="btn btn-ghost" style="display:block;width:100%;margin-top:8px;text-decoration:none;" href="${escHtml(url)}" target="_blank" rel="noopener">Sou ${escHtml(primeiro)}, assinar agora</a>`);
+    return;
+  }
   telaAssinatura(`
     <div class="success-icon">${ICONS.check}</div>
     <h2 class="step-title">Seus documentos estão prontos</h2>
