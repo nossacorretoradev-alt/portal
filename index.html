@@ -7966,6 +7966,102 @@ function getEmpresaDoCliente(c) {
 function getTitularesDaEmpresa(empresaId) {
   return DB.clients.filter((c) => c.empresaId === empresaId);
 }
+// ── Conferência: o que está no orçamento x o que está na etapa Pessoas ──────
+const normNomeVida = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase().replace(/\s+/g, ' ');
+function gruposDoOrcamentoDoCard(c) {
+  const todos = titularesDoMesmoCard(c);
+  const comGrupos = todos.find((x) => (x.gruposOrcamento || []).length);
+  return comGrupos ? comGrupos.gruposOrcamento : [];
+}
+// titulares do mesmo lead que ficaram ligados a outra empresa (ex.: CNPJ corrigido)
+function titularesPerdidosDoCard(c) {
+  if (!c.numeroLead) return [];
+  return DB.clients.filter((x) => x.numeroLead === c.numeroLead && x.empresaId !== c.empresaId && x.id !== c.id);
+}
+function conferirVidasDoOrcamento(c) {
+  const grupos = gruposDoOrcamentoDoCard(c);
+  const todos = getTitularesDaEmpresa(c.empresaId);
+  const vidasNoCard = todos.reduce((n, x) => n + 1 + (x.dependentes || []).length, 0);
+  const vidasNoOrcamento = grupos.reduce((n, g) => n + 1 + (Number(g.quantidadeDependentes) || 0), 0);
+  const usados = new Set();
+  const faltando = [];
+  grupos.forEach((g, i) => {
+    const generico = /^Titular \d+$/i.test(g.titular || '');
+    const achado = todos.find((x) => !usados.has(x.id) && !generico && normNomeVida(x.titular?.nome) === normNomeVida(g.titular));
+    if (achado) usados.add(achado.id);
+    else faltando.push({ ...g, indice: i });
+  });
+  // nomes genéricos ou trocados: só conta como faltando se o total de titulares não fecha
+  const titularesSobrando = todos.length - usados.size;
+  const realmenteFaltando = faltando.slice(Math.min(faltando.length, Math.max(0, titularesSobrando)));
+  return { grupos, vidasNoCard, vidasNoOrcamento, faltando: realmenteFaltando, perdidos: titularesPerdidosDoCard(c) };
+}
+function avisoVidasDoOrcamento(c) {
+  const r = conferirVidasDoOrcamento(c);
+  const blocos = [];
+  if (r.perdidos.length) {
+    blocos.push(`<div class="pendencia-banner" style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span>⚠️ ${r.perdidos.length === 1 ? 'Um titular deste lead ficou' : `${r.perdidos.length} titulares deste lead ficaram`} fora do card: <b>${r.perdidos.map((x) => escHist(x.titular?.nome || 'sem nome')).join(', ')}</b>.</span>
+      <button class="btn-primary" style="padding:6px 12px;font-size:12px;" onclick="trazerTitularesPerdidos()">Trazer para este card</button></div>`);
+  }
+  if (r.grupos.length && r.faltando.length && !r.perdidos.length) {
+    const vidas = r.faltando.reduce((n, g) => n + 1 + (Number(g.quantidadeDependentes) || 0), 0);
+    blocos.push(`<div class="pendencia-banner" style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span>O orçamento tem <b>${r.vidasNoOrcamento} vida(s)</b> e aqui ${r.vidasNoCard === 1 ? 'há' : 'há'} <b>${r.vidasNoCard}</b>. Falta: ${r.faltando.map((g) => `<b>${escHist(g.titular)}</b>${Number(g.quantidadeDependentes) ? ` (+${g.quantidadeDependentes} dep.)` : ''}`).join(', ')}.</span>
+      <button class="btn-primary" style="padding:6px 12px;font-size:12px;" onclick="criarVidasQueFaltamDoOrcamento()">Criar ${vidas} vida(s) que faltam</button></div>`);
+  }
+  return blocos.join('');
+}
+async function trazerTitularesPerdidos() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const emp = getEmpresaDoCliente(c);
+  const perdidos = titularesPerdidosDoCard(c);
+  perdidos.forEach((x) => {
+    x.empresaId = c.empresaId;
+    x.etapaAdesao = c.etapaAdesao;
+    x.titular.razaoSocial = emp.razaoSocial;
+    x.titular.cnpj = emp.cnpj;
+    x.historico = x.historico || [];
+    x.historico.push({ data: nowISO(), texto: 'Titular religado ao card da empresa (tinha ficado separado ao corrigir o CNPJ).' });
+  });
+  c.historico.push({ data: nowISO(), texto: `${perdidos.length} titular(es) do mesmo lead trazido(s) de volta para o card.` });
+  renderClientModal();
+  await persist();
+  toast(`✓ ${perdidos.length} titular(es) de volta no card.`);
+}
+async function criarVidasQueFaltamDoOrcamento() {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const emp = getEmpresaDoCliente(c);
+  const { faltando } = conferirVidasDoOrcamento(c);
+  if (!faltando.length) return;
+  faltando.forEach((g) => {
+    DB.clients.push({
+      id: uid('cli'),
+      status: 'ativo',
+      origemSite: false,
+      etapaAdesao: c.etapaAdesao,
+      numeroLead: c.numeroLead,
+      venda: c.venda ? { ...c.venda } : undefined,
+      dataVigencia: c.dataVigencia || '',
+      associadoValidado: !!c.associadoValidado,
+      vendedorTravado: !!c.vendedorTravado,
+      pendencia: { ativa: false, motivo: '' },
+      empresaId: c.empresaId,
+      titular: { codigoVida: uid('vida'), nome: /^Titular \d+$/i.test(g.titular || '') ? '' : g.titular, cpf: '', dataNascimento: '', celular: '', email: '', razaoSocial: emp.razaoSocial, cnpj: emp.cnpj, anexos: [] },
+      dependentes: Array.from({ length: Number(g.quantidadeDependentes) || 0 }, () => ({ id: uid('dep'), codigoVida: uid('vida'), nome: '', cpf: '', dataNascimento: '', parentesco: '', anexos: [] })),
+      planoEscolhido: g.plano || '',
+      vendedores: (c.vendedores || []).map((v) => ({ vendedorId: v.vendedorId, percentual: v.percentual, pagamentos: [] })),
+      comissoes: [],
+      historico: [{ data: nowISO(), texto: `Titular criado a partir do orçamento (${g.titular}).` }],
+      emailAdministradoraEnviadoEm: null,
+      criadoEm: nowISO(),
+    });
+  });
+  c.historico.push({ data: nowISO(), texto: `Vidas que faltavam do orçamento criadas: ${faltando.map((g) => g.titular).join(', ')}.` });
+  renderClientModal();
+  await persist();
+  toast('✓ Vidas do orçamento criadas.');
+}
 async function adicionarTitularNaEmpresa(empresaId) {
   const emp = DB.empresas.find((e) => e.id === empresaId);
   if (!emp) return;
@@ -10346,6 +10442,7 @@ function renderClientModal() {
   } else if (ABA === 'pessoas') {
     const todosTitulares = getTitularesDaEmpresa(c.empresaId);
     tabContent = `
+      ${avisoVidasDoOrcamento(c)}
       <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
         <label class="btn-ghost" style="padding:7px 12px;font-size:12px;cursor:pointer;">${ICONS.upload} Importar vidas (planilha no modelo do layout)<input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importarPlanilhaVidas(event)"></label>
       </div>
@@ -13276,6 +13373,7 @@ async function updateEmpresa() {
   // não grava esse vínculo no cliente. Sem isso, um cliente novo cujo CNPJ já bate
   // com uma empresa existente ficava com empresaId vazio pra sempre.
   c.empresaId = emp.id;
+  const titularesDoCardAntes = titularesDoMesmoCard(c);
   const cnpjAntesDaEdicao = onlyDigits(emp.cnpj || '');
   const antes = JSON.stringify(emp);
   emp.razaoSocial = document.getElementById('emp_razao').value.trim();
@@ -13292,6 +13390,9 @@ async function updateEmpresa() {
   if (cnpjNovo && cnpjNovo !== emp.cnpj) {
     const outraComMesmoCnpj = DB.empresas.find((e) => e.cnpj === cnpjNovo && e.id !== emp.id);
     if (outraComMesmoCnpj) {
+      // leva TODOS os titulares deste card junto (antes só ia o titular aberto
+      // e os outros do orçamento ficavam para trás, sumindo da etapa Pessoas)
+      titularesDoCardAntes.forEach((x) => (x.empresaId = outraComMesmoCnpj.id));
       c.empresaId = outraComMesmoCnpj.id;
       outraComMesmoCnpj.razaoSocial = outraComMesmoCnpj.razaoSocial || emp.razaoSocial;
     } else {
