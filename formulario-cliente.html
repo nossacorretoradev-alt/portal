@@ -971,14 +971,17 @@ const REGISTRO_ANS_POR_PLANO = {
   greenEnf: '486.090/20-0',
   greenApt: '486.088/20-8',
 };
+// Carimbo da Autentique: (x, y) = canto de cima à esquerda; com escala 1 ocupa
+// 26,5% da largura e 7,1% da altura. Posições medidas para não cobrir texto
+// (iguais às do portal).
 const POSICOES_TITULAR = [
-  { pagina: 1, x: 72, y: 86 },
-  { pagina: 2, x: 18.8, y: 35.2 },
-  { pagina: 4, x: 60.1, y: 49.7 },
-  { pagina: 5, x: 58.6, y: 50.1 },
-  { pagina: 7, x: 37.0, y: 67.4 },
+  { pagina: 1, x: 72.0, y: 88.3, escala: 0.6 },
+  { pagina: 2, x: 19.0, y: 39.0, escala: 0.6 },
+  { pagina: 4, x: 51.0, y: 52.15, escala: 0.55 },
+  { pagina: 5, x: 60.0, y: 51.2, escala: 0.7 },
+  { pagina: 7, x: 38.0, y: 65.8, escala: 0.9 },
 ];
-const POSICOES_INTERMEDIARIO = [{ pagina: 2, x: 63.3, y: 36.7 }];
+const POSICOES_INTERMEDIARIO = [{ pagina: 2, x: 72.0, y: 40.9, escala: 0.6 }];
 function chavePlanoPorNome(nome) {
   const n = String(nome || '');
   if (/apartamento/i.test(n)) return 'greenApt';
@@ -1173,7 +1176,8 @@ async function iniciarAssinatura() {
         tituloDocumento: `Ficha de inclusao - ${vida.nome}`,
         pdfBase64,
         signers: [
-          { nome: d.assinanteNome, posicoes: POSICOES_TITULAR },
+          // CPF de quem assina: a Autentique só deixa essa pessoa assinar
+          { nome: d.assinanteNome, cpf: d.assinanteCpf || '', posicoes: POSICOES_TITULAR },
           { nome: d.intermediario.nome, posicoes: POSICOES_INTERMEDIARIO },
         ],
       }),

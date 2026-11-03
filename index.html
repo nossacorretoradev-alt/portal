@@ -7485,12 +7485,12 @@ const DOCS_ASSINATURA = {
         quem: 'cliente',
         rotulo: 'Contratante (sócio administrador)',
         externo: true,
-        posicoes: [{ pagina: 2, x: 7.3, y: 58.0 }],
+        posicoes: [{ pagina: 2, x: 6.5, y: 65.0, escala: 0.8 }],
       },
       {
         quem: 'corretora',
         rotulo: 'Corretora (Nossa Broker)',
-        posicoes: [{ pagina: 2, x: 50.4, y: 57.9 }],
+        posicoes: [{ pagina: 2, x: 49.7, y: 65.0, escala: 0.8 }],
       },
     ],
   },
@@ -7501,18 +7501,21 @@ const DOCS_ASSINATURA = {
         rotulo: 'Beneficiário',
         externo: true,
         // rubrica na carta (pág. 1) + beneficiário (2) + proponente (4 e 5) + contratante do RC (7)
+        // Carimbo da Autentique: (x, y) é o canto de cima à esquerda; com escala 1
+        // ocupa 26,5% da largura e 7,1% da altura da página. Posições medidas
+        // num documento assinado para nenhum carimbo cobrir texto.
         posicoes: [
-          { pagina: 1, x: 72, y: 86 },
-          { pagina: 2, x: 18.8, y: 35.2 },
-          { pagina: 4, x: 60.1, y: 49.7 },
-          { pagina: 5, x: 58.6, y: 50.1 },
-          { pagina: 7, x: 37.0, y: 67.4 },
+          { pagina: 1, x: 72.0, y: 88.3, escala: 0.6 },
+          { pagina: 2, x: 19.0, y: 39.0, escala: 0.6 },
+          { pagina: 4, x: 51.0, y: 52.15, escala: 0.55 },
+          { pagina: 5, x: 60.0, y: 51.2, escala: 0.7 },
+          { pagina: 7, x: 38.0, y: 65.8, escala: 0.9 },
         ],
       },
       {
         quem: 'intermediario',
         rotulo: 'Corretora (Nossa Broker)',
-        posicoes: [{ pagina: 2, x: 63.3, y: 36.7 }],
+        posicoes: [{ pagina: 2, x: 72.0, y: 40.9, escala: 0.6 }],
       },
     ],
   },
@@ -7685,6 +7688,12 @@ async function enviarDocParaAssinatura(tipo, clientId, key) {
   }
   const def = DOCS_ASSINATURA[tipo];
   const sigs = def.assinantes.map((a) => ({ ...a, sig: signatarioDoc(tipo, ref.x, a.quem, key) }));
+  // assinatura é individual por CPF: só a pessoa com esse CPF consegue assinar
+  const semCpf = sigs.find((a) => a.externo && onlyDigits(a.sig.cpf || '').length !== 11);
+  if (semCpf) {
+    toast(`Falta o CPF de ${semCpf.sig.nome || 'quem assina'} (${semCpf.sig.rotulo || semCpf.rotulo}). A assinatura é travada no CPF da pessoa.`);
+    return;
+  }
   const semNome = sigs.find((a) => !a.sig.nome);
   if (semNome) {
     toast(
@@ -7712,6 +7721,7 @@ async function enviarDocParaAssinatura(tipo, clientId, key) {
         signers: sigs.map((a) => ({
           nome: a.sig.nome,
           email: a.sig.email || '',
+          cpf: a.externo ? onlyDigits(a.sig.cpf || '') : '',
           posicoes: a.posicoes,
         })),
         nome: sigs[0].sig.nome,
