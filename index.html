@@ -7285,7 +7285,9 @@ function assinanteDaVida(x, v) {
     email: quem.email || '',
     // dependente maior de idade assina pelo próprio celular: nunca cai no do
     // titular, senão o titular recebe o link e assina no lugar dele
-    celular: menor || v.key === 'titular' ? quem.celular || x.titular.celular || '' : quem.celular || '',
+    // sem celular próprio, o link vai para o titular repassar; quem assina é
+    // sempre a própria pessoa, porque a assinatura é travada no CPF dela
+    celular: quem.celular || x.titular.celular || '',
     semContatoProprio: !menor && v.key !== 'titular' && !onlyDigits(quem.celular || ''),
     cpf: quem.cpf || '',
     rotulo: menor
@@ -7617,14 +7619,16 @@ function renderAbaAssinatura(c) {
             const wpp = a.externo
               ? linkWhatsappNumero(
                   sig.celular,
-                  `Olá ${(sig.nome || '').split(' ')[0]}! Segue o link pra você assinar a ${d.tipo === 'pme' ? 'proposta da empresa' : `ficha de inclusão de ${ref.v?.pessoa.nome || ''}`} (Unimed · CDL Mossoró). Este link é pessoal: a assinatura tem que ser feita por ${sig.nome || 'você'}. ${s.signUrl}`
+                  sig.semContatoProprio
+                    ? `Olá ${(ref.x.titular.nome || '').split(' ')[0]}! Segue o link da ficha de inclusão de ${ref.v?.pessoa.nome || ''} (Unimed · CDL Mossoró). Repasse para ${(sig.nome || '').split(' ')[0]}: a assinatura é feita por ${(sig.nome || '').split(' ')[0]}, com o CPF dela/dele. ${s.signUrl}`
+                    : `Olá ${(sig.nome || '').split(' ')[0]}! Segue o link pra você assinar a ${d.tipo === 'pme' ? 'proposta da empresa' : `ficha de inclusão de ${ref.v?.pessoa.nome || ''}`} (Unimed · CDL Mossoró). Este link é pessoal: a assinatura é travada no seu CPF. ${s.signUrl}`
                 )
               : null;
             acoes = `${wpp ? `<a class="wpp-btn" style="padding:6px 10px;font-size:11.5px;" target="_blank" href="${wpp}">${ICONS.wpp} Enviar link</a>` : ''}
               <a class="btn-ghost" style="padding:6px 10px;font-size:11.5px;" target="_blank" href="${s.signUrl}">${a.externo ? 'Abrir link' : 'Assinar'}</a>`;
           }
           const avisoContato = sig.semContatoProprio && !s?.completed
-            ? `<div style="color:var(--danger);font-size:11px;margin-top:2px;">⚠️ Sem celular próprio. Cadastre o celular de ${escHist((sig.nome || '').split(' ')[0])} na aba Pessoas: é ${(sig.nome || '').split(' ')[0] ? 'ela/ele' : 'a pessoa'} quem assina, não o titular.</div>`
+            ? `<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">O link vai para o celular do titular repassar. Só ${escHist((sig.nome || '').split(' ')[0] || 'a pessoa')} consegue assinar (travado no CPF).</div>`
             : '';
           return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--border);">
             <div style="font-size:12px;"><b>${escHist(sig.rotulo || a.rotulo)}</b><div style="color:var(--text-muted);">${escHist(sig.nome || 'sem nome cadastrado')}</div>${avisoContato}</div>
