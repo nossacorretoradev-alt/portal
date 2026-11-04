@@ -9692,6 +9692,22 @@ function tokenAleatorio() {
   crypto.getRandomValues(b);
   return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 }
+// código de acesso da página da Unimed: vai no corpo do e-mail; sem ele a
+// página não mostra nada (quem só tiver o link não abre)
+function codigoAcessoAleatorio() {
+  const b = new Uint32Array(1);
+  crypto.getRandomValues(b);
+  return String(100000 + (b[0] % 900000));
+}
+// pacotes montados antes do código ganham um agora (o link antigo passa a pedir)
+async function garantirCodigoPacote(c) {
+  const p = pacoteDoCard(c);
+  if (!p || p.status !== 'ativo' || p.codigo) return;
+  p.codigo = codigoAcessoAleatorio();
+  titularesDoMesmoCard(c).forEach((x) => x.pacoteUnimed && x.pacoteUnimed.token === p.token && (x.pacoteUnimed.codigo = p.codigo));
+  c.historico.push({ data: nowISO(), texto: 'Código de acesso criado para a página da Unimed.' });
+  await persist();
+}
 function pacoteDoCard(c) {
   const x = titularesDoMesmoCard(c).find((t) => t.pacoteUnimed && t.pacoteUnimed.token);
   return (x && x.pacoteUnimed) || null;
@@ -9789,6 +9805,7 @@ async function gerarPacoteUnimed(silencioso) {
     const atual = pacoteDoCard(c);
     const pacote = {
       token: atual && atual.status === 'ativo' ? atual.token : tokenAleatorio(),
+      codigo: atual && atual.status === 'ativo' && atual.codigo ? atual.codigo : codigoAcessoAleatorio(),
       criadoEm: atual?.criadoEm || nowISO(),
       expiraEm: new Date(Date.now() + 30 * 86400000).toISOString(),
       status: 'ativo',
@@ -9813,11 +9830,13 @@ async function copiarLinkPacote() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   const link = linkPacoteUnimed(c);
   if (!link) return;
+  await garantirCodigoPacote(c);
+  const texto = `${link}\nCódigo de acesso: ${pacoteDoCard(c).codigo}`;
   try {
-    await navigator.clipboard.writeText(link);
-    toast('✓ Link da página da Unimed copiado.');
+    await navigator.clipboard.writeText(texto);
+    toast('✓ Link e código de acesso copiados.');
   } catch (e) {
-    prompt('Copie o link:', link);
+    prompt('Copie o link e o código:', texto);
   }
 }
 async function cancelarPacoteUnimed() {
@@ -9871,9 +9890,10 @@ function montarEmailImplantacao(c) {
     <p style="margin-top:4px;"><b>Total: ${r.vidas} vida(s) · ${formatBRL(r.total)}/mês</b></p>
     <p>Todos os documentos (empresa, fichas de inclusão assinadas de cada vida, documentos pessoais e layout) estão na página de conferência:</p>
     <p><a href="${link}" style="background:#00042D;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;display:inline-block;">Abrir página de conferência</a></p>
+    <p>Código de acesso: <b style="font-size:16px;letter-spacing:2px;">${escHist((p && p.codigo) || '')}</b><br><span style="font-size:12px;color:#64748B;">A página pede esse código para abrir os documentos.</span></p>
     <p style="font-size:12px;color:#64748B;">${anexos.length ? `Anexados a este e-mail: ${escHist(listaAnexos)}. ` : ''}Link válido até ${p ? fmtDate(p.expiraEm.slice(0, 10)) : ''}.</p>
     <p>Atenciosamente,<br>Nossa Corretora</p></div>`;
-  const texto = `Implantação ${e.razaoSocial || ''} (CNPJ ${e.cnpj || ''}), vigência ${e.vigencia || ''}. ${r.vidas} vida(s), ${formatBRL(r.total)}/mês. Página de conferência: ${link}`;
+  const texto = `Implantação ${e.razaoSocial || ''} (CNPJ ${e.cnpj || ''}), vigência ${e.vigencia || ''}. ${r.vidas} vida(s), ${formatBRL(r.total)}/mês. Página de conferência: ${link} · Código de acesso: ${(p && p.codigo) || ''}`;
   return { assunto, html, texto, anexos };
 }
 // O e-mail para a Unimed abre no programa de e-mail do computador de quem
@@ -9903,6 +9923,9 @@ function textoEmailImplantacao(c) {
     'Todos os documentos (empresa, fichas de inclusão assinadas, Proposta PME III, documentos pessoais e layout) estão na página de conferência, com o botão "Baixar tudo":',
     linkPacoteUnimed(c),
     '',
+    `Código de acesso: ${(p && p.codigo) || ''}`,
+    '(a página pede esse código para abrir os documentos)',
+    '',
     `Link válido até ${p ? fmtDate(p.expiraEm.slice(0, 10)) : ''}.`,
     '',
     'Atenciosamente,',
@@ -9917,15 +9940,16 @@ function mailtoImplantacao(c) {
   if (cfg.cc) q.unshift(`cc=${encodeURIComponent(cfg.cc)}`);
   return `mailto:${encodeURIComponent(cfg.para || '').replace(/%40/g, '@')}?${q.join('&')}`;
 }
-function abrirEnvioUnimed() {
+async function abrirEnvioUnimed() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   if (!linkPacoteUnimed(c)) {
     toast('Monte o pacote da Unimed antes de enviar.');
     return;
   }
+  await garantirCodigoPacote(c);
   const cfg = configEmailUnimed();
   const em = montarEmailImplantacao(c);
-  openModalHTML(`<div class="modal modal-wide"><div class="modal-head"><div class="mh-info"><div class="mh-name">Enviar implantação para a Unimed</div><div class="mh-sub">Abre no e-mail que você usa neste computador</div></div><button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button></div><div class="modal-body">
+  openModalHTML(`<div class="modal modal-wide"><div class="modal-head"><div class="mh-info"><div class="mh-name">Enviar implantação para a Unimed</div><div class="mh-sub">Abre no Gmail já preenchido (ou escolha Outlook / outro programa)</div></div><button class="modal-close" onclick="renderClientModal()">${ICONS.close}</button></div><div class="modal-body">
     <div class="field-grid">
       <div class="fg"><label>Para (e-mail da Unimed)</label><input id="unimedPara" type="email" value="${escHist(cfg.para)}" onchange="salvarConfigEmailUnimed('para', this.value)"></div>
       <div class="fg"><label>Cópia (opcional, separe com vírgula)</label><input value="${escHist(cfg.cc)}" onchange="salvarConfigEmailUnimed('cc', this.value)"></div>
@@ -9936,9 +9960,31 @@ function abrirEnvioUnimed() {
   </div><div class="modal-foot">
     <button class="btn-ghost" onclick="renderClientModal()">Cancelar</button>
     <button class="btn-ghost" onclick="copiarEmailImplantacao()">Copiar texto</button>
-    <button class="btn-primary" onclick="abrirMailtoImplantacao()">${ICONS.mail} Abrir no meu e-mail</button>
+    <button class="btn-primary" onclick="abrirEmailImplantacao('gmail')">${ICONS.mail} Abrir no Gmail</button>
+    <button class="btn-ghost" onclick="abrirEmailImplantacao('outlook')">Outlook</button>
+    <button class="btn-ghost" title="Abre o programa de e-mail padrão do computador (Apple Mail, Outlook instalado...)" onclick="abrirEmailImplantacao('padrao')">Outro programa</button>
     <button class="btn-primary" style="background:var(--success);" onclick="confirmarEmailImplantacaoEnviado()">${ICONS.check} Já enviei</button>
   </div></div>`);
+}
+// Abre o e-mail já preenchido: Gmail (padrão), Outlook na web ou o programa
+// de e-mail do computador
+function abrirEmailImplantacao(servidor) {
+  const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
+  const cfg = configEmailUnimed();
+  if (!cfg.para) {
+    toast('Preencha o e-mail da Unimed (campo "Para").');
+    document.getElementById('unimedPara')?.focus();
+    return;
+  }
+  if (servidor === 'padrao') return abrirMailtoImplantacao();
+  const em = montarEmailImplantacao(c);
+  const corpo = textoEmailImplantacao(c);
+  const q = (o) => Object.entries(o).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  const url =
+    servidor === 'outlook'
+      ? `https://outlook.office.com/mail/deeplink/compose?${q({ to: cfg.para, cc: cfg.cc, subject: em.assunto, body: corpo })}`
+      : `https://mail.google.com/mail/?view=cm&fs=1&${q({ to: cfg.para, cc: cfg.cc, su: em.assunto, body: corpo })}`;
+  window.open(url, '_blank', 'noopener');
 }
 function abrirMailtoImplantacao() {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
@@ -10027,6 +10073,7 @@ function renderImplantacaoNova(c) {
           ? `<div style="font-size:12.5px;margin-bottom:10px;">${p ? 'O link foi cancelado.' : 'A página reúne tudo o que a Unimed precisa ver e baixar.'}</div>
              <button class="btn-primary" style="padding:8px 14px;font-size:12px;" onclick="gerarPacoteUnimed()">${ICONS.upload} Montar pacote e gerar link</button>`
           : `<div style="font-size:12.5px;">${p.manifesto.vidas.length} vida(s) · ${p.manifesto.gerais.length + p.manifesto.documentosEmpresa.length} documento(s) da empresa e gerais · montado em ${fmtDateTime(p.manifesto.montadoEm)}</div>
+             <div style="font-size:12.5px;margin-top:6px;">Código de acesso: ${p.codigo ? `<b style="letter-spacing:2px;">${escHist(p.codigo)}</b> <span style="font-size:11px;color:var(--text-muted);">(vai no e-mail; a página só abre com ele)</span>` : '<span style="color:var(--text-muted);">criado ao enviar o e-mail ou copiar o link</span>'}</div>
              <div style="font-size:11.5px;margin-top:4px;color:${vencido ? 'var(--danger)' : 'var(--text-muted)'};">${vencido ? 'Link vencido' : 'Link válido até'} ${fmtDate(p.expiraEm.slice(0, 10))} · ${acessos.length ? `Unimed abriu ${acessos.length}x (última: ${fmtDateTime(acessos[acessos.length - 1])})` : 'ainda não foi aberto'}</div>
              <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;">
                <a class="btn-primary" style="padding:7px 12px;font-size:12px;" target="_blank" href="${link}">Abrir página</a>

@@ -26,6 +26,10 @@ a.btn,button.btn{display:inline-block;border:0;border-radius:10px;padding:8px 14
 .vida-head{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.vida-head small{color:var(--muted)}
 .erro{text-align:center;padding:60px 20px;color:var(--muted)}
 .rodape{text-align:center;font-size:11px;color:var(--muted);margin-top:26px}
+.codigo-box{max-width:380px;margin:50px auto;text-align:center}
+.codigo-box input{width:100%;font-size:26px;letter-spacing:10px;text-align:center;padding:12px;border:1.5px solid var(--border);border-radius:12px;font-family:inherit;margin:14px 0 10px;outline:none}
+.codigo-box input:focus{border-color:var(--navy)}
+.codigo-box .msg{min-height:18px;font-size:12.5px;color:var(--accent);margin-bottom:8px}
 </style>
 </head>
 <body>
@@ -107,16 +111,57 @@ async function baixarTudo() {
   status.textContent = falhas.length ? `Pronto. ${falhas.length} arquivo(s) precisam ser abertos individualmente: ${falhas.join(', ')}` : 'Pronto.';
   btn.disabled = false;
 }
-async function iniciar() {
-  const msgs = { 'link-vencido': 'Este link venceu. Peça um novo à Nossa Corretora.', 'link-cancelado': 'Este link foi cancelado ou não existe.', 'link-invalido': 'Link inválido.' };
+// Código de acesso: vai no corpo do e-mail da implantação. Sem ele a página
+// não mostra nada. Fica guardado só nesta aba (sessionStorage).
+const CHAVE_CODIGO = 'unimed_codigo_' + TOKEN.slice(0, 12);
+function lerCodigoGuardado() {
+  try { return sessionStorage.getItem(CHAVE_CODIGO) || ''; } catch (e) { return ''; }
+}
+function guardarCodigo(c) {
+  try { c ? sessionStorage.setItem(CHAVE_CODIGO, c) : sessionStorage.removeItem(CHAVE_CODIGO); } catch (e) {}
+}
+function pedirCodigo(msg) {
+  document.getElementById('app').innerHTML = `<div class="card codigo-box">
+    <h1>Código de acesso</h1>
+    <div class="sub" style="margin:6px 0 0;">Digite o código de 6 números que veio no e-mail da implantação.</div>
+    <form onsubmit="event.preventDefault(); enviarCodigo();">
+      <input id="codigo" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" oninput="this.value=this.value.replace(/\D/g,'')">
+      <div class="msg" id="msgCodigo">${esc(msg || '')}</div>
+      <button class="btn prim" style="width:100%;padding:11px;" type="submit">Abrir documentos</button>
+    </form></div>`;
+  setTimeout(() => document.getElementById('codigo')?.focus(), 30);
+}
+function enviarCodigo() {
+  const c = (document.getElementById('codigo')?.value || '').replace(/\D/g, '');
+  if (c.length !== 6) {
+    document.getElementById('msgCodigo').textContent = 'O código tem 6 números.';
+    return;
+  }
+  iniciar(c);
+}
+async function iniciar(codigo) {
+  const msgs = {
+    'link-vencido': 'Este link venceu. Peça um novo à Nossa Corretora.',
+    'link-cancelado': 'Este link foi cancelado ou não existe.',
+    'link-invalido': 'Link inválido.',
+    'link-sem-codigo': 'Este link é anterior ao código de acesso. Peça à Nossa Corretora o e-mail novo, com o código.',
+    'muitas-tentativas': 'Muitas tentativas com código errado. Aguarde 15 minutos e tente de novo.',
+  };
+  codigo = codigo || lerCodigoGuardado();
+  if (!codigo) return pedirCodigo();
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/pacote-unimed`, {
       method: 'POST',
       headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: TOKEN }),
+      body: JSON.stringify({ token: TOKEN, codigo }),
     });
     const data = await res.json();
+    if (data.error === 'codigo-invalido' || data.error === 'codigo-necessario') {
+      guardarCodigo('');
+      return pedirCodigo(data.error === 'codigo-invalido' ? `Código incorreto.${data.restantes != null ? ` Restam ${data.restantes} tentativa(s).` : ''}` : '');
+    }
     if (!res.ok) throw new Error(msgs[data.error] || data.error || 'Não foi possível abrir.');
+    guardarCodigo(codigo);
     PACOTE = data;
     render();
   } catch (e) {
