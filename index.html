@@ -3086,6 +3086,11 @@ function viewIntegracoes() {
       </div>
     </div>
     ${blocoTemplatesWhatsapp()}
+    <div class="dep-card" style="margin-top:14px;">
+      <b style="font-size:13px;">Assinaturas (Autentique)</b>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;margin-top:8px;"><input type="checkbox" ${cfgAssinatura().linkPorWhatsapp ? 'checked' : ''} onchange="setLinkAssinaturaPorWhatsapp(this.checked)"> A Autentique manda o link de assinatura direto no WhatsApp de cada pessoa</label>
+      <div style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">Desligado: a equipe envia o link pelo botão "Enviar link". Em qualquer caso, cada adulto precisa de um celular próprio e a assinatura fica travada no CPF dele.</div>
+    </div>
   </div>`;
 }
 async function carregarConfigSunchat() {
@@ -7274,10 +7279,29 @@ function vidaPorChave(x, key) {
   return vidasDoTitular(x).find((v) => v.key === key) || null;
 }
 // quem assina a ficha desta vida (a própria pessoa ou, se menor, o titular)
+// etiqueta ao lado do nome do dependente: menor de idade (e quem assina por ele) ou sem data
+function seloIdadeDependente(d) {
+  const idade = idadeEmAnos(d.dataNascimento);
+  if (idade === null)
+    return `<span style="background:var(--warning-light,#fff4e0);color:var(--warning,#b26a00);border-radius:9px;padding:2px 8px;font-size:10.5px;font-weight:700;">SEM DATA DE NASCIMENTO</span>`;
+  if (idade >= 18) return '';
+  return `<span style="background:#e8f0ff;color:#1f4fd1;border-radius:9px;padding:2px 8px;font-size:10.5px;font-weight:700;">👶 MENOR DE IDADE · ${idade} ano${idade === 1 ? '' : 's'}</span>`;
+}
+// responsável que assina pelo menor: o escolhido na aba Pessoas (um dependente
+// maior de idade da mesma família) ou, se ninguém foi escolhido, o titular
+function responsavelDoMenor(x, v) {
+  const m = /^dep(\d+)$/.exec(String(v.pessoa.responsavelKey || ''));
+  if (m) {
+    const r = (x.dependentes || [])[Number(m[1])];
+    const idade = r ? idadeEmAnos(r.dataNascimento) : null;
+    if (r && r !== v.pessoa && idade !== null && idade >= 18) return r;
+  }
+  return x.titular;
+}
 function assinanteDaVida(x, v) {
   const idade = v.key === 'titular' ? null : idadeEmAnos(v.pessoa.dataNascimento);
   const menor = idade !== null && idade < 18;
-  const quem = menor ? x.titular : v.pessoa;
+  const quem = menor ? responsavelDoMenor(x, v) : v.pessoa;
   return {
     menor,
     semNascimento: v.key !== 'titular' && idade === null,
@@ -7285,13 +7309,12 @@ function assinanteDaVida(x, v) {
     email: quem.email || '',
     // dependente maior de idade assina pelo próprio celular: nunca cai no do
     // titular, senão o titular recebe o link e assina no lugar dele
-    // sem celular próprio, o link vai para o titular repassar; quem assina é
-    // sempre a própria pessoa, porque a assinatura é travada no CPF dela
-    celular: quem.celular || x.titular.celular || '',
-    semContatoProprio: !menor && v.key !== 'titular' && !onlyDigits(quem.celular || ''),
+    // cada adulto assina pelo próprio celular (menor: o responsável)
+    celular: quem.celular || '',
+    semContatoProprio: !onlyDigits(quem.celular || ''),
     cpf: quem.cpf || '',
     rotulo: menor
-      ? `Responsável (titular) por ${v.pessoa.nome || 'dependente'}`
+      ? `Responsável (${quem === x.titular ? 'titular' : 'dependente'}) por ${v.pessoa.nome || 'dependente'}`
       : v.key === 'titular'
         ? 'Titular (beneficiário)'
         : 'Dependente (beneficiário)',
@@ -7480,6 +7503,25 @@ const CORRETORA_ASSINANTE = {
   nome: 'NOSSA BROKER CORRETORA DE SEGUROS',
   cnpj: '05.586.976/0001-01',
 };
+// Ficha de inclusão: onde assina a vida (carimbo + CPF + data de quem assinou).
+// Os campos CPF e DATE são preenchidos pela Autentique na hora da assinatura.
+const POSICOES_VIDA_FICHA = [
+  { pagina: 1, x: 72.0, y: 88.3, escala: 0.6 },
+  { pagina: 1, x: 72.0, y: 93.0, escala: 0.7, elemento: 'CPF' },
+  { pagina: 1, x: 72.0, y: 94.6, escala: 0.7, elemento: 'DATE' },
+  { pagina: 2, x: 19.0, y: 39.0, escala: 0.6 },
+  { pagina: 2, x: 19.0, y: 43.6, escala: 0.7, elemento: 'CPF' },
+  { pagina: 2, x: 19.0, y: 45.2, escala: 0.7, elemento: 'DATE' },
+  { pagina: 4, x: 51.0, y: 52.15, escala: 0.55 },
+  { pagina: 4, x: 67.0, y: 52.6, escala: 0.7, elemento: 'CPF' },
+  { pagina: 4, x: 67.0, y: 54.0, escala: 0.7, elemento: 'DATE' },
+  { pagina: 5, x: 60.0, y: 51.2, escala: 0.7 },
+  { pagina: 5, x: 79.5, y: 52.2, escala: 0.7, elemento: 'CPF' },
+  { pagina: 5, x: 79.5, y: 53.9, escala: 0.7, elemento: 'DATE' },
+  { pagina: 7, x: 38.0, y: 65.8, escala: 0.9 },
+  { pagina: 7, x: 63.0, y: 67.6, escala: 0.8, elemento: 'CPF' },
+  { pagina: 7, x: 63.0, y: 69.6, escala: 0.8, elemento: 'DATE' },
+];
 const DOCS_ASSINATURA = {
   pme: {
     assinantes: [
@@ -7487,7 +7529,11 @@ const DOCS_ASSINATURA = {
         quem: 'cliente',
         rotulo: 'Contratante (sócio administrador)',
         externo: true,
-        posicoes: [{ pagina: 2, x: 6.5, y: 65.0, escala: 0.8 }],
+        posicoes: [
+          { pagina: 2, x: 6.5, y: 65.0, escala: 0.8 },
+          { pagina: 2, x: 6.5, y: 71.3, escala: 0.8, elemento: 'CPF' },
+          { pagina: 2, x: 6.5, y: 73.1, escala: 0.8, elemento: 'DATE' },
+        ],
       },
       {
         quem: 'corretora',
@@ -7507,11 +7553,7 @@ const DOCS_ASSINATURA = {
         // ocupa 26,5% da largura e 7,1% da altura da página. Posições medidas
         // num documento assinado para nenhum carimbo cobrir texto.
         posicoes: [
-          { pagina: 1, x: 72.0, y: 88.3, escala: 0.6 },
-          { pagina: 2, x: 19.0, y: 39.0, escala: 0.6 },
-          { pagina: 4, x: 51.0, y: 52.15, escala: 0.55 },
-          { pagina: 5, x: 60.0, y: 51.2, escala: 0.7 },
-          { pagina: 7, x: 38.0, y: 65.8, escala: 0.9 },
+          ...POSICOES_VIDA_FICHA,
         ],
       },
       {
@@ -7546,6 +7588,42 @@ function refDoc(tipo, clientId, key) {
     store: v.pessoa.assinaturaInclusao || {},
     setStore: (s) => (v.pessoa.assinaturaInclusao = s),
   };
+}
+function cfgAssinatura() {
+  DB.config = DB.config || {};
+  DB.config.assinatura = DB.config.assinatura || { linkPorWhatsapp: false };
+  return DB.config.assinatura;
+}
+// todas as pessoas que assinam fichas neste card (vida adulta ou responsável do menor)
+function assinantesDoCard(x) {
+  const lista = [];
+  titularesDoMesmoCard(x).forEach((t) =>
+    vidasDoTitular(t).forEach((v) => {
+      const s = assinanteDaVida(t, v);
+      lista.push({ cpf: onlyDigits(s.cpf || ''), nome: s.nome, celular: onlyDigits(s.celular || '') });
+    })
+  );
+  return lista;
+}
+// celular de quem assina: obrigatório e não pode ser o mesmo de OUTRA pessoa do card
+function problemaCelularAssinante(x, key, sig) {
+  const primeiro = (sig.nome || 'a pessoa').split(' ')[0];
+  const cel = onlyDigits(sig.celular || '');
+  if (cel.length < 10) return `Cadastre o celular de ${primeiro} na aba Pessoas. Cada adulto assina no próprio celular.`;
+  const cpf = onlyDigits(sig.cpf || '');
+  const outro = assinantesDoCard(x).find((o) => o.celular === cel && o.cpf !== cpf);
+  if (outro) return `O celular de ${primeiro} é o mesmo de ${(outro.nome || '').split(' ')[0]}. Cada adulto precisa de um celular próprio para assinar.`;
+  return '';
+}
+function avisoCelularRepetido(d, sig) {
+  if (d.tipo !== 'inclusao' || !sig.celular) return '';
+  const p = problemaCelularAssinante(DB.clients.find((c) => c.id === d.clientId), d.key, sig);
+  return p ? `<div style="color:var(--danger);font-size:11px;margin-top:2px;">⚠️ ${escHist(p)}</div>` : '';
+}
+async function setLinkAssinaturaPorWhatsapp(valor) {
+  cfgAssinatura().linkPorWhatsapp = !!valor;
+  await persist();
+  toast(valor ? '✓ A Autentique vai mandar o link de assinatura no WhatsApp de cada pessoa.' : 'Links de assinatura: envio manual pela equipe.');
 }
 function signatarioDoc(tipo, x, quem, key) {
   if (tipo === 'pme' && quem === 'cliente') {
@@ -7619,17 +7697,15 @@ function renderAbaAssinatura(c) {
             const wpp = a.externo
               ? linkWhatsappNumero(
                   sig.celular,
-                  sig.semContatoProprio
-                    ? `Olá ${(ref.x.titular.nome || '').split(' ')[0]}! Segue o link da ficha de inclusão de ${ref.v?.pessoa.nome || ''} (Unimed · CDL Mossoró). Repasse para ${(sig.nome || '').split(' ')[0]}: a assinatura é feita por ${(sig.nome || '').split(' ')[0]}, com o CPF dela/dele. ${s.signUrl}`
-                    : `Olá ${(sig.nome || '').split(' ')[0]}! Segue o link pra você assinar a ${d.tipo === 'pme' ? 'proposta da empresa' : `ficha de inclusão de ${ref.v?.pessoa.nome || ''}`} (Unimed · CDL Mossoró). Este link é pessoal: a assinatura é travada no seu CPF. ${s.signUrl}`
+                  `Olá ${(sig.nome || '').split(' ')[0]}! Segue o link pra você assinar a ${d.tipo === 'pme' ? 'proposta da empresa' : `ficha de inclusão de ${ref.v?.pessoa.nome || ''}`} (Unimed · CDL Mossoró). Este link é pessoal: a assinatura é travada no seu CPF. ${s.signUrl}`
                 )
               : null;
             acoes = `${wpp ? `<a class="wpp-btn" style="padding:6px 10px;font-size:11.5px;" target="_blank" href="${wpp}">${ICONS.wpp} Enviar link</a>` : ''}
               <a class="btn-ghost" style="padding:6px 10px;font-size:11.5px;" target="_blank" href="${s.signUrl}">${a.externo ? 'Abrir link' : 'Assinar'}</a>`;
           }
           const avisoContato = sig.semContatoProprio && !s?.completed
-            ? `<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">O link vai para o celular do titular repassar. Só ${escHist((sig.nome || '').split(' ')[0] || 'a pessoa')} consegue assinar (travado no CPF).</div>`
-            : '';
+            ? `<div style="color:var(--danger);font-size:11px;margin-top:2px;">⚠️ Cadastre um celular próprio para ${escHist((sig.nome || '').split(' ')[0] || 'a pessoa')} (aba Pessoas). Cada adulto assina no próprio celular.</div>`
+            : avisoCelularRepetido(d, sig);
           return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--border);">
             <div style="font-size:12px;"><b>${escHist(sig.rotulo || a.rotulo)}</b><div style="color:var(--text-muted);">${escHist(sig.nome || 'sem nome cadastrado')}</div>${avisoContato}</div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">${status}${acoes}</div>
@@ -7698,6 +7774,14 @@ async function enviarDocParaAssinatura(tipo, clientId, key) {
     toast(`Falta o CPF de ${semCpf.sig.nome || 'quem assina'} (${semCpf.sig.rotulo || semCpf.rotulo}). A assinatura é travada no CPF da pessoa.`);
     return;
   }
+  if (tipo === 'inclusao') {
+    const vida = sigs.find((a) => a.quem === 'vida');
+    const problema = vida && problemaCelularAssinante(ref.x, key, vida.sig);
+    if (problema) {
+      toast(problema);
+      return;
+    }
+  }
   const semNome = sigs.find((a) => !a.sig.nome);
   if (semNome) {
     toast(
@@ -7726,6 +7810,10 @@ async function enviarDocParaAssinatura(tipo, clientId, key) {
           nome: a.sig.nome,
           email: a.sig.email || '',
           cpf: a.externo ? onlyDigits(a.sig.cpf || '') : '',
+          celular: a.externo ? onlyDigits(a.sig.celular || '') : '',
+          // com e-mail válido, a própria Autentique manda o pedido de assinatura por e-mail
+          porEmail: a.externo && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(a.sig.email || '').trim()),
+          porWhatsapp: a.externo && !!cfgAssinatura().linkPorWhatsapp,
           posicoes: a.posicoes,
         })),
         nome: sigs[0].sig.nome,
@@ -10535,7 +10623,7 @@ function renderClientModal() {
                   (d, i) => `
               <div class="dependent-person-card">
                 <div class="dependent-person-head">
-                  <div style="display:flex;align-items:center;gap:8px;"><span class="dependent-badge">DEPENDENTE</span><b style="font-size:12.5px;">${d.nome || `Dependente ${i + 1}`}</b></div>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span class="dependent-badge">DEPENDENTE</span><b style="font-size:12.5px;">${d.nome || `Dependente ${i + 1}`}</b>${seloIdadeDependente(d)}</div>
                   <div style="display:flex;gap:7px;"><button class="btn-ghost" style="padding:5px 9px;font-size:10.5px;" onclick="ACTIVE_CLIENT_ID='${x.id}'; openQuestionarioRiscoModalFor('dep${i}')">Questionário</button><button class="btn-danger" style="padding:5px 10px;" onclick="removeDependenteTitular('${x.id}',${i})">${ICONS.trash}</button></div>
                 </div>
                 <div class="field-grid">
@@ -10559,7 +10647,17 @@ function renderClientModal() {
                 ${
                   (() => {
                     const id = idadeEmAnos(d.dataNascimento);
-                    if (id !== null && id < 18) return '';
+                    if (id !== null && id < 18) {
+                      const adultos = x.dependentes
+                        .map((o, j) => ({ o, j, idade: idadeEmAnos(o.dataNascimento) }))
+                        .filter((a) => a.j !== i && a.idade !== null && a.idade >= 18);
+                      const atual = d.responsavelKey || 'titular';
+                      return `<div class="fg" style="margin-top:10px;max-width:420px;"><label>Quem assina por ${escHist((d.nome || 'este dependente').split(' ')[0])} <span class="opt">(menor de idade)</span></label>
+                  <select onchange="updateDependenteTitular('${x.id}',${i},'responsavelKey',this.value)">
+                    <option value="titular" ${atual === 'titular' ? 'selected' : ''}>Titular: ${escHist(x.titular.nome || 'titular')}</option>
+                    ${adultos.map((a) => `<option value="dep${a.j}" ${atual === 'dep' + a.j ? 'selected' : ''}>${escHist(a.o.nome || 'Dependente ' + (a.j + 1))}${a.o.parentesco ? ' (' + escHist(a.o.parentesco) + ')' : ''}</option>`).join('')}
+                  </select></div>`;
+                    }
                     const primeiro = (d.nome || 'o dependente').split(' ')[0];
                     return `<div class="field-grid" style="margin-top:10px;">
                   <div class="fg"><label>Celular de ${escHist(primeiro)} <span class="opt">(ele/ela assina a própria ficha)</span></label><input value="${d.celular ? maskPhone(d.celular) : ''}" oninput="this.value=maskPhone(this.value)" onchange="updateDependenteTitular('${x.id}',${i},'celular',onlyDigits(this.value))"/></div>
@@ -13307,18 +13405,33 @@ async function updateDependenteTitular(clientId, i, field, value) {
     toast('CPF do dependente inválido — confira os números.');
   }
   if ((val || '') !== (antes || '')) {
+    const nomeResp = (k) => (k && k !== 'titular' ? (c.dependentes[Number(String(k).slice(3))] || {}).nome || k : c.titular.nome || 'titular');
     c.historico.push({
       data: nowISO(),
-      texto: `Dependente ${c.dependentes[i].nome || i + 1} (de ${c.titular.nome || 'titular sem nome'}): ${descreverMudancaCampo(field, antes, val)}`,
+      texto:
+        field === 'responsavelKey'
+          ? `Dependente ${c.dependentes[i].nome || i + 1}: quem assina por ele(a) passou a ser ${nomeResp(val)}.`
+          : `Dependente ${c.dependentes[i].nome || i + 1} (de ${c.titular.nome || 'titular sem nome'}): ${descreverMudancaCampo(field, antes, val)}`,
     });
   }
   await persist();
+  // idade muda quem assina e quais campos aparecem (celular próprio / responsável)
+  if (field === 'dataNascimento' || field === 'responsavelKey') renderClientModal();
 }
 async function removeDependenteTitular(clientId, i) {
   const c = DB.clients.find((x) => x.id === clientId);
   if (!c) return;
   const nome = c.dependentes[i].nome || 'sem nome';
   c.dependentes.splice(i, 1);
+  // menores que tinham o removido como responsável voltam para o titular; os
+  // outros índices andam uma posição
+  c.dependentes.forEach((d) => {
+    const m = /^dep(\d+)$/.exec(String(d.responsavelKey || ''));
+    if (!m) return;
+    const k = Number(m[1]);
+    if (k === i) delete d.responsavelKey;
+    else if (k > i) d.responsavelKey = 'dep' + (k - 1);
+  });
   c.historico.push({ data: nowISO(), texto: `Dependente removido (${nome}).` });
   await persist();
   renderClientModal();
@@ -13506,6 +13619,13 @@ async function removeDependente(i) {
   const c = DB.clients.find((x) => x.id === ACTIVE_CLIENT_ID);
   const nome = c.dependentes[i].nome || 'sem nome';
   c.dependentes.splice(i, 1);
+  c.dependentes.forEach((d) => {
+    const m = /^dep(\d+)$/.exec(String(d.responsavelKey || ''));
+    if (!m) return;
+    const k = Number(m[1]);
+    if (k === i) delete d.responsavelKey;
+    else if (k > i) d.responsavelKey = 'dep' + (k - 1);
+  });
   c.historico.push({
     data: nowISO(),
     texto: `Dependente removido (${nome}).`,
