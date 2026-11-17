@@ -3610,7 +3610,7 @@ function viewPipeline() {
           .filter((l) => l.etapa === st.id)
           .map(
             (l) => `<div class="kanban-card" onclick="openPipelineLeadModal('${l.id}')">
-        <div class="kc-top"><div class="kc-avatar" style="background:${avatarColor(l.empresa || l.nome)}">${initials(l.nome || l.empresa)}</div><div class="kc-name">${l.empresa || l.nome || 'Lead'}</div></div>
+        <div class="kc-top"><div class="kc-avatar" style="background:${avatarColor(l.empresa || l.nome)}">${initials(l.nome || l.empresa)}</div><div class="kc-name">${l.empresa || l.nome || 'Lead'}</div></div>${l.simulacaoIncompleta ? `<div style="margin-top:6px;"><span style="background:#fff4e0;color:#b26a00;border-radius:9px;padding:2px 8px;font-size:10.5px;font-weight:700;">⏸ Simulação incompleta · parou em: ${escHist(l.etapaSimulador || 'início')}</span></div>` : ''}
         <div class="kc-sub">${l.nome || '—'} · ${maskPhone(l.celular || '') || '—'}</div>
         <div class="kc-sub" style="margin-top:3px;">Vendedor: <b>${(DB.users || []).find((u) => u.id === l.vendedorId)?.nome || '—'}</b></div>
         ${l.planoInteresse ? `<div class="kc-plan-tag">${l.planoInteresse}</div>` : ''}
@@ -4606,6 +4606,7 @@ async function converterPipelineParaImplantacao(l) {
       const nome = nomeEhGenerico ? (idx === 0 ? l.nome : '') : g.titular;
       return base({
         leadOrigemId: idx === 0 ? l.leadOrigemId || null : null,
+        sessaoSite: idx === 0 ? l.sessaoSite || null : null,
         titular: novoTitular(nome, idx === 0),
         dependentes: Array.from({ length: Number(g.quantidadeDependentes) || 0 }, () =>
           novoDependente()
@@ -4627,6 +4628,7 @@ async function converterPipelineParaImplantacao(l) {
     criados = [
       base({
         leadOrigemId: l.leadOrigemId || null,
+        sessaoSite: l.sessaoSite || null,
         titular: novoTitular(l.nome, true),
         dependentes: Array.from({ length: Math.max(0, (Number(l.qtdVidas) || 1) - 1) }, (_, i) =>
           novoDependente(l.vidasOriginais?.[i + 1])
@@ -4806,8 +4808,27 @@ async function importarLeadsDoSite(opts) {
   const idsImplantacao = new Set(DB.clients.map((c) => c.leadOrigemId).filter(Boolean));
   const excluidosPipeline = new Set(DB.leadsExcluidos || []);
   let novosPipeline = 0;
+  let atualizadosPipeline = 0;
+  // Simulação em andamento: o simulador grava uma linha a cada etapa com o mesmo
+  // sessao_id. Fica só a mais recente de cada simulação, e ela vira (ou atualiza)
+  // um card só no Pipeline.
+  const ultimaDaSessao = new Map();
+  const sessoesExcluidas = new Set();
   for (const lead of leads) {
-    if (idsPipeline.has(lead.id) || idsImplantacao.has(lead.id) || excluidosPipeline.has(lead.id))
+    if (!lead.sessao_id) continue;
+    if (excluidosPipeline.has(lead.id)) sessoesExcluidas.add(lead.sessao_id);
+    const atual = ultimaDaSessao.get(lead.sessao_id);
+    if (!atual || String(lead.received_at || '') > String(atual.received_at || '')) ultimaDaSessao.set(lead.sessao_id, lead);
+  }
+  const sessoesNaImplantacao = new Set(DB.clients.map((c) => c.sessaoSite).filter(Boolean));
+  for (const lead of leads) {
+    if (lead.sessao_id) {
+      if (ultimaDaSessao.get(lead.sessao_id) !== lead) continue; // linha antiga da mesma simulação
+      if (sessoesExcluidas.has(lead.sessao_id) || sessoesNaImplantacao.has(lead.sessao_id)) continue;
+    }
+    const cardDaSessao = lead.sessao_id ? DB.pipeline.find((l) => l.sessaoSite === lead.sessao_id) : null;
+    if (cardDaSessao && cardDaSessao.leadOrigemId === lead.id) continue; // já está atualizado
+    if (!cardDaSessao && (idsPipeline.has(lead.id) || idsImplantacao.has(lead.id) || excluidosPipeline.has(lead.id)))
       continue;
     const vidas = Array.isArray(lead.vidas) ? lead.vidas : [];
     const primeira = vidas[0] || {};
@@ -4875,9 +4896,12 @@ async function importarLeadsDoSite(opts) {
         storagePath: lead.orcamento_path,
         criadoEm: lead.received_at || nowISO(),
       });
-    DB.pipeline.push({
+    const novoCard = {
       id: uid('lead'),
       leadOrigemId: lead.id,
+      sessaoSite: lead.sessao_id || null,
+      simulacaoIncompleta: !!lead.parcial,
+      etapaSimulador: lead.etapa_simulador || '',
       origemSite: true,
       etapa: 'novo',
       nome: lead.nome || primeira.nome || '',
@@ -4906,16 +4930,42 @@ async function importarLeadsDoSite(opts) {
       comentarios: [
         {
           data: nowISO(),
-          texto:
-            'Lead recebido automaticamente do simulador. Validação de associado pendente no portal.',
+          texto: lead.parcial
+            ? `Simulação em andamento no site (parou em: ${lead.etapa_simulador || 'início'}). O card se atualiza sozinho se o cliente continuar.`
+            : 'Lead recebido automaticamente do simulador. Validação de associado pendente no portal.',
         },
       ],
       vendedorId: dono?.id || null,
       criadoEm: lead.received_at || nowISO(),
-    });
-    novosPipeline++;
+    };
+    if (cardDaSessao) {
+      // mesma simulação avançou: atualiza o card que já existe, sem mexer na
+      // etapa do Pipeline nem no que a equipe já fez nele
+      const campos = ['nome', 'empresa', 'cnpj', 'celular', 'email', 'planoInteresse', 'qtdVidas', 'associadoInformado', 'novoAfiliado'];
+      campos.forEach((k) => {
+        if (novoCard[k] !== '' && novoCard[k] != null) cardDaSessao[k] = novoCard[k];
+      });
+      if (novoCard.gruposOrcamento && novoCard.gruposOrcamento.length) cardDaSessao.gruposOrcamento = novoCard.gruposOrcamento;
+      if (novoCard.contratoAssociacao) cardDaSessao.contratoAssociacao = { ...(cardDaSessao.contratoAssociacao || {}), ...novoCard.contratoAssociacao };
+      cardDaSessao.contratoAssinado = cardDaSessao.contratoAssinado || novoCard.contratoAssinado;
+      const nomesAnexos = new Set((cardDaSessao.anexos || []).map((a) => a.nome));
+      cardDaSessao.anexos = (cardDaSessao.anexos || []).concat(novoCard.anexos.filter((a) => !nomesAnexos.has(a.nome)));
+      if (!cardDaSessao.vendedorId && novoCard.vendedorId) cardDaSessao.vendedorId = novoCard.vendedorId;
+      cardDaSessao.leadOrigemId = lead.id;
+      cardDaSessao.etapaSimulador = lead.etapa_simulador || '';
+      cardDaSessao.simulacaoIncompleta = !!lead.parcial;
+      cardDaSessao.comentarios = cardDaSessao.comentarios || [];
+      cardDaSessao.comentarios.push({
+        data: nowISO(),
+        texto: lead.parcial ? `Cliente avançou no simulador: ${lead.etapa_simulador || ''}.` : 'Cliente concluiu a simulação no site.',
+      });
+      atualizadosPipeline++;
+    } else {
+      DB.pipeline.push(novoCard);
+      novosPipeline++;
+    }
   }
-  if (novosPipeline) {
+  if (novosPipeline || atualizadosPipeline) {
     await persist();
     if (CURRENT_VIEW === 'pipeline') switchView('pipeline');
   }
