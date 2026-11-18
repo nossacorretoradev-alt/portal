@@ -3610,7 +3610,7 @@ function viewPipeline() {
           .filter((l) => l.etapa === st.id)
           .map(
             (l) => `<div class="kanban-card" onclick="openPipelineLeadModal('${l.id}')">
-        <div class="kc-top"><div class="kc-avatar" style="background:${avatarColor(l.empresa || l.nome)}">${initials(l.nome || l.empresa)}</div><div class="kc-name">${l.empresa || l.nome || 'Lead'}</div></div>${l.simulacaoIncompleta ? `<div style="margin-top:6px;"><span style="background:#fff4e0;color:#b26a00;border-radius:9px;padding:2px 8px;font-size:10.5px;font-weight:700;">⏸ Simulação incompleta · parou em: ${escHist(l.etapaSimulador || 'início')}</span></div>` : ''}
+        <div class="kc-top"><div class="kc-avatar" style="background:${avatarColor(l.empresa || l.nome)}">${initials(l.nome || l.empresa)}</div><div class="kc-name">${l.empresa || l.nome || 'Lead'}</div></div>${l.simulacaoIncompleta ? `<div style="margin-top:6px;"><span style="background:#fff4e0;color:#b26a00;border-radius:9px;padding:2px 8px;font-size:10.5px;font-weight:700;">⏸ Simulação incompleta · parou em: ${escHist(l.etapaSimulador || 'início')}</span></div>` : ''}${!l.simulacaoIncompleta && /consultor/i.test(l.etapaSimulador || '') ? `<div style="margin-top:6px;"><span style="background:#e8f0ff;color:#1f4fd1;border-radius:9px;padding:2px 8px;font-size:10.5px;font-weight:700;">💬 Quer falar com um consultor · não associado</span></div>` : ''}
         <div class="kc-sub">${l.nome || '—'} · ${maskPhone(l.celular || '') || '—'}</div>
         <div class="kc-sub" style="margin-top:3px;">Vendedor: <b>${(DB.users || []).find((u) => u.id === l.vendedorId)?.nome || '—'}</b></div>
         ${l.planoInteresse ? `<div class="kc-plan-tag">${l.planoInteresse}</div>` : ''}
